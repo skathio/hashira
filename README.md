@@ -1,0 +1,2 @@
+# hashira-ops
+ci/cd
