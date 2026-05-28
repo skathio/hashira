@@ -1,0 +1,156 @@
+# Composite action: dotnet-pack-version
+#
+# Runs `dotnet pack` in a way that lets MinVer (per D4) infer the version
+# from the consumer's git tag state, exposes the resolved version + the
+# produced .nupkg path as outputs, and surfaces a clear warning if the
+# consumer's project file does not carry a `<PackageReference Include="MinVer" ...>`.
+#
+# Version baseline (refresh deliberately):
+#   - MinVer: pinned by the *consumer* in their .csproj. The library does
+#     not install MinVer — it's a build-time MSBuild integration that
+#     `dotnet pack` picks up from the consumer's PackageReference.
+#   - dotnet SDK: provided by `actions/setup-dotnet` at the workflow level
+#     (per D11 — no setup-dotnet wrapper). This action assumes the SDK is
+#     already on PATH.
+#
+# Per NF1 the action.yml stays orchestration-only; version parsing +
+# MinVer-ref detection live in `lib/parse-nupkg-version.js` so the YAML
+# reads as a thin shell wrapper. Same precedent as `coverage-report` and
+# `semantic-release-publish`.
+#
+# Runtime contract:
+#   The consumer MUST have a `<TargetFramework>` defined in `project_path`
+#   and `dotnet` on PATH (typically via setup-dotnet at the workflow
+#   level). If MinVer is missing, this action emits a `::warning::` and
+#   continues — `dotnet pack` will fall back to MSBuild's default version
+#   (often `1.0.0` or `0.0.0`), which is rarely what the consumer wants
+#   but is not a failure mode worth crashing on.
+#
+# ## Trust boundary
+#
+# These inputs are interpolated into shell commands (bound via `env:` and
+# dereferenced with quoting per the iter-2.1/2.3 pattern). Per D10d this
+# is permitted but requires documented conventions: treat the values as
+# TRUSTED input. Do NOT pass values derived from PR titles, issue bodies,
+# branch names, commit messages, fork-author-controlled tag names, or any
+# other externally controlled context — quoting cannot defend the sink.
+#   - project_path
+#   - output_directory
+#   - working_directory
+#   - prerelease_identifier   (exported into env for MinVer)
+#   - version_increment       (exported into env for MinVer)
+# See `docs/usage.md` for the full trust model.
+name: dotnet-pack-version
+description: Run `dotnet pack` with MinVer-driven versioning; emit the resolved version and .nupkg path as outputs.
+
+inputs:
+  project_path:
+    description: "Path to the .csproj or .sln to pack. Trusted input — see `## Trust boundary`."
+    required: true
+  prerelease_identifier:
+    description: "Passed to MinVer's `MinVerDefaultPreReleaseIdentifiers` env var (e.g. `alpha`, `beta`). Empty = use MinVer's default. Trusted input."
+    required: false
+    default: ""
+  version_increment:
+    description: "Passed to MinVer's `MinVerAutoIncrement` env var. One of `minor`, `major`, or empty (patch — MinVer default). Trusted input."
+    required: false
+    default: ""
+  output_directory:
+    description: "Directory under which `dotnet pack` writes the .nupkg. Trusted input."
+    required: false
+    default: "./packages"
+  working_directory:
+    description: "Directory in which to run `dotnet pack`. Trusted input."
+    required: false
+    default: "."
+
+outputs:
+  version:
+    description: "Resolved package version (e.g. `1.2.3` or `1.2.3-alpha.0.4`). Empty if pack failed to produce a .nupkg."
+    value: ${{ steps.run.outputs.version }}
+  nupkg_path:
+    description: "Path to the first .nupkg produced (relative to working_directory)."
+    value: ${{ steps.run.outputs.nupkg_path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Verify MinVer PackageReference
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      env:
+        DPV_PROJECT_PATH: ${{ inputs.project_path }}
+      run: |
+        set -euo pipefail
+        if [ ! -f "${DPV_PROJECT_PATH}" ]; then
+          echo "::error::dotnet-pack-version: project file '${DPV_PROJECT_PATH}' not found under '$(pwd)'." >&2
+          exit 1
+        fi
+        # Shim returns exit 0 if MinVer present, exit 1 if absent. We use
+        # the shim so the detection regex is unit-tested rather than
+        # re-implemented inline in shell.
+        if node -e '
+          const fs = require("node:fs");
+          const { detectMinVerReference } = require(process.env.GITHUB_ACTION_PATH + "/lib/parse-nupkg-version");
+          const txt = fs.readFileSync(process.env.DPV_PROJECT_PATH, "utf8");
+          process.exit(detectMinVerReference(txt) ? 0 : 1);
+        '; then
+          echo "dotnet-pack-version: MinVer PackageReference detected in ${DPV_PROJECT_PATH}"
+        else
+          echo "::warning::dotnet-pack-version: MinVer PackageReference not found in ${DPV_PROJECT_PATH}; version will default to 0.0.0. See docs/flows/nuget.md for setup."
+        fi
+
+    - name: Run dotnet pack
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      env:
+        DPV_PROJECT_PATH: ${{ inputs.project_path }}
+        DPV_OUTPUT_DIRECTORY: ${{ inputs.output_directory }}
+        # MinVer reads these from env at MSBuild time; empty value means
+        # MinVer uses its default. Exporting empty strings is safe.
+        MinVerDefaultPreReleaseIdentifiers: ${{ inputs.prerelease_identifier }}
+        MinVerAutoIncrement: ${{ inputs.version_increment }}
+      run: |
+        set -euo pipefail
+        mkdir -p "${DPV_OUTPUT_DIRECTORY}"
+        echo "::group::dotnet pack"
+        dotnet pack "${DPV_PROJECT_PATH}" --output "${DPV_OUTPUT_DIRECTORY}"
+        echo "::endgroup::"
+
+    - name: Resolve version + nupkg path
+      id: run
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      env:
+        DPV_OUTPUT_DIRECTORY: ${{ inputs.output_directory }}
+      run: |
+        set -euo pipefail
+        # Parse the .nupkg filename rather than scraping `dotnet pack`'s
+        # stdout — the filename is mechanical (id + version) while the log
+        # output has changed between dotnet SDK versions historically.
+        version=""
+        filename=""
+        nupkg_path=""
+        if [ -d "${DPV_OUTPUT_DIRECTORY}" ]; then
+          mapfile -t found < <(find "${DPV_OUTPUT_DIRECTORY}" -maxdepth 1 -type f -name '*.nupkg' ! -name '*.symbols.nupkg' -printf '%f\n' | sort)
+          if [ "${#found[@]}" -gt 0 ]; then
+            # The shim parses + picks the first parseable .nupkg basename.
+            # Emit `<filename>\t<version>` on stdout.
+            parsed="$(NUPKG_LIST="$(printf '%s\n' "${found[@]}")" node -e '
+              const { pickFirstNupkg } = require(process.env.GITHUB_ACTION_PATH + "/lib/parse-nupkg-version");
+              const list = process.env.NUPKG_LIST.split("\n").filter(Boolean);
+              const { filename, version } = pickFirstNupkg(list);
+              process.stdout.write(filename + "\t" + version);
+            ')"
+            filename="${parsed%%$'\t'*}"
+            version="${parsed##*$'\t'}"
+            nupkg_path="${DPV_OUTPUT_DIRECTORY}/${filename}"
+          fi
+        fi
+        if [ -z "${version}" ]; then
+          echo "::error::dotnet-pack-version: no .nupkg produced under '${DPV_OUTPUT_DIRECTORY}'." >&2
+          exit 1
+        fi
+        echo "version=${version}" >> "${GITHUB_OUTPUT}"
+        echo "nupkg_path=${nupkg_path}" >> "${GITHUB_OUTPUT}"
+        echo "dotnet-pack-version: produced ${filename}" >> "${GITHUB_STEP_SUMMARY}"

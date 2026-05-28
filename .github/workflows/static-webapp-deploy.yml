@@ -1,0 +1,167 @@
+# Reusable workflow: static-webapp-deploy (Deploy half of the static-webapp
+# flow per D8; Pages-specific CI→Deploy handoff per D12).
+#
+# Consumes the same-run `github-pages` artifact produced by an upstream
+# `static-webapp-ci` job via the consumer's `deploy: needs: ci` edge
+# (D12). NO `workflow_run` trigger — both reviewers in rev-2 flagged
+# `workflow_run` as the wrong primitive (default-branch context with
+# default-branch secrets when triggered from PR-originating runs; cross-
+# run artifact lookup brittleness). See D12 for the full rationale.
+#
+# ## Permissions baseline (NF6)
+#
+# Workflow-level `permissions: {}` (deny-all). Per-job grants:
+#   - preflight : contents:read  (informational only)
+#   - deploy    : contents:read  (D14 library self-checkout),
+#                 pages:write    (required by deploy-pages),
+#                 id-token:write (required by deploy-pages for OIDC)
+#
+# Reusable workflows can only NARROW the caller's grants. Consumers must
+# mirror this matrix at their caller job's `permissions:` block
+# (documented in `docs/usage.md` and `docs/flows/static-webapp.md`).
+#
+# ## Trust boundary
+#
+# These inputs flow into the workflow's `environment:` field and the D14
+# library checkout's `ref:` input — neither is a shell sink. Per D10d the
+# documented conventions still apply: treat the values as TRUSTED input.
+# Do NOT pass values derived from PR titles, issue bodies, branch names,
+# commit messages, fork-author-controlled tag names, or any other
+# externally controlled context.
+#   - environment_name
+#   - library_ref
+# See `docs/usage.md` for the full trust model.
+#
+# ## SHA pins (NF2)
+#
+# All third-party `uses:` refs are pinned to a full 40-char commit SHA
+# with an inline version comment. Pins reused from iter 1.2 / 2.1
+# (verified upstream against the actions' release tags).
+#
+# ## Runtime contract: library-self-checkout via `library_ref` (D14)
+#
+# Same constraint and resolution as the other reusable workflows: GitHub's
+# `uses:` keyword does NOT permit expressions in the `@<ref>` portion.
+# The `deploy` job first checks out `skathio/hashira-ops` at
+# `${{ inputs.library_ref }}` into `.hashira/` with
+# `persist-credentials: false`, then references `pages-deploy` as
+# `./.hashira/.github/actions/pages-deploy`.
+#
+# ## Gate model (per D13)
+#
+# The `deploy` job is gated on `environment: ${{ inputs.environment_name }}`
+# (default `github-pages` — Pages's magic environment name). The Environment
+# IS the gate. We do NOT query the GitHub API to verify the Environment's
+# configuration at runtime — `gh api environments` requires admin-tier
+# scope on private repos which `GITHUB_TOKEN` does not carry (D13
+# rationale). A misconfigured Environment (zero required reviewers) will
+# run the deploy job without pausing — this is documented loudly as
+# consumer responsibility in `docs/usage.md` and the
+# `docs/flows/static-webapp.md` adoption checklist.
+#
+# ## Artifact handoff
+#
+# The artifact named `github-pages` (Pages's standard name) MUST exist in
+# the SAME workflow run, produced by an upstream job that ran
+# `pages-upload` (or `static-webapp-ci.yml`'s `build-and-upload` job).
+# The consumer wires this via `deploy: needs: ci` per D12. If no
+# matching artifact exists, the upstream `deploy-pages` action fails
+# loudly with its standard error.
+
+name: static-webapp-deploy
+
+on:
+  workflow_call:
+    inputs:
+      environment_name:
+        description: "Name of the GitHub Environment to gate the deploy job on (per D13 the environment IS the gate). Default 'github-pages' — Pages's magic environment name. Trusted input."
+        required: false
+        type: string
+        default: "github-pages"
+      library_ref:
+        description: "SHA, tag, or branch of skathio/hashira-ops to check out for in-repo composite actions (D14). Default 'v1'. PIN TO A SHA for reproducible consumer builds."
+        required: false
+        type: string
+        default: "v1"
+
+# Deny-all baseline; jobs grant the minimum.
+permissions: {}
+
+jobs:
+  preflight:
+    name: preflight
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Verify environment_name input is non-empty
+        shell: bash
+        env:
+          ENV_NAME: ${{ inputs.environment_name }}
+        run: |
+          set -euo pipefail
+          # iter-4.2 security review m3: tighten the empty-string guard so
+          # whitespace-only values (e.g. ' ') also fail loudly — a
+          # whitespace-only env name passes GitHub Actions' environment:
+          # parser but does not match any configured Environment, so the
+          # D13 gate is silently bypassed.
+          _trimmed_env="$(printf '%s' "${ENV_NAME}" | tr -d '[:space:]')"
+          if [ -z "${_trimmed_env}" ]; then
+            echo "::error::static-webapp-deploy: environment_name input is empty or whitespace-only. The deploy job's environment: key MUST be set to a configured GitHub Environment with at least one required reviewer (per D13 the environment IS the gate)." >&2
+            exit 1
+          fi
+          # (no cross-step leakage in GHA — each step is a fresh shell process)
+          echo "static-webapp-deploy: environment_name='${ENV_NAME}'" >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Verify caller event is not a pull_request
+        # iter-4.2 review Minor #3: give preflight a real safety net for a
+        # failure mode consumers actually hit (deploy on PR from a fork
+        # would expose pages:write + id-token:write to PR-author-influenced
+        # code). The recommended caller shape (see docs/flows/static-webapp.md §1)
+        # puts deploy on `push: branches: [main]` only; this is the backstop.
+        shell: bash
+        env:
+          GH_EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          if [ "${GH_EVENT}" = "pull_request" ]; then
+            echo "::error::static-webapp-deploy: this workflow should not be called on pull_request events (deploy would run on PR from a fork, potentially exposing pages:write + id-token:write to PR-author-influenced code). Use a separate pr.yml that calls only static-webapp-ci.yml for PR events." >&2
+            exit 1
+          fi
+          echo "static-webapp-deploy: event=${GH_EVENT}" >> "${GITHUB_STEP_SUMMARY}"
+
+  deploy:
+    name: deploy
+    needs: preflight
+    runs-on: ubuntu-latest
+    # D13 gate: the Environment IS the gate. Misconfigured environments
+    # (zero required reviewers) run without pausing — documented as
+    # consumer responsibility.
+    environment: ${{ inputs.environment_name }}
+    permissions:
+      # D14 library checkout uses actions/checkout, which needs
+      # contents:read even though deploy-pages itself reads the
+      # artifact (not the repo).
+      contents: read
+      # pages:write + id-token:write required by deploy-pages (see
+      # `.github/actions/pages-deploy/action.yml` header
+      # `## Required caller permissions` block).
+      pages: write
+      id-token: write
+    steps:
+      # Library self-checkout per D14 (persist-credentials:false per iter-2.3 m4).
+      # NOTE: we do NOT check out the consumer's tree here — deploy-pages
+      # reads the same-run github-pages artifact uploaded by the CI job's
+      # build-and-upload step, not files from the repo. Skipping the
+      # consumer checkout keeps the permissions surface narrower
+      # (deploy-pages never touches the consumer's source).
+      - name: Checkout hashira-ops library (D14)
+        # actions/checkout v4.2.2
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: skathio/hashira-ops
+          ref: ${{ inputs.library_ref }}
+          path: .hashira
+          persist-credentials: false
+      - name: Deploy to GitHub Pages
+        uses: ./.hashira/.github/actions/pages-deploy

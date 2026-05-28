@@ -1,0 +1,319 @@
+# Reusable workflow: npm-package-ci (CI half of the npm flow per D8).
+#
+# Runs lint (with inline non-blocking commitlint warning per D11) + test +
+# scan-suite + coverage-report. No publish step. The Publish half lives in
+# `npm-package-publish.yml`.
+#
+# ## Permissions baseline (NF6)
+#
+# Workflow-level `permissions: {}` (deny-all). Each job grants the minimum
+# it needs:
+#   - lint  : contents:read, pull-requests:write   (commitlint sticky-comment)
+#   - test  : contents:read
+#   - scan-suite : contents:read, security-events:write (CodeQL),
+#                  pull-requests:read (dependency-review on PR)
+#   - coverage-report : contents:read, pull-requests:write (sticky comment)
+#
+# Reusable workflows can only NARROW the caller's grants, never broaden.
+# Consumers must mirror this matrix at their caller job's `permissions:`
+# block (documented in docs/usage.md and docs/flows/npm.md).
+#
+# ## Inline commitlint (D11, non-blocking)
+#
+# On pull_request events the `lint` job runs `npx commitlint` over the PR
+# range. Findings post a sticky PR comment via actions/github-script using
+# the marker pattern that coverage-report established. The step is
+# non-blocking — exit 0 regardless of commitlint findings (D11: "warns,
+# does not block"). The commitlint CLI + config-conventional are pinned
+# inside this workflow's `npx` invocation; see the npm supply-chain trust
+# model documented at the top of
+# `.github/actions/semantic-release-publish/action.yml` — the same trust
+# gap applies (npm has no SHA-pin equivalent; integrity rests on the
+# registry-side hash verified at install time).
+#
+# ## Secret preflight (spec §8)
+#
+# The CI half has no required secrets (consumer-provided test_command may
+# call out to private registries via the caller's env, but the workflow
+# itself doesn't gate-check anything). A no-op `preflight` step exists in
+# the `setup` job documenting the pattern — the Publish half copies the
+# structure for real secret presence/non-empty/shape checks.
+#
+# ## SHA pins (NF2)
+#
+# All third-party `uses:` refs are pinned to a full 40-char commit SHA
+# with an inline version comment. Pins reused from iter 1.2 / 2.1.
+#
+# ## Runtime contract: library-self-checkout via `library_ref` (D14)
+#
+# In-repo composite actions live at `.github/actions/<name>` in the
+# `skathio/hashira-ops` repo. When this workflow is invoked from a
+# consumer repo, the consumer's `$GITHUB_WORKSPACE` contains the
+# consumer's files, not the library's. GitHub's `uses:` keyword does NOT
+# permit expressions in the `@<ref>` portion (workflow-load-time parse,
+# before expression evaluation), so the originally-proposed shape
+# `uses: skathio/hashira-ops/.github/actions/<name>@${{ inputs.library_ref }}`
+# is rejected by the runtime.
+#
+# Resolution (D14): every job that consumes an in-repo composite action
+# first checks out `skathio/hashira-ops` at `${{ inputs.library_ref }}`
+# into the reserved subdirectory `.hashira/`. The composite-action
+# `uses:` refs are then literal local paths
+# `uses: ./.hashira/.github/actions/<name>` (no expressions, satisfies
+# the load-time parser). The `library_ref` is substituted at runtime
+# through `actions/checkout`'s `ref:` input (where expressions ARE
+# permitted because it's a step input, not the `uses:` keyword itself).
+#
+# Consumers pin `library_ref` to a SHA for reproducibility. Default is
+# `main` for convenience; production consumers SHOULD pin.
+#
+# Trade-off: ~1–2s overhead per job for the library checkout. Acceptable
+# at v1; documented as the cost of the literal-`uses:` constraint.
+
+name: npm-package-ci
+
+on:
+  workflow_call:
+    inputs:
+      node_version:
+        description: "Node major to install via actions/setup-node."
+        required: false
+        type: string
+        default: "20"
+      test_command:
+        description: "Shell command that runs the consumer's tests. Trusted input (raw-shell sink per D10d; do NOT pass values derived from PR titles, issue bodies, branch names, or other externally controlled context)."
+        required: false
+        type: string
+        default: "npm test"
+      coverage_path:
+        description: "Path to the lcov coverage file produced by test_command. Default 'coverage/lcov.info'."
+        required: false
+        type: string
+        default: "coverage/lcov.info"
+      scan_disable:
+        description: "Comma-separated list of scans to skip (D10c). Default 'codeql,actionlint' — pass '' to enable all. Values: codeql,osv,gitleaks,dependency-review,actionlint."
+        required: false
+        type: string
+        default: "codeql,actionlint"
+      library_ref:
+        description: "SHA, tag, or branch of skathio/hashira-ops to check out for in-repo composite actions (D14). Default 'v1'. PIN TO A SHA for reproducible consumer builds."
+        required: false
+        type: string
+        default: "v1"
+
+# Deny-all baseline; jobs grant the minimum.
+permissions: {}
+
+jobs:
+  setup:
+    name: setup
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # actions/checkout v4.2.2 — consumer's tree.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      # actions/setup-node v4.1.0
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af
+        with:
+          node-version: ${{ inputs.node_version }}
+      - name: Secret preflight (no-op for CI half)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # CI half requires no secrets. The preflight pattern is documented
+          # here for symmetry with the Publish half which validates
+          # NPM_TOKEN presence + shape per spec §8.
+          echo "npm-package-ci: secret preflight (no secrets required for CI)"
+
+  lint:
+    name: lint
+    needs: setup
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      # actions/checkout v4.2.2 — consumer's tree, full history so commitlint
+      # can walk the PR range across merge commits.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+      # actions/setup-node v4.1.0
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af
+        with:
+          node-version: ${{ inputs.node_version }}
+      - name: Run commitlint over PR range (non-blocking)
+        id: commitlint
+        if: ${{ github.event_name == 'pull_request' }}
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          # NOTE: `set -uo pipefail` deliberately OMITS `-e`. The step is
+          # non-blocking by D11; we want commitlint's non-zero exit code to
+          # be CAPTURED (status=$?) rather than abort the script. Do NOT
+          # re-introduce `-e` — doing so converts every npx blip into a
+          # blocking failure and defeats D11's "warns, does not block"
+          # guarantee. The empty-report check below distinguishes "non-CC
+          # commits found" from "install failed" so a misleading sticky
+          # comment can't be posted on an install failure.
+          set -uo pipefail
+          # Pin commitlint CLI + config-conventional inside the npx
+          # invocation. npm has no SHA-pin equivalent; see the npm
+          # supply-chain trust model paragraph in
+          # `.github/actions/semantic-release-publish/action.yml`.
+          report="${RUNNER_TEMP}/commitlint-report.txt"
+          : > "${report}"
+          npx --yes \
+            -p @commitlint/cli@19.5.0 \
+            -p @commitlint/config-conventional@19.5.0 \
+            -- commitlint \
+              --config <(printf "module.exports = { extends: ['@commitlint/config-conventional'] };\n") \
+              --from "${BASE_SHA}" --to "${HEAD_SHA}" \
+              > "${report}" 2>&1
+          status=$?
+          # Detect "install failure or runtime crash that produced no output":
+          # the report file is empty AND status is non-zero. This is NOT a
+          # commitlint finding — treat as inconclusive (iter-2.2 review
+          # Major #1).
+          inconclusive="false"
+          if [ "${status}" -ne 0 ] && [ ! -s "${report}" ]; then
+            inconclusive="true"
+          fi
+          echo "report_path=${report}" >> "${GITHUB_OUTPUT}"
+          echo "status=${status}" >> "${GITHUB_OUTPUT}"
+          echo "inconclusive=${inconclusive}" >> "${GITHUB_OUTPUT}"
+          if [ "${status}" -eq 0 ]; then
+            echo "commitlint: clean (no non-CC commits in range)" >> "${GITHUB_STEP_SUMMARY}"
+          elif [ "${inconclusive}" = "true" ]; then
+            echo "commitlint: npx did not produce output; treating as inconclusive (likely install/runtime failure). Step is non-blocking; sticky comment skipped." >> "${GITHUB_STEP_SUMMARY}"
+          else
+            {
+              echo "commitlint: non-CC commits found in range (non-blocking warning)";
+              echo '```';
+              cat "${report}";
+              echo '```';
+            } >> "${GITHUB_STEP_SUMMARY}"
+          fi
+          # D11: non-blocking. Always exit 0.
+          exit 0
+      - name: Post sticky commitlint comment
+        # Skip the sticky comment on inconclusive runs to avoid a misleading
+        # "non-CC commits found" comment when the real cause was an install
+        # failure (iter-2.2 review Major #1).
+        if: ${{ github.event_name == 'pull_request' && steps.commitlint.outputs.status != '0' && steps.commitlint.outputs.inconclusive != 'true' }}
+        # actions/github-script v7.0.1
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea
+        env:
+          REPORT_FILE: ${{ steps.commitlint.outputs.report_path }}
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- hashira:npm-package-ci:commitlint -->';
+            const report = fs.readFileSync(process.env.REPORT_FILE, 'utf8');
+            const body = `${marker}\n### commitlint findings (non-blocking)\n\nOne or more commits in this PR's range don't follow [Conventional Commits](https://www.conventionalcommits.org/). semantic-release will not infer a version bump from them. The PR is **not** blocked — fix-forward or squash-rewrite at merge.\n\n\`\`\`\n${report}\n\`\`\`\n`;
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            if (!issue_number) {
+              core.info('npm-package-ci/commitlint: no PR number; skipping sticky comment.');
+              return;
+            }
+            const existing = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number, per_page: 100,
+            });
+            const prior = existing.find(c => c.body && c.body.startsWith(marker));
+            if (prior) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: prior.id, body });
+              core.info(`npm-package-ci/commitlint: updated sticky comment ${prior.id}.`);
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+              core.info('npm-package-ci/commitlint: created sticky comment.');
+            }
+
+  test:
+    name: test
+    needs: setup
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # actions/checkout v4.2.2 — consumer's tree.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      # actions/setup-node v4.1.0
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af
+        with:
+          node-version: ${{ inputs.node_version }}
+      # Library self-checkout per D14: ./.hashira/ holds hashira-ops at library_ref.
+      - name: Checkout hashira-ops library (D14)
+        # actions/checkout v4.2.2
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: skathio/hashira-ops
+          ref: ${{ inputs.library_ref }}
+          path: .hashira
+      - name: Run tests
+        uses: ./.hashira/.github/actions/run-tests-js
+        with:
+          command: ${{ inputs.test_command }}
+          coverage_path: ${{ inputs.coverage_path }}
+
+  scan-suite:
+    name: scan-suite
+    needs: setup
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # CodeQL needs security-events:write when enabled; granted here even
+      # when codeql is in the default skip list so consumers who enable it
+      # via scan_disable: '' don't hit a permissions error.
+      security-events: write
+      # dependency-review on PR events reads PR metadata.
+      pull-requests: read
+    steps:
+      # actions/checkout v4.2.2 — consumer's tree.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      # actions/setup-node v4.1.0 — visibility-detect shim runs via `node`.
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af
+        with:
+          node-version: ${{ inputs.node_version }}
+      # Library self-checkout per D14.
+      - name: Checkout hashira-ops library (D14)
+        # actions/checkout v4.2.2
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: skathio/hashira-ops
+          ref: ${{ inputs.library_ref }}
+          path: .hashira
+      - name: Run scan-suite
+        uses: ./.hashira/.github/actions/scan-suite
+        with:
+          scan_disable: ${{ inputs.scan_disable }}
+
+  coverage-report:
+    name: coverage-report
+    needs: [lint, test, scan-suite]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      # actions/checkout v4.2.2 — consumer's tree.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      # actions/setup-node v4.1.0 — coverage-report's parser shim needs node.
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af
+        with:
+          node-version: ${{ inputs.node_version }}
+      # Library self-checkout per D14.
+      - name: Checkout hashira-ops library (D14)
+        # actions/checkout v4.2.2
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: skathio/hashira-ops
+          ref: ${{ inputs.library_ref }}
+          path: .hashira
+      - name: Report coverage
+        uses: ./.hashira/.github/actions/coverage-report
+        with:
+          coverage_path: ${{ inputs.coverage_path }}

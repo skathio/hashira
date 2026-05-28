@@ -1,0 +1,60 @@
+# Composite action: scan-suite/scans/osv
+#
+# Wraps google/osv-scanner-action. Always runs regardless of visibility.
+# Writes one TAB-separated line to `${RUNNER_TEMP}/scan-suite-results.tsv`:
+#   osv<TAB><status><TAB><details>
+# Status is `ran` on success or non-zero-but-non-fatal exit (vulnerabilities
+# found); `error` only on infrastructure failure.
+#
+# ## Trust boundary
+#
+# The `paths` input is consumer-controllable and is passed to osv-scanner via
+# its own argument parser, NOT interpolated into a raw shell. Even so, treat
+# the value as trusted input — do not derive from PR titles, issue bodies, or
+# other externally controlled context. See `docs/usage.md` (TBD — populated
+# in phase 2) for the full trust model.
+name: scan-suite/osv
+description: OSV-Scanner cross-ecosystem dependency vulnerability scan.
+
+inputs:
+  paths:
+    description: "Comma-separated paths to scan (default '.' = repo root). Treated as trusted input."
+    required: false
+    default: "."
+
+runs:
+  using: composite
+  steps:
+    # google/osv-scanner-action v2.0.0
+    - name: Run OSV-Scanner
+      id: osv
+      uses: google/osv-scanner-action@98b584ee2ed2da3935ccce10e06739d54cdcd20b
+      continue-on-error: true
+      with:
+        scan-args: |-
+          --recursive
+          ${{ inputs.paths }}
+
+    - name: Record result
+      shell: bash
+      env:
+        OSV_OUTCOME: ${{ steps.osv.outcome }}
+      run: |
+        set -euo pipefail
+        # osv-scanner exits non-zero when findings exist; we record that as
+        # `ran` (the scan succeeded; findings are the consumer's problem).
+        # `error` is reserved for the action itself failing to launch.
+        case "${OSV_OUTCOME}" in
+          success)
+            printf 'osv\tran\tno vulnerabilities found\n' >> "${RUNNER_TEMP}/scan-suite-results.tsv"
+            echo "- osv: ran (no vulnerabilities found)" >> "${GITHUB_STEP_SUMMARY}"
+            ;;
+          failure)
+            printf 'osv\tran\tvulnerabilities found (see job log)\n' >> "${RUNNER_TEMP}/scan-suite-results.tsv"
+            echo "- osv: ran (vulnerabilities found; see job log)" >> "${GITHUB_STEP_SUMMARY}"
+            ;;
+          *)
+            printf 'osv\terror\toutcome=%s\n' "${OSV_OUTCOME}" >> "${RUNNER_TEMP}/scan-suite-results.tsv"
+            echo "- osv: error (outcome=${OSV_OUTCOME})" >> "${GITHUB_STEP_SUMMARY}"
+            ;;
+        esac

@@ -1,0 +1,192 @@
+# Reusable workflow: npm-package-publish (Publish half of the npm flow per D8).
+#
+# Runs `actions/semantic-release-publish` wholly inside an Environment-gated
+# `release` job per D3's release walk-through. No environment-precondition
+# step per D13 — the `environment:` key on the release job IS the gate;
+# misconfigured Environments (zero required reviewers) are documented as
+# consumer responsibility in `docs/usage.md`.
+#
+# ## Permissions baseline (NF6)
+#
+# Workflow-level `permissions: {}` (deny-all). Per-job grants:
+#   - preflight : contents:read   (no secret enforcement; informational only)
+#   - release   : id-token:write (OIDC), contents:write (tagging + CHANGELOG
+#                 commit), pull-requests:write (release notes / PR comment)
+#
+# Reusable workflows can only NARROW the caller's grants. Consumers must
+# mirror this matrix at their caller job's `permissions:` block (documented
+# in docs/usage.md and docs/flows/npm.md).
+#
+# ## Trust boundary
+#
+# These inputs are interpolated into bash sinks (via the
+# semantic-release-publish action's documented Trust boundary block).
+# Treat all of these as TRUSTED inputs — do NOT derive them from PR
+# titles, issue bodies, branch names, commit messages, or other
+# externally controlled context:
+#   - target  (registry URL; default https://registry.npmjs.org)
+#   - prerelease_branches  (CSV string)
+#   - maintenance_branches (CSV string)
+#   - library_ref          (SHA/tag/branch of hashira-ops checked out into
+#                           .hashira/; D14)
+#   - environment_name     (name of the GitHub Environment to gate on)
+#   - node_version
+#
+# See the `## Trust boundary` block in
+# `.github/actions/semantic-release-publish/action.yml` for the full
+# rationale.
+#
+# ## SHA pins (NF2)
+#
+# All third-party `uses:` refs are pinned to a full 40-char commit SHA
+# with an inline version comment. No new npm packages pinned at this
+# layer — semantic-release-publish bundles its plugin set. See the npm
+# supply-chain trust model block in that action.yml.
+#
+# ## Runtime contract: library-self-checkout via `library_ref` (D14)
+#
+# Same constraint and resolution as npm-package-ci.yml: GitHub's `uses:`
+# keyword does not permit expressions in the `@<ref>` portion. The
+# `release` job first checks out `skathio/hashira-ops` at
+# `${{ inputs.library_ref }}` into `.hashira/` and then references the
+# composite action as `./.hashira/.github/actions/semantic-release-publish`.
+#
+# ## Atomicity (per D3 walk-through)
+#
+# semantic-release inside the gated release job performs as a single
+# process: analyze commits → bump version → write CHANGELOG → git commit →
+# git tag → git push → npm publish → gh release create. The gate gates
+# all of this. Point of no return is `npm publish` (npm unpublish has a
+# 72-hour window with caveats; recovery is "publish a higher version
+# with the fix").
+
+name: npm-package-publish
+
+on:
+  workflow_call:
+    inputs:
+      node_version:
+        description: "Node major to install via actions/setup-node before semantic-release runs."
+        required: false
+        type: string
+        default: "20"
+      target:
+        description: "Registry URL to publish to (D10b unified target input). Default 'https://registry.npmjs.org'. Trusted input — see `## Trust boundary` in this file."
+        required: false
+        type: string
+        default: "https://registry.npmjs.org"
+      prerelease_branches:
+        description: "Comma-separated list of prerelease branch names (e.g. 'next,beta'). Empty string by default. Trusted input."
+        required: false
+        type: string
+        default: ""
+      maintenance_branches:
+        description: "Comma-separated list of maintenance branch names (e.g. '1.x,2.x'). Empty string by default. Trusted input."
+        required: false
+        type: string
+        default: ""
+      environment_name:
+        description: "Name of the GitHub Environment to gate the release job on (per D13 the environment IS the gate; misconfigured environments without required reviewers run without pausing). Trusted input. Default 'production'."
+        required: false
+        type: string
+        default: "production"
+      library_ref:
+        description: "SHA, tag, or branch of skathio/hashira-ops to check out for in-repo composite actions (D14). Default 'v1'. PIN TO A SHA for reproducible consumer builds."
+        required: false
+        type: string
+        default: "v1"
+    secrets:
+      NPM_TOKEN:
+        description: "Optional long-lived npm publish token. If OIDC trusted-publishing is configured on the npm package, leave this unset; semantic-release-publish prefers OIDC when `@semantic-release/npm` >= 11.0.0 (pinned inside the composite action per M1). When BOTH are set, semantic-release's npm plugin precedence applies (OIDC + provenance preferred under `NPM_CONFIG_PROVENANCE=true`)."
+        required: false
+
+# Deny-all baseline; jobs grant the minimum.
+permissions: {}
+
+jobs:
+  preflight:
+    name: preflight
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Verify environment_name input is non-empty
+        shell: bash
+        env:
+          ENV_NAME: ${{ inputs.environment_name }}
+        run: |
+          set -euo pipefail
+          if [ -z "${ENV_NAME}" ]; then
+            echo "::error::npm-package-publish: environment_name input is empty. The release job's `environment:` key MUST be set to a configured GitHub Environment with at least one required reviewer (per D13 the environment IS the gate)." >&2
+            exit 1
+          fi
+          echo "npm-package-publish: environment_name='${ENV_NAME}'"
+      - name: Inform on NPM_TOKEN presence (non-blocking)
+        shell: bash
+        env:
+          HAS_NPM_TOKEN: ${{ secrets.NPM_TOKEN != '' }}
+        run: |
+          set -euo pipefail
+          if [ "${HAS_NPM_TOKEN}" = "true" ]; then
+            echo "npm-package-publish: NPM_TOKEN present — token-based auth available." >> "${GITHUB_STEP_SUMMARY}"
+          else
+            echo "::warning::npm-package-publish: NPM_TOKEN not provided — proceeding with OIDC trusted publishing; ensure your npm package has a trusted publisher configured (see docs/flows/npm.md §6)."
+            echo "npm-package-publish: NPM_TOKEN absent — OIDC trusted-publishing path expected." >> "${GITHUB_STEP_SUMMARY}"
+          fi
+
+  release:
+    name: release
+    needs: preflight
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment_name }}
+    permissions:
+      # OIDC trusted-publisher token exchange.
+      id-token: write
+      # Tag push + CHANGELOG commit by @semantic-release/git.
+      contents: write
+      # Release-note PR comment by @semantic-release/github.
+      pull-requests: write
+    steps:
+      # actions/checkout v4.2.2 — consumer's tree at FULL depth (semantic-release
+      # walks git history to compute the next version).
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+          # Persist credentials so @semantic-release/git can push tag + commit.
+          persist-credentials: true
+      # Library self-checkout per D14: ./.hashira/ holds hashira-ops at library_ref.
+      - name: Checkout hashira-ops library (D14)
+        # actions/checkout v4.2.2
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: skathio/hashira-ops
+          ref: ${{ inputs.library_ref }}
+          path: .hashira
+      - name: Run semantic-release-publish (D3 walk-through, wholly inside gate)
+        id: release
+        uses: ./.hashira/.github/actions/semantic-release-publish
+        env:
+          # GITHUB_TOKEN is auto-provided by the runner.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # NPM_TOKEN may be empty when OIDC trusted-publishing is in use;
+          # @semantic-release/npm >= 11.0.0 detects OIDC and prefers it.
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          # Enable npm provenance attestation by default (free with OIDC).
+          NPM_CONFIG_PROVENANCE: "true"
+        with:
+          target: ${{ inputs.target }}
+          prerelease_branches: ${{ inputs.prerelease_branches }}
+          maintenance_branches: ${{ inputs.maintenance_branches }}
+          node_version: ${{ inputs.node_version }}
+      - name: Summarize release outcome
+        shell: bash
+        env:
+          RELEASED: ${{ steps.release.outputs.released }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          if [ "${RELEASED}" = "true" ]; then
+            echo "npm-package-publish: released v${VERSION}" >> "${GITHUB_STEP_SUMMARY}"
+          else
+            echo "npm-package-publish: no release this run (no release-worthy commits since last tag)" >> "${GITHUB_STEP_SUMMARY}"
+          fi

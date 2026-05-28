@@ -1,0 +1,250 @@
+# Reusable workflow: nuget-package-publish (Publish half of the NuGet flow per D8).
+#
+# Runs the release-creates-the-tag chain per D4: dotnet pack (MinVer-driven)
+# -> dotnet nuget push --skip-duplicate -> gh release create (idempotent).
+# Targets a GitHub Environment by default (`production`) per D13. No
+# environment-precondition step (per D13) — the `environment:` key on the
+# `pack-and-push` job IS the gate; misconfigured Environments (zero required
+# reviewers) are documented as consumer responsibility in `docs/usage.md`
+# and `docs/flows/nuget.md` §7.
+#
+# ## Permissions baseline (NF6)
+#
+# Workflow-level `permissions: {}` (deny-all). Per-job grants:
+#   - preflight     : contents:read  (informational only)
+#   - pack-and-push : id-token:write (any OIDC scenarios the consumer wires),
+#                     contents:write (gh release create tags + GitHub Release),
+#                     pull-requests:write (release-notes generation may post
+#                                          on the linked PR)
+#
+# Reusable workflows can only NARROW the caller's grants. Consumers must
+# mirror this matrix at their caller job's `permissions:` block (documented
+# in `docs/usage.md` and `docs/flows/nuget.md`).
+#
+# ## Trust boundary
+#
+# These inputs are interpolated into shell commands and downstream
+# composite actions' inputs. Per D10d this is permitted but requires
+# documented conventions: treat the values as TRUSTED input. Do NOT pass
+# values derived from PR titles, issue bodies, branch names, commit
+# messages, fork-author-controlled tag names, or any other externally
+# controlled context — quoting cannot defend the downstream sinks.
+#   - dotnet_version
+#   - project_path
+#   - target                 (D10b unified feed URL)
+#   - prerelease_identifier  (passed to MinVer via env)
+#   - version_increment      (passed to MinVer via env)
+#   - environment_name       (GitHub Environment to gate on)
+#   - library_ref            (D14 SHA/tag/branch of hashira-ops)
+# Plus one secret:
+#   - NUGET_API_KEY          (optional; see below)
+# See `docs/usage.md` for the full trust model.
+#
+# ## SHA pins (NF2)
+#
+# All third-party `uses:` refs are pinned to a full 40-char commit SHA
+# with an inline version comment. Pins reused from iter 1.2 + 1.3
+# (verified upstream against the actions' release tags).
+#
+# ## Runtime contract: library-self-checkout via `library_ref` (D14)
+#
+# Same constraint and resolution as `nuget-package-ci.yml`: GitHub's
+# `uses:` keyword does not permit expressions in the `@<ref>` portion.
+# The `pack-and-push` job first checks out `skathio/hashira-ops` at
+# `${{ inputs.library_ref }}` into `.hashira/` and then references the
+# composite actions as `./.hashira/.github/actions/<name>`.
+#
+# ## Atomicity (per D4 walk-through)
+#
+# `dotnet nuget push --skip-duplicate` is the irreversible step. Tag
+# creation happens AFTER a successful push (`gh release view "v${VERSION}"
+# || gh release create "v${VERSION}" --generate-notes --target $GITHUB_SHA`),
+# so the failure mode "tag created but push failed" cannot occur. If push
+# fails, no tag is created; next attempt re-runs the gated job, MinVer
+# infers the same version (same SHA + same prior tag), and
+# `--skip-duplicate` makes the retry safe. If push succeeds but tag-create
+# fails on a duplicate (race with parallel run), `gh release view` returns
+# success and the workflow exits 0.
+#
+# ## API key vs OIDC trust model
+#
+# `dotnet nuget push` does NOT auto-exchange OIDC tokens for NuGet feed
+# credentials on dotnet SDK 8.0.x (verified against Microsoft's published
+# `dotnet nuget push` reference; only `-k|--api-key` accepts the
+# credential). Consumers wanting OIDC must wire a federated-token ->
+# short-lived API key conversion externally before invoking this workflow
+# (see `docs/flows/nuget.md` §7). Without that, this workflow needs
+# `NUGET_API_KEY`.
+#
+# API-key supply-chain trust model: same gap as npm — the NuGet ecosystem
+# has no SHA-pin equivalent for the feed itself; integrity is anchored on
+# the feed's TLS + the credential check. Consumers SHOULD pin `library_ref`
+# to a SHA so the entire reusable-workflow + composite bundle can be
+# verified by hash. See `docs/flows/nuget.md` §11.
+
+name: nuget-package-publish
+
+on:
+  workflow_call:
+    inputs:
+      dotnet_version:
+        description: "Dotnet SDK version (channel) to install via actions/setup-dotnet before pack/push. Default '8.0.x'. Trusted input — see `## Trust boundary` in this file."
+        required: false
+        type: string
+        default: "8.0.x"
+      project_path:
+        description: "Path to the .csproj or .sln to pack. Required. Trusted input (interpolated into `dotnet` CLI argv)."
+        required: true
+        type: string
+      target:
+        description: "NuGet feed URL to push to (D10b unified target input). Default 'https://api.nuget.org/v3/index.json'. Trusted input."
+        required: false
+        type: string
+        default: "https://api.nuget.org/v3/index.json"
+      prerelease_identifier:
+        description: "Passed to MinVer's `MinVerDefaultPreReleaseIdentifiers` env var (e.g. `alpha`, `beta`). Empty = MinVer default. Trusted input."
+        required: false
+        type: string
+        default: ""
+      version_increment:
+        description: "Passed to MinVer's `MinVerAutoIncrement` env var. One of `minor`, `major`, or empty (patch — MinVer default). Trusted input."
+        required: false
+        type: string
+        default: ""
+      environment_name:
+        description: "Name of the GitHub Environment to gate the pack-and-push job on (per D13 the environment IS the gate; misconfigured environments without required reviewers run without pausing). Trusted input. Default 'production'."
+        required: false
+        type: string
+        default: "production"
+      library_ref:
+        description: "SHA, tag, or branch of skathio/hashira-ops to check out for in-repo composite actions (D14). Default 'v1'. PIN TO A SHA for reproducible consumer builds."
+        required: false
+        type: string
+        default: "v1"
+    secrets:
+      NUGET_API_KEY:
+        description: "NuGet feed API key. Optional in principle (an OIDC/federated-token path is supported by the composite action), but `dotnet nuget push` does NOT auto-exchange OIDC tokens on dotnet 8.0.x — consumers wanting OIDC must wire a federated-token -> short-lived API key conversion externally (see docs/flows/nuget.md §7). For nuget.org without external OIDC wiring, this secret IS required."
+        required: false
+
+# Deny-all baseline; jobs grant the minimum.
+permissions: {}
+
+jobs:
+  preflight:
+    name: preflight
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Verify environment_name input is non-empty
+        shell: bash
+        env:
+          ENV_NAME: ${{ inputs.environment_name }}
+        run: |
+          set -euo pipefail
+          if [ -z "${ENV_NAME}" ]; then
+            echo "::error::nuget-package-publish: environment_name input is empty. The pack-and-push job's environment: key MUST be set to a configured GitHub Environment with at least one required reviewer (per D13 the environment IS the gate)." >&2
+            exit 1
+          fi
+          echo "nuget-package-publish: environment_name='${ENV_NAME}'"
+      - name: Verify project_path input is non-empty
+        shell: bash
+        env:
+          PROJECT_PATH: ${{ inputs.project_path }}
+        run: |
+          set -euo pipefail
+          if [ -z "${PROJECT_PATH}" ]; then
+            echo "::error::nuget-package-publish: project_path input is empty." >&2
+            exit 1
+          fi
+          # Note: existence check happens in pack-and-push (preflight does not
+          # check out the consumer's tree, so it cannot verify the path
+          # exists). dotnet-pack-version emits a clear error if the file is
+          # missing.
+          echo "nuget-package-publish: project_path='${PROJECT_PATH}'"
+      - name: Inform on NUGET_API_KEY presence (non-blocking)
+        shell: bash
+        env:
+          HAS_API_KEY: ${{ secrets.NUGET_API_KEY != '' }}
+        run: |
+          set -euo pipefail
+          if [ "${HAS_API_KEY}" = "true" ]; then
+            echo "nuget-package-publish: NUGET_API_KEY present — API-key auth available." >> "${GITHUB_STEP_SUMMARY}"
+          else
+            echo "::warning::nuget-package-publish: NUGET_API_KEY not provided. dotnet nuget push does NOT auto-exchange OIDC tokens; consumers wanting OIDC must wire a federated-token -> short-lived API key conversion externally (see docs/flows/nuget.md §7) OR set NUGET_API_KEY."
+            echo "nuget-package-publish: NUGET_API_KEY absent — OIDC/external-wiring path expected." >> "${GITHUB_STEP_SUMMARY}"
+          fi
+
+  pack-and-push:
+    name: pack-and-push
+    needs: preflight
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment_name }}
+    permissions:
+      # Any OIDC scenarios the consumer wires externally (federated-token
+      # -> API key conversion typically runs before this workflow, but we
+      # grant id-token:write here in case a consumer wires inline OIDC).
+      id-token: write
+      # gh release create tags the commit + creates a GitHub Release.
+      contents: write
+      # `gh release create --generate-notes` may post on linked PRs when
+      # auto-generated notes reference them.
+      pull-requests: write
+    steps:
+      # actions/checkout v4.2.2 — consumer's tree at FULL depth (MinVer
+      # walks git history + tags to compute the next version).
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+          # Persist credentials so `gh release create` can authenticate
+          # against the consumer's repo via GITHUB_TOKEN.
+          persist-credentials: true
+      # Library self-checkout per D14 (persist-credentials:false per iter-2.3 m4).
+      - name: Checkout hashira-ops library (D14)
+        # actions/checkout v4.2.2
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: skathio/hashira-ops
+          ref: ${{ inputs.library_ref }}
+          path: .hashira
+          persist-credentials: false
+      # actions/setup-dotnet v4.1.0
+      - uses: actions/setup-dotnet@3e891b0cb619bf60e2c25674b222b8940e2c1c25
+        with:
+          dotnet-version: ${{ inputs.dotnet_version }}
+      - name: Pack (MinVer-driven version inference)
+        id: pack
+        uses: ./.hashira/.github/actions/dotnet-pack-version
+        with:
+          project_path: ${{ inputs.project_path }}
+          prerelease_identifier: ${{ inputs.prerelease_identifier }}
+          version_increment: ${{ inputs.version_increment }}
+      - name: Push to NuGet feed
+        uses: ./.hashira/.github/actions/nuget-push
+        with:
+          nupkg_path: ${{ steps.pack.outputs.nupkg_path }}
+          target: ${{ inputs.target }}
+          api_key: ${{ secrets.NUGET_API_KEY }}
+      - name: Tag release (idempotent; D4 release-creates-the-tag)
+        shell: bash
+        env:
+          # GITHUB_TOKEN is auto-provided by the runner — needed by `gh` CLI.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.pack.outputs.version }}
+        run: |
+          set -euo pipefail
+          if [ -z "${VERSION}" ]; then
+            echo "::error::nuget-package-publish: empty version output from dotnet-pack-version; cannot tag." >&2
+            exit 1
+          fi
+          tag="v${VERSION}"
+          # Idempotency (D4): if the release already exists (parallel run
+          # or retry after a partial push), do nothing. Otherwise create
+          # the release + tag in one shot against $GITHUB_SHA so the tag
+          # points at exactly the commit that was pushed.
+          if gh release view "${tag}" --json id >/dev/null 2>&1; then
+            echo "nuget-package-publish: release ${tag} already exists; skipping tag (idempotent)." >> "${GITHUB_STEP_SUMMARY}"
+          else
+            gh release create "${tag}" --generate-notes --target "${GITHUB_SHA}"
+            echo "nuget-package-publish: created release ${tag} at ${GITHUB_SHA}" >> "${GITHUB_STEP_SUMMARY}"
+          fi

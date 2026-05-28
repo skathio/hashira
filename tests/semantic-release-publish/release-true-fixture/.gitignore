@@ -1,0 +1,10 @@
+# The released-true smoke self-CI job runs `git init` inside this directory
+# at runtime and seeds a `feat:` commit so semantic-release can infer
+# "would release v1.0.0". The runtime-created `.git/` and any generated
+# artifacts (node_modules/, .releaserc, semantic-release logs) must not
+# leak into the surrounding hashira-ops git index — this .gitignore exists
+# to make the runtime state invisible to the outer repo.
+.git/
+node_modules/
+.releaserc
+*.log

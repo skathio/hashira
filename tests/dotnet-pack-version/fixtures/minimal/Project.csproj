@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <IsPackable>true</IsPackable>
+    <PackageId>HashiraTestMinVer</PackageId>
+    <Description>Synthetic fixture for dotnet-pack-version self-CI smoke. Not for publication.</Description>
+    <Authors>hashira-ops self-CI</Authors>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- MinVer infers Version from the nearest git tag. In the self-CI
+         smoke we run against a freshly-init'd git repo with no tags, so
+         MinVer falls back to its no-tag default (0.0.0-alpha.0.<height>)
+         which is sufficient for asserting that the action wires up
+         correctly. -->
+    <PackageReference Include="MinVer" Version="5.0.0" PrivateAssets="All" />
+  </ItemGroup>
+
+</Project>

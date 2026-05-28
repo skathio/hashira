@@ -1,0 +1,80 @@
+# Composite action: run-tests-js
+#
+# Runs the consumer's JS test command and standardizes where coverage is
+# expected to land so the downstream `coverage-report` action has a single
+# input contract regardless of which framework the consumer uses.
+#
+# Contract: the consumer's test command must produce a coverage report at
+# `coverage_path` (default `coverage/lcov.info`). The action does NOT
+# generate coverage itself — it only enforces the output location and
+# surfaces it as a step output for the next action in the chain.
+#
+# Per NF1: ≤ ~80 lines. Per D11: setup-node lives at the workflow level,
+# not here — this action assumes node + the consumer's package manager are
+# already installed.
+#
+# ## Trust boundary
+#
+# The `command` input is interpolated raw at YAML-expansion time before
+# bash sees it (canonical Actions-RCE sink). Per D10d this is a permitted
+# shape but requires documented conventions: treat the value as TRUSTED
+# input. Do NOT pass values derived from PR titles, issue bodies, branch
+# names, commit messages, fork-author-controlled tag names, or any other
+# externally controlled context — quoting cannot defend the sink. See
+# `docs/usage.md` (TBD — populated in phase 2 alongside the gate model)
+# for the full trust model.
+name: run-tests-js
+description: Run the consumer's JS test command and standardize the coverage output path.
+
+inputs:
+  command:
+    description: "Shell command that runs tests AND produces a coverage report at `coverage_path`. Interpolated raw at YAML-expansion time before bash sees it; treat as trusted input. Do NOT pass values derived from PR titles, issue bodies, branch names, commit messages, or any other externally controlled context. See `docs/usage.md` (TBD — populated in phase 2 alongside the gate model) for the full trust model."
+    required: false
+    default: "npm test"
+  coverage_path:
+    description: "File path where the test command writes its coverage report (lcov by convention)."
+    required: false
+    default: "coverage/lcov.info"
+  working_directory:
+    description: "Directory in which to run the test command. Defaults to the repository root."
+    required: false
+    default: "."
+
+outputs:
+  coverage_path:
+    description: "Absolute path to the coverage file produced by the test command."
+    value: ${{ steps.locate.outputs.coverage_path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Run JS tests
+      id: run
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      run: |
+        set -euo pipefail
+        echo "::group::run-tests-js"
+        ${{ inputs.command }}
+        echo "::endgroup::"
+
+    - name: Locate coverage file
+      id: locate
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      run: |
+        set -euo pipefail
+        rel="${{ inputs.coverage_path }}"
+        if [ ! -f "${rel}" ]; then
+          echo "::error::run-tests-js: coverage file not found at '${rel}'. The test command must write coverage to this path (override via the 'coverage_path' input)." >&2
+          exit 1
+        fi
+        abs="$(cd "$(dirname "${rel}")" && pwd)/$(basename "${rel}")"
+        echo "coverage_path=${abs}" >> "${GITHUB_OUTPUT}"
+
+    - name: Summary
+      shell: bash
+      run: |
+        set -euo pipefail
+        size="$(wc -c < "${{ steps.locate.outputs.coverage_path }}" | tr -d ' ')"
+        echo "run-tests-js: tests passed; coverage at ${{ steps.locate.outputs.coverage_path }} (${size} bytes)" >> "${GITHUB_STEP_SUMMARY}"

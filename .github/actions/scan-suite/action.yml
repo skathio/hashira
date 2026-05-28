@@ -1,0 +1,128 @@
+# Composite action: scan-suite
+#
+# Orchestrates five security scans with consumer-controllable opt-out per
+# D10c. Each scan is a sub-composite under `scans/<name>/action.yml` invoked
+# with an `if:` gate based on `scan_disable` parsing.
+#
+# Per D7: visibility-adaptive logic (private+no-GHAS skip-with-notice) lives
+# inside the codeql + dependency-review sub-composites via the shared
+# `lib/visibility-detect.js` shim.
+#
+# Per NF1: ≤ ~80 lines.
+#
+# ## Trust boundary
+#
+# The `scan_disable`, `codeql_languages`, `osv_paths`, and `gitleaks_config`
+# inputs are strings parsed/forwarded internally. They are NOT interpolated
+# into raw shell. Even so, treat the values as trusted inputs — do not derive
+# from PR titles, issue bodies, branch names, or other externally controlled
+# context. See `docs/usage.md` (TBD — populated in phase 2) for the full
+# trust model.
+#
+# ## Reserved env names
+#
+# The `HASHIRA_` env-name prefix is reserved by this library. In particular,
+# `HASHIRA_FORCE_PRIVATE_NO_GHAS` is a test-only override read by the
+# visibility-detect shim (see `lib/visibility-detect.js`): when set to `'1'`,
+# the codeql + dependency-review sub-composites take the private+no-GHAS
+# skip-with-notice path unconditionally, regardless of actual repo visibility
+# or GHAS status. This exists so the library's own self-CI can exercise the
+# skip-with-notice branch on a public/GHAS repo. **Consumer workflows must
+# not set `HASHIRA_FORCE_PRIVATE_NO_GHAS` in production** — doing so silently
+# weakens scans without surfacing a failure.
+name: scan-suite
+description: Run the security scan suite (codeql / osv / gitleaks / dependency-review / actionlint) with consumer-controllable opt-out.
+
+inputs:
+  scan_disable:
+    description: "Comma-separated list of scans to skip. Default 'codeql,actionlint' per D10c. Pass '' to enable all. Values: codeql,osv,gitleaks,dependency-review,actionlint."
+    required: false
+    default: "codeql,actionlint"
+  codeql_languages:
+    description: "Comma-separated languages for CodeQL (empty = autodetect)."
+    required: false
+    default: ""
+  osv_paths:
+    description: "Paths to scan with OSV-Scanner (default '.')."
+    required: false
+    default: "."
+  gitleaks_config:
+    description: "Optional path to a gitleaks config file."
+    required: false
+    default: ""
+
+outputs:
+  summary:
+    description: "Multi-line summary: one '<name>\\t<status>\\t<details>' line per scan."
+    value: ${{ steps.summarize.outputs.summary }}
+
+runs:
+  using: composite
+  steps:
+    - name: Initialize results file + parse disable list
+      id: init
+      shell: bash
+      env:
+        SCAN_DISABLE: ${{ inputs.scan_disable }}
+      run: |
+        set -euo pipefail
+        : > "${RUNNER_TEMP}/scan-suite-results.tsv"
+        # Normalize the comma-separated list to a whitespace-padded form so
+        # `contains(...)` style checks via shell are unambiguous. We then
+        # emit one `<name>_enabled` output per known scan.
+        norm=",$(echo "${SCAN_DISABLE}" | tr -d '[:space:]'),"
+        for name in codeql osv gitleaks dependency-review actionlint; do
+          if echo "${norm}" | grep -qF ",${name},"; then
+            echo "${name//-/_}_enabled=false" >> "${GITHUB_OUTPUT}"
+            echo "::notice::scan-suite: ${name} skipped (consumer disabled)"
+            printf '%s\tskipped\tconsumer disabled\n' "${name}" \
+              >> "${RUNNER_TEMP}/scan-suite-results.tsv"
+            echo "- ${name}: skipped (consumer disabled)" >> "${GITHUB_STEP_SUMMARY}"
+          else
+            echo "${name//-/_}_enabled=true" >> "${GITHUB_OUTPUT}"
+          fi
+        done
+
+    - name: codeql
+      if: steps.init.outputs.codeql_enabled == 'true'
+      uses: ./.github/actions/scan-suite/scans/codeql
+      with:
+        languages: ${{ inputs.codeql_languages }}
+
+    - name: osv
+      if: steps.init.outputs.osv_enabled == 'true'
+      uses: ./.github/actions/scan-suite/scans/osv
+      with:
+        paths: ${{ inputs.osv_paths }}
+
+    - name: gitleaks
+      if: steps.init.outputs.gitleaks_enabled == 'true'
+      uses: ./.github/actions/scan-suite/scans/gitleaks
+      with:
+        config_path: ${{ inputs.gitleaks_config }}
+
+    - name: dependency-review
+      if: steps.init.outputs.dependency_review_enabled == 'true'
+      uses: ./.github/actions/scan-suite/scans/dependency-review
+
+    - name: actionlint
+      if: steps.init.outputs.actionlint_enabled == 'true'
+      uses: ./.github/actions/scan-suite/scans/actionlint
+
+    - name: Summarize
+      id: summarize
+      shell: bash
+      run: |
+        set -euo pipefail
+        results="${RUNNER_TEMP}/scan-suite-results.tsv"
+        # Multi-line GITHUB_OUTPUT delimiter pattern.
+        delim="EOF_$(date +%s%N)"
+        {
+          echo "summary<<${delim}"
+          cat "${results}"
+          echo "${delim}"
+        } >> "${GITHUB_OUTPUT}"
+        echo "" >> "${GITHUB_STEP_SUMMARY}"
+        echo "### scan-suite combined" >> "${GITHUB_STEP_SUMMARY}"
+        awk -F'\t' '{ printf("- %s: %s (%s)\n", $1, $2, $3) }' "${results}" \
+          >> "${GITHUB_STEP_SUMMARY}"

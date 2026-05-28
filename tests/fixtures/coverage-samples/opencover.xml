@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<CoverageSession>
+  <Summary numSequencePoints="10" visitedSequencePoints="8" numBranchPoints="0" visitedBranchPoints="0" sequenceCoverage="80" branchCoverage="0"/>
+  <Modules>
+    <Module hash="ABC">
+      <ModuleName>Hashira.Sample</ModuleName>
+      <Files>
+        <File uid="1" fullPath="src/Alpha.cs"/>
+        <File uid="2" fullPath="src/Beta.cs"/>
+      </Files>
+      <Classes>
+        <Class>
+          <FullName>Hashira.Sample.Alpha</FullName>
+          <Summary numSequencePoints="4" visitedSequencePoints="3"/>
+          <Methods>
+            <Method visited="true">
+              <Name>Greet</Name>
+              <FileRef uid="1"/>
+              <SequencePoints>
+                <SequencePoint vc="3" sl="1"/>
+                <SequencePoint vc="3" sl="2"/>
+                <SequencePoint vc="3" sl="3"/>
+                <SequencePoint vc="0" sl="4"/>
+              </SequencePoints>
+            </Method>
+          </Methods>
+        </Class>
+        <Class>
+          <FullName>Hashira.Sample.Beta</FullName>
+          <Summary numSequencePoints="6" visitedSequencePoints="5"/>
+          <Methods>
+            <Method visited="true">
+              <Name>Sum</Name>
+              <FileRef uid="2"/>
+              <SequencePoints>
+                <SequencePoint vc="5" sl="1"/>
+                <SequencePoint vc="5" sl="2"/>
+                <SequencePoint vc="5" sl="3"/>
+                <SequencePoint vc="5" sl="4"/>
+                <SequencePoint vc="5" sl="5"/>
+                <SequencePoint vc="0" sl="6"/>
+              </SequencePoints>
+            </Method>
+          </Methods>
+        </Class>
+      </Classes>
+    </Module>
+  </Modules>
+</CoverageSession>

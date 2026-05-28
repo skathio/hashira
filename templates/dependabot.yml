@@ -1,0 +1,17 @@
+# Consumer-side Dependabot template — copy into your own repo at
+# `.github/dependabot.yml` to keep the third-party action pins inside
+# `scan-suite` (and any other hashira composite actions you reference)
+# refreshed on a weekly cadence. Without this, the SHA pins go stale.
+#
+# Note: Dependabot's `github-actions` ecosystem refreshes `uses:` SHAs in
+# workflow + composite-action YAML, but does NOT refresh shell-installed
+# binaries (e.g., gitleaks, actionlint inside scan-suite's sub-composites).
+# Those bumps are maintainer responsibility — track upstream releases and
+# update the version + SHA-256 in the corresponding `action.yml` manually.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5

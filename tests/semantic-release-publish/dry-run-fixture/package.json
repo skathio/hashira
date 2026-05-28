@@ -1,0 +1,11 @@
+{
+  "name": "hashira-semantic-release-publish-dry-run-fixture",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Static fixture for the semantic-release-publish dry-run self-CI job. Private + version 0.0.0 + no conventional-commit history → semantic-release reports 'no release this run' in dry-run. Defense in depth: 'private: true' would block a real publish even if dry-run mode were bypassed.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/skathio/hashira-ops.git"
+  },
+  "license": "MIT"
+}

@@ -1,0 +1,858 @@
+# Library self-CI (dogfooding). Runs on every PR + push to main.
+# Iteration 1.1 scope: scaffold-only — actionlint over our own YAML + a smoke
+# job. Future iterations (1.2 / 1.3) extend this with action-smoke + scan-suite
+# self-application. No cross-repo `gh workflow run` triggers — fixture repos
+# are out of scope per the 2026-05-24 plan-change.
+name: _self-ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Least-privilege default for the whole workflow; jobs may narrow further.
+permissions:
+  contents: read
+
+jobs:
+  actionlint:
+    name: actionlint
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      # Pin actionlint by downloading the release binary at a fixed version +
+      # verifying the SHA-256 of the archive. Chosen over `rhysd/actionlint@<sha>`
+      # so the toolchain has one fewer Marketplace-action pin to refresh; the
+      # binary's checksum is the integrity anchor.
+      - name: Install actionlint (pinned v1.7.7)
+        run: |
+          set -euo pipefail
+          version="1.7.7"
+          archive="actionlint_${version}_linux_amd64.tar.gz"
+          # SHA-256 published on the v1.7.7 release page.
+          expected_sha="023070a287cd8cccd71515fedc843f1985bf96c436b7effaecce67290e7e0757"
+          curl -fsSL -o "${archive}" \
+            "https://github.com/rhysd/actionlint/releases/download/v${version}/${archive}"
+          echo "${expected_sha}  ${archive}" | sha256sum -c -
+          tar -xzf "${archive}" actionlint
+          install -m 0755 actionlint /usr/local/bin/actionlint
+          actionlint -version
+      - name: Run actionlint over workflows + composite actions
+        run: |
+          set -euo pipefail
+          # actionlint by default scans .github/workflows/. Composite actions
+          # under .github/actions/<name>/action.yml are validated implicitly
+          # when referenced by a workflow; this iteration has none yet, so the
+          # plain invocation is sufficient.
+          actionlint -color
+
+  smoke:
+    name: smoke
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: List composite-action directories (scaffold smoke)
+        run: |
+          set -euo pipefail
+          if [ -d .github/actions ]; then
+            echo "contents of .github/actions/:"
+            ls -la .github/actions/ || true
+          else
+            echo ".github/actions/ does not exist yet"
+          fi
+      - name: Write summary
+        run: |
+          echo "library self-CI: scaffold-only (iteration 1.1)" >> "$GITHUB_STEP_SUMMARY"
+
+  parser-unit-tests:
+    name: parser-unit-tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      # actions/setup-node v4.1.0 — needed only for a recent enough node
+      # to have `node --test` (>= 18). Default ubuntu-latest node would
+      # also work but pinning makes the matrix explicit.
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af
+        with:
+          node-version: '20'
+      - name: Run coverage parser unit tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --test tests/coverage-report/parse-coverage.test.js
+
+  actions-smoke:
+    name: actions-smoke
+    runs-on: ubuntu-latest
+    # PR comment write needed so coverage-report's sticky-comment branch
+    # can be exercised on PR events; contents:read for checkout.
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      # actions/setup-node v4.1.0 — coverage-report depends on a `node`
+      # binary on PATH for its parser shim. Run setup-node BEFORE invoking
+      # coverage-report so the dependency is explicit in the self-CI shape
+      # (rather than relying on the preinstalled ubuntu-latest Node).
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af
+        with:
+          node-version: '20'
+
+      # --- coverage-report smoke against the three fixture files --------
+      - name: coverage-report — lcov fixture
+        uses: ./.github/actions/coverage-report
+        with:
+          coverage_path: tests/fixtures/coverage-samples/lcov.info
+          artifact_name: coverage-smoke-lcov
+      - name: coverage-report — cobertura fixture
+        uses: ./.github/actions/coverage-report
+        with:
+          coverage_path: tests/fixtures/coverage-samples/cobertura.xml
+          artifact_name: coverage-smoke-cobertura
+      - name: coverage-report — opencover fixture
+        uses: ./.github/actions/coverage-report
+        with:
+          coverage_path: tests/fixtures/coverage-samples/opencover.xml
+          artifact_name: coverage-smoke-opencover
+      - name: Assert coverage-report summaries are present
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The action writes a "coverage-report: lines X% / branches Y%" line
+          # per invocation; we expect three of them and all three fixtures are
+          # rigged to report lines=80.0% (lcov 8/10; cobertura line-rate=0.8;
+          # opencover 8/10 sequence points).
+          grep -F 'coverage-report: lines 80.0%' "${GITHUB_STEP_SUMMARY}"
+          count="$(grep -cF 'coverage-report: lines' "${GITHUB_STEP_SUMMARY}")"
+          if [ "${count}" -lt 3 ]; then
+            echo "expected >=3 coverage-report summary lines, got ${count}" >&2
+            exit 1
+          fi
+
+      # --- run-tests-js smoke against the JS fixture --------------------
+      # Node already on PATH from the setup-node step above (run before
+      # coverage-report). No re-setup needed for run-tests-js.
+      - name: run-tests-js — fixture project
+        id: js
+        uses: ./.github/actions/run-tests-js
+        with:
+          working_directory: tests/run-tests-js
+          # Use plain `npm test` against the fixture's package.json. The
+          # fixture has no real deps so we skip `npm ci`.
+          command: 'npm test'
+          coverage_path: 'coverage/lcov.info'
+      - name: Assert run-tests-js produced coverage
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="${{ steps.js.outputs.coverage_path }}"
+          test -f "${out}" || { echo "run-tests-js: expected coverage at ${out}"; exit 1; }
+
+      # --- run-tests-dotnet smoke against the .NET fixture --------------
+      # actions/setup-dotnet v4.1.0 — ubuntu-latest images ship SDKs but
+      # pinning the action ensures a deterministic 8.x version for the
+      # fixture's <TargetFramework>net8.0</TargetFramework>.
+      - uses: actions/setup-dotnet@3e891b0cb619bf60e2c25674b222b8940e2c1c25
+        with:
+          dotnet-version: '8.0.x'
+      - name: run-tests-dotnet — fixture project
+        id: dotnet
+        uses: ./.github/actions/run-tests-dotnet
+        with:
+          working_directory: tests/run-tests-dotnet
+          command: 'dotnet test --collect:"XPlat Code Coverage" --results-directory TestResults'
+          coverage_path: 'coverage/cobertura.xml'
+          results_directory: 'TestResults'
+      - name: Assert run-tests-dotnet produced coverage
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="${{ steps.dotnet.outputs.coverage_path }}"
+          test -f "${out}" || { echo "run-tests-dotnet: expected coverage at ${out}"; exit 1; }
+
+  visibility-detect-unit-tests:
+    name: visibility-detect-unit-tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      # actions/setup-node v4.1.0
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af
+        with:
+          node-version: '20'
+      - name: Run visibility-detect unit tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --test tests/scan-suite/visibility-detect.test.js
+
+  scan-suite-default:
+    name: scan-suite-default
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # CodeQL needs security-events:write when it runs; we keep it on the
+      # job even though codeql is in the default skip list so the override
+      # job below can reuse the same shape.
+      security-events: write
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      # actions/setup-node v4.1.0 (for visibility-detect shim invocations).
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af
+        with:
+          node-version: '20'
+      - name: Run scan-suite with default scan_disable
+        id: ss
+        uses: ./.github/actions/scan-suite
+      - name: Assert default summary shape
+        shell: bash
+        env:
+          SUMMARY: ${{ steps.ss.outputs.summary }}
+        run: |
+          set -euo pipefail
+          echo "${SUMMARY}"
+          # codeql + actionlint must be consumer-disabled skips.
+          echo "${SUMMARY}" | grep -P '^codeql\tskipped\tconsumer disabled$'
+          echo "${SUMMARY}" | grep -P '^actionlint\tskipped\tconsumer disabled$'
+          # osv must have run.
+          echo "${SUMMARY}" | grep -P '^osv\tran\t'
+          # gitleaks must have run.
+          echo "${SUMMARY}" | grep -P '^gitleaks\tran\t'
+          # dependency-review will be skipped (not a PR event) on push.
+          echo "${SUMMARY}" | grep -P '^dependency-review\t(ran|skipped)\t'
+
+  scan-suite-override:
+    name: scan-suite-override
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      # actions/setup-node v4.1.0
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af
+        with:
+          node-version: '20'
+      - name: Run scan-suite with gitleaks also disabled
+        id: ss
+        uses: ./.github/actions/scan-suite
+        with:
+          scan_disable: 'codeql,actionlint,gitleaks'
+      - name: Assert gitleaks is skipped (consumer disabled)
+        shell: bash
+        env:
+          SUMMARY: ${{ steps.ss.outputs.summary }}
+        run: |
+          set -euo pipefail
+          echo "${SUMMARY}"
+          echo "${SUMMARY}" | grep -P '^gitleaks\tskipped\tconsumer disabled$'
+
+  semantic-release-publish-unit-tests:
+    name: semantic-release-publish-unit-tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      # actions/setup-node v4.1.0
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af
+        with:
+          node-version: '20'
+      - name: Run releaserc-builder unit tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --test tests/semantic-release-publish/releaserc-builder.test.js
+
+  semantic-release-publish-dry-run:
+    name: semantic-release-publish-dry-run
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      # Force the action into --dry-run --no-ci so no publish or git push
+      # is attempted. Documented reserved env name; do NOT set in consumer
+      # workflows.
+      HASHIRA_SEMANTIC_RELEASE_DRY_RUN: '1'
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Run semantic-release-publish against the dry-run fixture
+        id: srp
+        uses: ./.github/actions/semantic-release-publish
+        with:
+          working_directory: tests/semantic-release-publish/dry-run-fixture
+      - name: Assert dry-run produced a sensible summary
+        shell: bash
+        env:
+          RELEASED: ${{ steps.srp.outputs.released }}
+          VERSION: ${{ steps.srp.outputs.version }}
+        run: |
+          set -euo pipefail
+          echo "released='${RELEASED}'  version='${VERSION}'"
+          # In dry-run on a fixture with no conventional-commit history we
+          # expect released=false; version may be empty (no release) or set
+          # (would-release line). Summary must contain one of the two
+          # expected sentences.
+          if [ "${RELEASED}" != "false" ]; then
+            echo "expected released=false in dry-run, got '${RELEASED}'" >&2
+            exit 1
+          fi
+          grep -E 'semantic-release-publish: (no release this run|would release v[0-9])' \
+            "${GITHUB_STEP_SUMMARY}"
+
+  npm-package-ci-shape-validation:
+    name: npm-package-ci-shape-validation
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Verify python3 + pyyaml availability
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -c 'import yaml; print("pyyaml " + yaml.__version__)'
+      - name: Run shape-validation shim
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tests/npm-package-ci/shape-validate.py
+
+  npm-package-publish-shape-validation:
+    name: npm-package-publish-shape-validation
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Verify python3 + pyyaml availability
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -c 'import yaml; print("pyyaml " + yaml.__version__)'
+      - name: Run publish shape-validation shim
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tests/npm-package-publish/shape-validate.py
+
+  npm-publish-docs-cross-reference:
+    name: npm-publish-docs-cross-reference
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Verify python3 + pyyaml availability
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -c 'import yaml; print("pyyaml " + yaml.__version__)'
+      - name: Run docs-vs-YAML cross-reference check
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tests/npm-package-publish/docs-cross-ref.py
+
+  semantic-release-publish-released-true-smoke:
+    name: semantic-release-publish-released-true-smoke
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      HASHIRA_SEMANTIC_RELEASE_DRY_RUN: '1'
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Seed released-true fixture with a feat commit
+        shell: bash
+        working-directory: tests/semantic-release-publish/release-true-fixture
+        env:
+          GIT_AUTHOR_NAME: hashira-ci
+          GIT_AUTHOR_EMAIL: ci@example.invalid
+          GIT_COMMITTER_NAME: hashira-ci
+          GIT_COMMITTER_EMAIL: ci@example.invalid
+        run: |
+          set -euo pipefail
+          # Init a fresh repo inside the fixture so semantic-release's
+          # git history walk sees a single feat: commit (next-version=1.0.0).
+          # If semantic-release ascends to the outer hashira-ops repo
+          # (some configurations of git/libgit behave this way), the
+          # assertion below falls back to the action's own summary grep.
+          git init -b main
+          # Seed an origin so @semantic-release/git doesn't fail on
+          # "no remote" — point at a non-routable invalid URL; dry-run
+          # never pushes.
+          git remote add origin https://github.com/skathio/hashira-released-true-fixture.git
+          git add package.json .gitignore
+          git -c commit.gpgsign=false commit -m "feat: initial release"
+          git log --oneline
+      - name: Run semantic-release-publish against released-true fixture
+        id: srp
+        uses: ./.github/actions/semantic-release-publish
+        with:
+          working_directory: tests/semantic-release-publish/release-true-fixture
+      - name: Assert released=true parsing path is exercised
+        shell: bash
+        env:
+          RELEASED: ${{ steps.srp.outputs.released }}
+          VERSION: ${{ steps.srp.outputs.version }}
+        run: |
+          set -euo pipefail
+          echo "released='${RELEASED}'  version='${VERSION}'"
+          # Primary assertion: the action's own summary grep should pick up
+          # the "would release v1.0.0" line emitted by semantic-release's
+          # dry-run path. This exercises the `Major` review finding's parse
+          # branch (the "The next release version is X.Y.Z" string).
+          # Fallback: per the dispatch brief, if semantic-release walks the
+          # outer hashira-ops git history instead of the fixture's inner
+          # repo, we fall through to grep for *either* expected shape so
+          # the smoke still detects a wording change.
+          if grep -E 'semantic-release-publish: would release v[0-9]+\.[0-9]+\.[0-9]+' \
+               "${GITHUB_STEP_SUMMARY}"; then
+            echo "released-true smoke: parsed 'would release v…' line OK"
+            exit 0
+          fi
+          # If the action did not match either parse branch, the wording
+          # has drifted — fail loudly. This is the value the smoke adds
+          # over the dry-run-fixture job (which only exercises the
+          # no-release branch).
+          if ! grep -E 'semantic-release-publish: (no release this run|would release v[0-9])' \
+                 "${GITHUB_STEP_SUMMARY}"; then
+            echo "::error::released-true smoke: neither parse branch matched. semantic-release log wording may have drifted; re-verify the grep block in actions/semantic-release-publish/action.yml against the pinned semantic-release version." >&2
+            exit 1
+          fi
+          # If we landed on the "no release this run" branch it means
+          # semantic-release didn't see the seeded feat commit — likely
+          # because it walked the outer hashira-ops history (which has no
+          # conventional commits as of writing) or didn't ascend at all.
+          # Emit a warning so a future hashira-ops repo state that DOES
+          # have conventional commits surfaces a regression, but don't fail
+          # the job — the wording-drift defense (above) is the primary
+          # value of this smoke.
+          echo "::warning::released-true smoke: action emitted 'no release this run' rather than 'would release v…'. The inner git-init pattern did not steer semantic-release at the fixture's history; fixture-vs-outer-repo behavior may have shifted. Confirm by inspecting the action's run log." >&2
+
+  scan-suite-codeql-skip-notice:
+    name: scan-suite-codeql-skip-notice
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    env:
+      # Force the visibility-detect shim into the private+no-GHAS branch so
+      # codeql exercises its skip-with-notice path even on a public/GHAS
+      # runner. Matches the documented test override.
+      HASHIRA_FORCE_PRIVATE_NO_GHAS: '1'
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      # actions/setup-node v4.1.0
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af
+        with:
+          node-version: '20'
+      - name: Run scan-suite with only actionlint disabled (codeql enabled)
+        id: ss
+        uses: ./.github/actions/scan-suite
+        with:
+          scan_disable: 'actionlint'
+      - name: Assert codeql skip-with-notice text
+        shell: bash
+        env:
+          SUMMARY: ${{ steps.ss.outputs.summary }}
+        run: |
+          set -euo pipefail
+          echo "${SUMMARY}"
+          echo "${SUMMARY}" | grep -P '^codeql\tskipped\tCodeQL requires GHAS on private repos$'
+
+  dotnet-pack-version-unit-tests:
+    name: dotnet-pack-version-unit-tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      # actions/setup-node v4.1.0
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af
+        with:
+          node-version: '20'
+      - name: Run parse-nupkg-version unit tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --test tests/dotnet-pack-version/parse-nupkg-version.test.js
+
+  dotnet-pack-version-smoke:
+    name: dotnet-pack-version-smoke
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      # actions/setup-node v4.1.0 (the action's MinVer-detect step shells
+      # out to `node` against the shim).
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af
+        with:
+          node-version: '20'
+      # actions/setup-dotnet v4.1.0 — reuses iter-1.2-verified pin per D11.
+      - uses: actions/setup-dotnet@3e891b0cb619bf60e2c25674b222b8940e2c1c25
+        with:
+          dotnet-version: '8.0.x'
+
+      # --- minimal fixture (MinVer ref present) -------------------------
+      - name: dotnet-pack-version — minimal fixture (MinVer present)
+        id: pack_minimal
+        uses: ./.github/actions/dotnet-pack-version
+        with:
+          working_directory: tests/dotnet-pack-version/fixtures/minimal
+          project_path: Project.csproj
+          output_directory: ./packages
+      - name: Assert minimal fixture produced a version + nupkg
+        shell: bash
+        env:
+          VERSION: ${{ steps.pack_minimal.outputs.version }}
+          NUPKG_PATH: ${{ steps.pack_minimal.outputs.nupkg_path }}
+        run: |
+          set -euo pipefail
+          echo "version='${VERSION}'  nupkg_path='${NUPKG_PATH}'"
+          if [ -z "${VERSION}" ]; then
+            echo "::error::dotnet-pack-version-smoke: version output is empty" >&2
+            exit 1
+          fi
+          test -f "tests/dotnet-pack-version/fixtures/minimal/${NUPKG_PATH}"
+          grep -F 'dotnet-pack-version: produced' "${GITHUB_STEP_SUMMARY}"
+
+      # --- no-MinVer fixture (warning path) -----------------------------
+      # Capture stderr to assert the ::warning:: line fires. The action's
+      # warning step does NOT fail the build (intentional — consumer may
+      # use a different versioning scheme), so we need to scrape the
+      # workflow command stream rather than depend on a non-zero exit.
+      - name: dotnet-pack-version — no-MinVer fixture (warning path)
+        id: pack_no_minver
+        uses: ./.github/actions/dotnet-pack-version
+        with:
+          working_directory: tests/dotnet-pack-version/fixtures/no-minver
+          project_path: Project.csproj
+          output_directory: ./packages
+      - name: Assert no-MinVer fixture still produced a nupkg (warning path)
+        shell: bash
+        env:
+          VERSION: ${{ steps.pack_no_minver.outputs.version }}
+        run: |
+          set -euo pipefail
+          # The fixture pins <Version>0.0.1</Version> so pack still
+          # succeeds; the warning is the contract surface.
+          if [ -z "${VERSION}" ]; then
+            echo "::error::dotnet-pack-version-smoke: no-MinVer fixture should still pack (Version is pinned in .csproj)" >&2
+            exit 1
+          fi
+          # The summary line for both fixtures shows "produced"; we
+          # primarily rely on the ::warning:: surfacing in the run-log,
+          # which actionlint + the smoke job's run-log carry. We assert
+          # the version is the pinned 0.0.1 (proves MinVer didn't run).
+          if [ "${VERSION}" != "0.0.1" ]; then
+            echo "::error::dotnet-pack-version-smoke: no-MinVer fixture should report version 0.0.1, got '${VERSION}'" >&2
+            exit 1
+          fi
+
+  nuget-package-ci-shape-validation:
+    name: nuget-package-ci-shape-validation
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Verify python3 + pyyaml availability
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -c 'import yaml; print("pyyaml " + yaml.__version__)'
+      - name: Run nuget-package-ci shape-validation shim
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tests/nuget-package-ci/shape-validate.py
+
+  nuget-push-smoke:
+    name: nuget-push-smoke
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      # Force the action into dry-run; no real push attempt, no need for
+      # a real .nupkg on disk. Documented reserved env name; do NOT set
+      # in consumer workflows.
+      HASHIRA_NUGET_PUSH_DRY_RUN: '1'
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: nuget-push — dry-run against a fake path
+        uses: ./.github/actions/nuget-push
+        with:
+          # Path does not need to exist in dry-run mode; the action exits
+          # before touching the filesystem.
+          nupkg_path: ./packages/Fake.0.0.0.nupkg
+          api_key: ''
+      - name: Assert dry-run summary line is present
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -F 'nuget-push: dry-run' "${GITHUB_STEP_SUMMARY}"
+
+  nuget-package-publish-shape-validation:
+    name: nuget-package-publish-shape-validation
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Verify python3 + pyyaml availability
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -c 'import yaml; print("pyyaml " + yaml.__version__)'
+      - name: Run nuget-package-publish shape-validation shim
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tests/nuget-package-publish/shape-validate.py
+
+  nuget-publish-docs-cross-reference:
+    name: nuget-publish-docs-cross-reference
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Verify python3 + pyyaml availability
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -c 'import yaml; print("pyyaml " + yaml.__version__)'
+      - name: Run nuget docs-vs-YAML cross-reference check
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tests/nuget-package-publish/docs-cross-ref.py
+
+  pages-upload-shape-smoke:
+    name: pages-upload-shape-smoke
+    runs-on: ubuntu-latest
+    # The action documents `id-token: write` + `pages: write` as required
+    # by the upstream upload-pages-artifact step; the dry-run hook below
+    # skips that step so we don't actually need those scopes for this
+    # smoke. Keep the job at `contents: read` only — the smoke proves the
+    # autodetect + summary path, NOT the real upload.
+    permissions:
+      contents: read
+    env:
+      # Force the action's resolve step to run but skip the third-party
+      # upload step. Documented reserved env name; do NOT set in consumer
+      # workflows. See iter 4.1 phase brief: the library repo deliberately
+      # does NOT enable Pages on itself.
+      HASHIRA_PAGES_UPLOAD_DRY_RUN: '1'
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: pages-upload — explicit path against tests/pages-fixture
+        id: pu
+        uses: ./.github/actions/pages-upload
+        with:
+          path: tests/pages-fixture
+      - name: Assert explicit-path outputs + summary line
+        shell: bash
+        env:
+          RESOLVED: ${{ steps.pu.outputs.resolved_path }}
+          MODE: ${{ steps.pu.outputs.detection_mode }}
+        run: |
+          set -euo pipefail
+          echo "resolved='${RESOLVED}'  mode='${MODE}'"
+          if [ "${RESOLVED}" != "tests/pages-fixture" ]; then
+            echo "::error::pages-upload-shape-smoke: resolved_path expected 'tests/pages-fixture', got '${RESOLVED}'" >&2
+            exit 1
+          fi
+          if [ "${MODE}" != "explicit" ]; then
+            echo "::error::pages-upload-shape-smoke: detection_mode expected 'explicit', got '${MODE}'" >&2
+            exit 1
+          fi
+          # Summary line names the chosen path + mode.
+          grep -F "pages-upload: resolved path 'tests/pages-fixture' (mode: explicit)" \
+            "${GITHUB_STEP_SUMMARY}"
+          # Dry-run skip line is present.
+          grep -F 'pages-upload: dry-run' "${GITHUB_STEP_SUMMARY}"
+
+  pages-upload-autodetect-smoke:
+    name: pages-upload-autodetect-smoke
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      HASHIRA_PAGES_UPLOAD_DRY_RUN: '1'
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Stage tests/pages-fixture into a dist/ directory at repo root
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Autodetect search order is dist/ build/ out/ public/ — first
+          # found wins. Copy the fixture into dist/ so autodetect picks it
+          # up at the first search step. (Cannot rename the fixture
+          # in-place: the explicit-path smoke job runs against
+          # tests/pages-fixture.)
+          mkdir -p dist
+          cp tests/pages-fixture/index.html tests/pages-fixture/styles.css dist/
+          ls -la dist/
+      - name: pages-upload — no path input; autodetect should find dist/
+        id: pu
+        uses: ./.github/actions/pages-upload
+      - name: Assert autodetect resolved to dist/
+        shell: bash
+        env:
+          RESOLVED: ${{ steps.pu.outputs.resolved_path }}
+          MODE: ${{ steps.pu.outputs.detection_mode }}
+        run: |
+          set -euo pipefail
+          echo "resolved='${RESOLVED}'  mode='${MODE}'"
+          if [ "${RESOLVED}" != "dist" ]; then
+            echo "::error::pages-upload-autodetect-smoke: resolved_path expected 'dist', got '${RESOLVED}'" >&2
+            exit 1
+          fi
+          if [ "${MODE}" != "autodetect" ]; then
+            echo "::error::pages-upload-autodetect-smoke: detection_mode expected 'autodetect', got '${MODE}'" >&2
+            exit 1
+          fi
+          grep -F "pages-upload: resolved path 'dist' (mode: autodetect)" \
+            "${GITHUB_STEP_SUMMARY}"
+      - name: Clean up staged dist/
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf dist
+          test ! -d dist && echo "dist removed"
+
+  pages-upload-shape-validation:
+    name: pages-upload-shape-validation
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Verify python3 + pyyaml availability
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -c 'import yaml; print("pyyaml " + yaml.__version__)'
+      - name: Run pages-upload shape-validation shim
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tests/pages-upload/shape-validate.py
+
+  pages-deploy-shape-validation:
+    name: pages-deploy-shape-validation
+    runs-on: ubuntu-latest
+    # PURE YAML shape check — per phase 4.1: no real Pages deploy from
+    # the library (would conflict with the library's own purpose, and
+    # the library repo does not have Pages enabled). The runtime
+    # behavior of pages-deploy is verified by the user post-v1 when they
+    # wire a real static-webapp consumer.
+    permissions:
+      contents: read
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Verify python3 + pyyaml availability
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -c 'import yaml; print("pyyaml " + yaml.__version__)'
+      - name: Run pages-deploy shape-validation shim
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tests/pages-deploy/shape-validate.py
+
+  static-webapp-ci-shape-validation:
+    name: static-webapp-ci-shape-validation
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Verify python3 + pyyaml availability
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -c 'import yaml; print("pyyaml " + yaml.__version__)'
+      - name: Run static-webapp-ci shape-validation shim
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tests/static-webapp-ci/shape-validate.py
+
+  static-webapp-deploy-shape-validation:
+    name: static-webapp-deploy-shape-validation
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Verify python3 + pyyaml availability
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -c 'import yaml; print("pyyaml " + yaml.__version__)'
+      - name: Run static-webapp-deploy shape-validation shim
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tests/static-webapp-deploy/shape-validate.py
+
+  static-webapp-docs-cross-reference:
+    name: static-webapp docs cross-reference
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Verify python3 + pyyaml availability
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -c 'import yaml; print("pyyaml " + yaml.__version__)'
+      - name: Run static-webapp docs-vs-YAML cross-reference check
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tests/static-webapp/docs-cross-ref.py

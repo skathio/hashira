@@ -1,0 +1,171 @@
+# Composite action: pages-upload
+#
+# Thin standardization layer over `actions/upload-pages-artifact` (per D12)
+# that adds one convenience: if the caller doesn't pass an explicit `path`,
+# the action autodetects the build output directory by checking a fixed
+# search order (`dist/`, `build/`, `out/`, `public/`; first found wins).
+# This covers the four most common static-site framework conventions
+# (Vite/Astro, CRA/Next-export-old, Next-export-new, Hugo) so the caller
+# does not need to know which one their framework uses.
+#
+# The action does NOT itself attempt the GitHub Pages deploy — that's
+# `pages-deploy` (a separate action invoked from the deploy job per D12's
+# caller-side `needs:` shape). All this action does is package the chosen
+# directory as the standard `github-pages` artifact.
+#
+# ## Version baselines
+#
+# Third-party action pin (refresh deliberately):
+#   - actions/upload-pages-artifact: v3.0.1 (SHA pinned below per NF2).
+#     Verified upstream via GitHub tag API at iteration close.
+#
+# ## Required caller permissions
+#
+# This action does NOT (and cannot) grant `id-token: write` or
+# `pages: write`. Those scopes MUST be granted by the calling workflow on
+# the JOB that invokes this action. The upstream upload-pages-artifact
+# action uses the OIDC token (`id-token: write`) to authenticate the
+# artifact upload against the Pages backend; the caller's workflow-level
+# `permissions: {}` deny-all (per NF6) must be narrowed at the job level:
+#
+#     jobs:
+#       ci:
+#         permissions:
+#           contents: read
+#           id-token: write   # required by upload-pages-artifact
+#           pages: write      # required by upload-pages-artifact
+#         steps:
+#           - uses: actions/checkout@<SHA>
+#           - uses: ./.github/actions/pages-upload
+#
+# Without these grants, the upload step will fail with a permission error.
+# This is intentional — the action does not silently grant elevated scopes
+# for the consumer.
+#
+# ## Trust boundary
+#
+# The `path` input is interpolated into shell commands (bound via `env:`
+# and dereferenced with quoting per the iter-2.1/2.3 pattern). Per D10d
+# this is permitted but requires documented conventions: treat the value
+# as TRUSTED input (caller-side). Do NOT pass values derived from PR
+# titles, issue bodies, branch names, commit messages,
+# fork-author-controlled tag names, or any other externally controlled
+# context — quoting cannot defend the sink.
+#   - path
+# See `docs/usage.md` for the full trust model.
+#
+# Autodetect search order (when `path` is empty): `dist/`, `build/`,
+# `out/`, `public/`. The first directory that exists under
+# `${GITHUB_WORKSPACE}` (resolved relative to the runner's checkout) wins.
+# If none exist, the action fails loudly with a clear error naming the
+# search order so the caller knows what to fix.
+#
+# ## Reserved env names
+#
+# `HASHIRA_PAGES_UPLOAD_DRY_RUN` is reserved by this library as a test-only
+# override. When set to `1`, the action runs the autodetect + summary
+# steps but SKIPS the actual `upload-pages-artifact` invocation. This lets
+# library self-CI exercise the autodetect logic without requiring Pages to
+# be enabled on the library repo. Consumers MUST NOT set this in
+# production — doing so silently turns uploads into no-ops.
+name: pages-upload
+description: Package a static-site directory as the `github-pages` artifact (autodetects common output dirs).
+
+inputs:
+  path:
+    description: "Directory containing the static site. Empty = autodetect among `dist/`, `build/`, `out/`, `public/` (first found wins). Trusted input — see `## Trust boundary`."
+    required: false
+    default: ""
+  artifact_name:
+    description: "Artifact name. Defaults to `github-pages` (the value `actions/deploy-pages` consumes by default). Override only if you intend to chain multiple uploads."
+    required: false
+    default: "github-pages"
+  retention_days:
+    description: "Artifact retention in days (passed through to upload-pages-artifact). Default 1 (matches upstream default; the artifact's only purpose is the immediate deploy)."
+    required: false
+    default: "1"
+
+outputs:
+  resolved_path:
+    description: "The directory that was uploaded (either the explicit `path` input or the autodetected one)."
+    value: ${{ steps.resolve.outputs.resolved_path }}
+  detection_mode:
+    description: "Either `explicit` (caller-provided path) or `autodetect` (search order matched)."
+    value: ${{ steps.resolve.outputs.detection_mode }}
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve upload path
+      id: resolve
+      shell: bash
+      env:
+        PU_PATH: ${{ inputs.path }}
+      run: |
+        set -euo pipefail
+        # Autodetect search order (documented in the header). Pure shell —
+        # under ~20 lines per NF1 guidance favoring shell over a JS shim.
+        AUTODETECT_ORDER=(dist build out public)
+
+        # Reject path traversal and absolute paths — realistic loss is the wrong
+        # directory being packaged into the public Pages artifact (security review m2).
+        if [ -n "${PU_PATH}" ]; then
+          case "${PU_PATH}" in
+            /*|*..*) echo "::error::pages-upload: path must be a workspace-relative directory without '..' segments or leading '/' (got: '${PU_PATH}')." >&2; exit 1 ;;
+          esac
+        fi
+
+        if [ -n "${PU_PATH}" ]; then
+          # Explicit path: verify it exists; fail loudly if not.
+          if [ ! -d "${PU_PATH}" ]; then
+            echo "::error::pages-upload: explicit path '${PU_PATH}' does not exist or is not a directory (cwd: $(pwd))." >&2
+            exit 1
+          fi
+          resolved="${PU_PATH}"
+          mode="explicit"
+        else
+          resolved=""
+          for candidate in "${AUTODETECT_ORDER[@]}"; do
+            if [ -d "${candidate}" ]; then
+              resolved="${candidate}"
+              break
+            fi
+          done
+          if [ -z "${resolved}" ]; then
+            echo "::error::pages-upload: autodetect found no static-site directory. Searched (in order): ${AUTODETECT_ORDER[*]}. Either build the site before this step or pass an explicit \`path:\` input." >&2
+            exit 1
+          fi
+          mode="autodetect"
+        fi
+
+        echo "resolved_path=${resolved}" >> "${GITHUB_OUTPUT}"
+        echo "detection_mode=${mode}" >> "${GITHUB_OUTPUT}"
+        echo "pages-upload: resolved path '${resolved}' (mode: ${mode})" >> "${GITHUB_STEP_SUMMARY}"
+
+    - name: Upload Pages artifact
+      # Dry-run hook (reserved test-only override; see header). When set,
+      # we skip the third-party upload step so self-CI can exercise the
+      # autodetect + summary logic without requiring Pages to be enabled
+      # on the library repo.
+      #
+      # iter-4.1 review Minor #2: the step-level `if:` is evaluated at
+      # step-run time against the `env` context. The job's `env:` block
+      # (including `HASHIRA_PAGES_UPLOAD_DRY_RUN`) is in scope here;
+      # setting this in the job's `env:` block correctly toggles the
+      # dry-run path. This is intentional — composite actions inherit
+      # their calling job's env context.
+      if: ${{ env.HASHIRA_PAGES_UPLOAD_DRY_RUN != '1' }}
+      # actions/upload-pages-artifact v3.0.1
+      uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa
+      with:
+        path: ${{ steps.resolve.outputs.resolved_path }}
+        name: ${{ inputs.artifact_name }}
+        retention-days: ${{ inputs.retention_days }}
+
+    - name: Note dry-run skip (if applicable)
+      if: ${{ env.HASHIRA_PAGES_UPLOAD_DRY_RUN == '1' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        echo "pages-upload: HASHIRA_PAGES_UPLOAD_DRY_RUN=1 -> upload step skipped (test-only override)"
+        echo "pages-upload: dry-run; no artifact uploaded" >> "${GITHUB_STEP_SUMMARY}"

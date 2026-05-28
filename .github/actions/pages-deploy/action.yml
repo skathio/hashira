@@ -1,0 +1,143 @@
+# Composite action: pages-deploy
+#
+# Thin standardization layer over `actions/deploy-pages` (per D12) that
+# consumes the `github-pages` artifact produced by an upstream `pages-upload`
+# step in the same workflow run. The artifact handoff is in-run via the
+# caller's `deploy: needs: ci` dependency (per D12) — this action does NOT
+# perform any cross-run artifact lookup.
+#
+# The action's only value-add over invoking `actions/deploy-pages` directly
+# is to (a) standardize the artifact-name default to match `pages-upload`'s
+# default (`github-pages`) and (b) emit the deployed URL prominently to
+# `$GITHUB_STEP_SUMMARY` so the caller's run summary surfaces the deploy
+# target without the consumer wiring their own summary step.
+#
+# ## Version baselines
+#
+# Third-party action pin (refresh deliberately):
+#   - actions/deploy-pages: v4.0.5 (SHA pinned below per NF2).
+#     Verified upstream via GitHub tag API at iteration close.
+#
+# ## Required caller permissions
+#
+# This action does NOT (and cannot) grant `pages: write` or
+# `id-token: write`. Those scopes MUST be granted by the calling workflow
+# on the JOB that invokes this action. The upstream deploy-pages action
+# uses the OIDC token (`id-token: write`) to authenticate against Pages
+# and the `pages: write` scope to perform the deploy. The caller's
+# workflow-level `permissions: {}` deny-all (per NF6) must be narrowed at
+# the job level:
+#
+#     jobs:
+#       deploy:
+#         needs: ci
+#         permissions:
+#           pages: write
+#           id-token: write
+#           # contents: read is NOT required by deploy-pages itself
+#           # (it reads the artifact, not the repo); add it only if the
+#           # job also needs to check out the repo for some other reason.
+#         steps:
+#           - uses: ./.github/actions/pages-deploy
+#
+# Without these grants, the deploy step will fail with a permission error.
+# The caller also needs to declare `environment: github-pages` on the job
+# (the magic Pages environment) so the deploy URL flows back to the
+# Environment's UI surface. See `docs/flows/static-webapp.md` (iter 4.3)
+# for the full caller template.
+#
+# ## Trust boundary
+#
+# `artifact_name` is interpolated into the upstream action's `artifact_name`
+# input — that's a third-party-action input, not a shell sink, so the
+# attack surface is the third-party action itself. Treat as TRUSTED input
+# regardless; see `docs/usage.md` for the project-wide trust model. The
+# action does not interpolate any input into shell commands directly.
+#
+# ## Runtime contract
+#
+# The caller MUST have run `pages-upload` (or equivalently
+# `actions/upload-pages-artifact`) in an upstream job of the SAME workflow
+# run. Per D12 this is wired via the caller's `deploy: needs: ci` job
+# dependency; per D12 we do NOT use `workflow_run` triggers. If no
+# matching artifact exists, the upstream `deploy-pages` action fails
+# loudly with its standard error — the caller's most likely fix is to add
+# the missing `needs:` edge.
+#
+# ## Observability
+#
+# The "Emit deployed URL to summary" step carries `if: always()` so it
+# runs on BOTH the success and failure paths of the upstream
+# `deploy-pages` step (iter-4.1 review Minor #1). The summary's value is
+# highest on FAILURE — without `if: always()`, the step skips on failure
+# and the action contributes nothing to triage exactly when triage
+# matters most (the consumer would otherwise fall back to scrolling the
+# raw deploy-pages step log). The step branches on
+# `steps.deploy.outcome`: on success it emits the deployed URL; on
+# failure it emits a "Deploy FAILED" line naming the common causes
+# (missing `pages: write` / `id-token: write` job permissions, missing
+# `needs: ci` edge, Pages not enabled in repo settings) and points at
+# the deploy-pages step log for detail.
+name: pages-deploy
+description: Deploy the same-run `github-pages` artifact to GitHub Pages; emits the deployed URL to the run summary.
+
+inputs:
+  artifact_name:
+    description: "Artifact name to deploy. Defaults to `github-pages` (matches `pages-upload`'s default). Override only if you uploaded under a non-default name."
+    required: false
+    default: "github-pages"
+
+outputs:
+  page_url:
+    description: "URL of the deployed page (passes through from actions/deploy-pages's `page_url` output)."
+    value: ${{ steps.deploy.outputs.page_url }}
+
+runs:
+  using: composite
+  steps:
+    - name: Deploy to GitHub Pages
+      id: deploy
+      # actions/deploy-pages v4.0.5
+      uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e
+      with:
+        artifact_name: ${{ inputs.artifact_name }}
+
+    - name: Emit deployed URL to summary
+      # iter-4.1 review Minor #1: `if: always()` so the summary fires on
+      # BOTH success and failure paths. The deploy-pages step's most
+      # common failure modes (missing permissions, missing needs: edge,
+      # Pages not enabled) leave nothing in the run summary by default;
+      # this step replaces that gap with an actionable failure line.
+      if: always()
+      shell: bash
+      env:
+        PD_PAGE_URL: ${{ steps.deploy.outputs.page_url }}
+        PD_DEPLOY_OUTCOME: ${{ steps.deploy.outcome }}
+      run: |
+        set -euo pipefail
+        # Render the deploy result prominently in the run summary so the
+        # caller does not have to wire their own summary step. Use a
+        # level-3 markdown heading so it stands out from the dense
+        # per-step summary rows above. On failure, emit a triage block
+        # pointing at the common causes (forward-references the failure
+        # modes table in docs/flows/static-webapp.md iter 4.3).
+        {
+          echo ""
+          echo "### pages-deploy"
+          echo ""
+          if [ "${PD_DEPLOY_OUTCOME}" = "success" ] && [ -n "${PD_PAGE_URL}" ]; then
+            echo "Deployed: <${PD_PAGE_URL}>"
+          elif [ "${PD_DEPLOY_OUTCOME}" = "success" ]; then
+            echo "pages-deploy: deploy step completed but page_url output is empty (unexpected — inspect the deploy-pages step log)."
+          else
+            echo "pages-deploy: Deploy FAILED (outcome: ${PD_DEPLOY_OUTCOME})."
+            echo ""
+            echo "Common causes:"
+            echo "- missing \`pages: write\` or \`id-token: write\` on the deploy job's \`permissions:\` block"
+            echo "- missing \`needs: ci\` edge between deploy and the upstream job that ran \`pages-upload\` (no same-run artifact to consume)"
+            echo "- GitHub Pages not enabled in repo settings (Settings -> Pages -> Source = GitHub Actions)"
+            echo "- magic \`github-pages\` environment misconfigured (missing required reviewer or wrong protection rule)"
+            echo ""
+            echo "See the upstream \`deploy-pages\` step log for the underlying error; \`docs/flows/static-webapp.md\` (iter 4.3) lists the full failure-mode table."
+          fi
+        } >> "${GITHUB_STEP_SUMMARY}"

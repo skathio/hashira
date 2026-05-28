@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <IsPackable>true</IsPackable>
+    <PackageId>HashiraTestNoMinVer</PackageId>
+    <Version>0.0.1</Version>
+    <Description>Synthetic fixture WITHOUT MinVer; used to assert the dotnet-pack-version warning fires.</Description>
+    <Authors>hashira-ops self-CI</Authors>
+  </PropertyGroup>
+
+  <!-- Intentionally no PackageReference Include="MinVer". The smoke job
+       asserts that dotnet-pack-version emits the `::warning::` notice
+       documenting this case. -->
+
+</Project>

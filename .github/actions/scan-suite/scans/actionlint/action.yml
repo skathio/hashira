@@ -1,0 +1,74 @@
+# Composite action: scan-suite/scans/actionlint
+#
+# Installs actionlint at the pinned v1.7.7 and runs it. Mirrors the install
+# pattern in `.github/workflows/_self-ci.yml` so the library and consumers
+# share the same actionlint binary contract.
+#
+# Off by default per D10c (the library uses actionlint directly via
+# `_self-ci.yml`; consumers opt in by removing 'actionlint' from
+# `scan_disable`).
+#
+# Writes one TAB-separated line to `${RUNNER_TEMP}/scan-suite-results.tsv`:
+#   actionlint<TAB><status><TAB><details>
+name: scan-suite/actionlint
+description: actionlint workflow YAML linter (off by default; opt-in via scan_disable).
+
+runs:
+  using: composite
+  steps:
+    - name: Install actionlint (pinned v1.7.7)
+      shell: bash
+      run: |
+        set -euo pipefail
+        if command -v actionlint >/dev/null 2>&1; then
+          actionlint -version
+          exit 0
+        fi
+        version="1.7.7"
+        archive="actionlint_${version}_linux_amd64.tar.gz"
+        # SHA-256 published on the v1.7.7 release page.
+        expected_sha="023070a287cd8cccd71515fedc843f1985bf96c436b7effaecce67290e7e0757"
+        tmp="$(mktemp -d)"
+        curl -fsSL -o "${tmp}/${archive}" \
+          "https://github.com/rhysd/actionlint/releases/download/v${version}/${archive}"
+        echo "${expected_sha}  ${tmp}/${archive}" | sha256sum -c -
+        tar -xzf "${tmp}/${archive}" -C "${tmp}" actionlint
+        install -m 0755 "${tmp}/actionlint" /usr/local/bin/actionlint
+        actionlint -version
+
+    - name: Run actionlint
+      id: run
+      shell: bash
+      run: |
+        set -euo pipefail
+        # actionlint defaults to .github/workflows/. Missing dir is not an
+        # error here (consumer might have no workflows yet); record skipped.
+        if [ ! -d .github/workflows ]; then
+          msg="no .github/workflows/ directory"
+          printf 'actionlint\tskipped\t%s\n' "${msg}" >> "${RUNNER_TEMP}/scan-suite-results.tsv"
+          echo "- actionlint: skipped (${msg})" >> "${GITHUB_STEP_SUMMARY}"
+          exit 0
+        fi
+        set +e
+        actionlint -color
+        rc=$?
+        set -e
+        echo "rc=${rc}" >> "${GITHUB_OUTPUT}"
+
+    - name: Record result
+      if: steps.run.outputs.rc != ''
+      shell: bash
+      env:
+        RC: ${{ steps.run.outputs.rc }}
+      run: |
+        set -euo pipefail
+        case "${RC}" in
+          0)
+            printf 'actionlint\tran\tno findings\n' >> "${RUNNER_TEMP}/scan-suite-results.tsv"
+            echo "- actionlint: ran (no findings)" >> "${GITHUB_STEP_SUMMARY}"
+            ;;
+          *)
+            printf 'actionlint\tran\tfindings reported (exit=%s)\n' "${RC}" >> "${RUNNER_TEMP}/scan-suite-results.tsv"
+            echo "- actionlint: ran (findings reported; exit=${RC})" >> "${GITHUB_STEP_SUMMARY}"
+            ;;
+        esac

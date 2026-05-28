@@ -1,0 +1,82 @@
+# Composite action: scan-suite/scans/dependency-review
+#
+# Wraps actions/dependency-review-action. Only meaningfully runs on
+# pull_request events. Visibility-adaptive per D7: skip-with-notice on
+# private+no-GHAS; also skip-with-notice on non-PR events.
+#
+# Writes one TAB-separated line to `${RUNNER_TEMP}/scan-suite-results.tsv`:
+#   dependency-review<TAB><status><TAB><details>
+#
+# Per NF1: ≤ ~80 lines.
+name: scan-suite/dependency-review
+description: actions/dependency-review-action wrapper (PR-only, visibility-adaptive).
+
+runs:
+  using: composite
+  steps:
+    - name: Detect visibility / GHAS
+      id: detect
+      if: github.event_name == 'pull_request'
+      shell: bash
+      env:
+        GH_CONTEXT: ${{ toJSON(github) }}
+        HASHIRA_FORCE_PRIVATE_NO_GHAS: ${{ env.HASHIRA_FORCE_PRIVATE_NO_GHAS }}
+      run: |
+        set -euo pipefail
+        out="$(node -e '
+          const { detect } = require(process.env.GITHUB_ACTION_PATH + "/../../lib/visibility-detect.js");
+          const ctx = JSON.parse(process.env.GH_CONTEXT);
+          const r = detect({ ghContext: ctx, env: process.env });
+          console.log(JSON.stringify(r));
+        ')"
+        hasGHAS="$(echo "${out}" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s).hasGHAS))')"
+        echo "has_ghas=${hasGHAS}" >> "${GITHUB_OUTPUT}"
+
+    - name: Skip (not a pull_request event)
+      if: github.event_name != 'pull_request'
+      shell: bash
+      run: |
+        set -euo pipefail
+        msg="dependency-review only runs on pull_request events (event=${{ github.event_name }})"
+        echo "::notice::scan-suite/dependency-review skipped: ${msg}"
+        printf 'dependency-review\tskipped\t%s\n' "${msg}" >> "${RUNNER_TEMP}/scan-suite-results.tsv"
+        echo "- dependency-review: skipped (${msg})" >> "${GITHUB_STEP_SUMMARY}"
+
+    - name: Skip (private + no GHAS)
+      if: github.event_name == 'pull_request' && steps.detect.outputs.has_ghas != 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        msg="dependency-review requires GHAS on private repos"
+        echo "::notice::scan-suite/dependency-review skipped: ${msg}"
+        printf 'dependency-review\tskipped\t%s\n' "${msg}" >> "${RUNNER_TEMP}/scan-suite-results.tsv"
+        echo "- dependency-review: skipped (${msg})" >> "${GITHUB_STEP_SUMMARY}"
+
+    # actions/dependency-review-action v4.5.0
+    - name: Run dependency-review
+      id: run
+      if: github.event_name == 'pull_request' && steps.detect.outputs.has_ghas == 'true'
+      uses: actions/dependency-review-action@3b139cfc5fae8b618d3eae3675e383bb1769c019
+      continue-on-error: true
+
+    - name: Record ran-status
+      if: github.event_name == 'pull_request' && steps.detect.outputs.has_ghas == 'true'
+      shell: bash
+      env:
+        OUTCOME: ${{ steps.run.outcome }}
+      run: |
+        set -euo pipefail
+        case "${OUTCOME}" in
+          success)
+            printf 'dependency-review\tran\tno problematic deps\n' >> "${RUNNER_TEMP}/scan-suite-results.tsv"
+            echo "- dependency-review: ran (no problematic deps)" >> "${GITHUB_STEP_SUMMARY}"
+            ;;
+          failure)
+            printf 'dependency-review\tran\tproblematic deps found (see job log)\n' >> "${RUNNER_TEMP}/scan-suite-results.tsv"
+            echo "- dependency-review: ran (problematic deps found; see job log)" >> "${GITHUB_STEP_SUMMARY}"
+            ;;
+          *)
+            printf 'dependency-review\terror\toutcome=%s\n' "${OUTCOME}" >> "${RUNNER_TEMP}/scan-suite-results.tsv"
+            echo "- dependency-review: error (outcome=${OUTCOME})" >> "${GITHUB_STEP_SUMMARY}"
+            ;;
+        esac

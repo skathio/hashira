@@ -1,0 +1,142 @@
+# Composite action: nuget-push
+#
+# Pushes a `.nupkg` to a NuGet feed (default `https://api.nuget.org/v3/index.json`,
+# per D10b unified `target`). Supports two auth shapes:
+#   - API key (long-lived, passed via `api_key` input → `NUGET_API_KEY` env)
+#   - OIDC / federated tokens (api_key empty → no `--api-key` flag).
+#     Note: NuGet's OIDC story is fiddlier than npm's — the feed must be
+#     configured for federated trust against this repo. Documented in
+#     `docs/flows/nuget.md` (iter 3.3); for now we emit a clear notice
+#     when the OIDC path is selected so a misconfigured feed produces a
+#     visible signal rather than a silent "could not authenticate" error
+#     buried in dotnet logs.
+#
+# Per NF1 the action stays under the ~80-line soft cap (no JS shim
+# needed — logic is push + dry-run hook + summary).
+#
+# Per D4 idempotency: `--skip-duplicate` is enabled by default so a retry
+# after a partial publish doesn't crash on the already-published package.
+#
+# Runtime contract:
+#   The caller MUST have a `dotnet` CLI on PATH (typically via setup-dotnet
+#   at the workflow level per D11). The caller MUST have produced a
+#   `.nupkg` at `nupkg_path` (typically via `dotnet-pack-version`). The
+#   caller MUST provide `api_key` (via `secrets:` block) or have OIDC
+#   federation configured on the feed side.
+#
+# ## Trust boundary
+#
+# These inputs are interpolated into shell commands (bound via `env:` and
+# dereferenced with quoting per the iter-2.1/2.3 pattern). Per D10d this
+# is permitted but requires documented conventions: treat the values as
+# TRUSTED input. Do NOT pass values derived from PR titles, issue bodies,
+# branch names, commit messages, fork-author-controlled tag names, or any
+# other externally controlled context — quoting cannot defend the sink.
+#   - nupkg_path
+#   - target
+#   - api_key                (also a secret; never logged)
+#   - skip_duplicate
+#   - working_directory
+# See `docs/usage.md` for the full trust model.
+#
+# ## Reserved env names
+#
+# `HASHIRA_NUGET_PUSH_DRY_RUN` is reserved by this library as a test-only
+# override. When set to `1`, the action SKIPS the actual push and emits a
+# dry-run summary line. Consumers MUST NOT set this in production — doing
+# so silently turns publishes into no-ops.
+name: nuget-push
+description: Push a .nupkg to a NuGet feed (default nuget.org) with --skip-duplicate and OIDC support.
+
+inputs:
+  nupkg_path:
+    description: "Path to the .nupkg file (or glob) to push. Trusted input — see `## Trust boundary`."
+    required: true
+  target:
+    description: "Feed URL to push to (D10b unified `target`). Trusted input."
+    required: false
+    default: "https://api.nuget.org/v3/index.json"
+  api_key:
+    description: "NuGet API key. Pass via `secrets:` block. Empty = OIDC/federated auth path. Trusted input (secret)."
+    required: false
+    default: ""
+  skip_duplicate:
+    description: "If 'true', add `--skip-duplicate` to dotnet nuget push (idempotency for D4 retries). Trusted input."
+    required: false
+    default: "true"
+  working_directory:
+    description: "Directory in which to run `dotnet nuget push`. Trusted input."
+    required: false
+    default: "."
+
+runs:
+  using: composite
+  steps:
+    - name: Push to NuGet feed
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      env:
+        NP_NUPKG_PATH: ${{ inputs.nupkg_path }}
+        NP_TARGET: ${{ inputs.target }}
+        # NUGET_API_KEY is bound via `env:` (so the value never appears
+        # in the shell-level `${{ }}` expansion log or in the workflow
+        # YAML when echoed). It IS then passed to `dotnet nuget push`
+        # via the `--api-key` flag on argv — `dotnet nuget push` has no
+        # documented env-var fallback for the key on 8.0.x (see the
+        # env: comment below). On GitHub-hosted runners (single-tenant)
+        # the argv exposure is bounded. Honest trade-off per iter-3.1
+        # review Minor #1.
+        # NUGET_API_KEY is also exported as an env var (some dotnet tooling
+        # picks it up via NuGet.config credential providers); the actual
+        # `dotnet nuget push` CLI does NOT have a documented env-var
+        # fallback for the API key (verified against Microsoft's published
+        # `dotnet nuget push` reference for 8.0.x — only `-k|--api-key`
+        # accepts it). We therefore still pass it on argv below. On the
+        # GitHub-hosted ubuntu-latest runner the process is single-tenant
+        # so the argv exposure is bounded; on self-hosted multi-tenant
+        # runners consumers should consider a credential-provider plugin
+        # instead. See iter-3.1 review Minor #1 trade-off note.
+        NUGET_API_KEY: ${{ inputs.api_key }}
+        NP_SKIP_DUP: ${{ inputs.skip_duplicate }}
+      run: |
+        set -euo pipefail
+        filename="$(basename "${NP_NUPKG_PATH}")"
+
+        # Dry-run hook (reserved test-only override; see header).
+        if [ "${HASHIRA_NUGET_PUSH_DRY_RUN:-0}" = "1" ]; then
+          echo "nuget-push: HASHIRA_NUGET_PUSH_DRY_RUN=1 -> skipping actual push"
+          echo "nuget-push: dry-run; no push attempted" >> "${GITHUB_STEP_SUMMARY}"
+          exit 0
+        fi
+
+        # Build the argument list. --api-key is omitted entirely when empty
+        # (OIDC path — dotnet's federated-token discovery kicks in then).
+        push_args=( "${NP_NUPKG_PATH}" --source "${NP_TARGET}" )
+        if [ -n "${NUGET_API_KEY}" ]; then
+          push_args+=( --api-key "${NUGET_API_KEY}" )
+        else
+          # iter-3.1 review Minor #3: `dotnet nuget push` does NOT
+          # auto-exchange OIDC tokens for NuGet feed credentials.
+          # Consumers must either (a) wire a federated-token →
+          # short-lived API key exchange externally (see docs/flows/
+          # nuget.md once iter 3.3 lands), or (b) configure a NuGet
+          # credential provider that performs the exchange. Without one
+          # of those, this push will fail authentication.
+          echo "::notice::nuget-push: API key not provided. dotnet nuget push does NOT auto-exchange OIDC tokens; consumer must wire a federated-token -> short-lived API key exchange externally OR configure a credential provider (see docs/flows/nuget.md §6 once iter 3.3 lands)."
+        fi
+        if [ "${NP_SKIP_DUP}" = "true" ]; then
+          push_args+=( --skip-duplicate )
+        fi
+
+        echo "::group::dotnet nuget push (target=${NP_TARGET})"
+        # Capture stdout so we can detect the skip-duplicate path; dotnet
+        # exits 0 in both fresh-push and skip-duplicate cases.
+        log_file="${RUNNER_TEMP}/nuget-push.log"
+        dotnet nuget push "${push_args[@]}" 2>&1 | tee "${log_file}"
+        echo "::endgroup::"
+
+        if grep -qE 'already exists at feed|409 \(Conflict\)' "${log_file}"; then
+          echo "nuget-push: skipped (duplicate)" >> "${GITHUB_STEP_SUMMARY}"
+        else
+          echo "nuget-push: pushed ${filename} to ${NP_TARGET}" >> "${GITHUB_STEP_SUMMARY}"
+        fi

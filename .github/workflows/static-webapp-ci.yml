@@ -1,0 +1,346 @@
+# Reusable workflow: static-webapp-ci (CI half of the static-webapp flow per
+# D8; Pages-specific CI→Deploy handoff per D12).
+#
+# Runs build + test + scan-suite + coverage-report and uploads the
+# `github-pages` artifact in the SAME job as build (see "Build artifact
+# handoff" below). The Deploy half lives in `static-webapp-deploy.yml` and
+# consumes the same-run artifact via the consumer's `deploy: needs: ci`
+# edge (D12) — no `workflow_run` trigger, no cross-run artifact lookup.
+#
+# ## Permissions baseline (NF6)
+#
+# Workflow-level `permissions: {}` (deny-all). Each job grants the minimum
+# it needs:
+#   - setup           : contents:read
+#   - build-and-upload: contents:read, id-token:write, pages:write
+#                       (id-token + pages required by upload-pages-artifact;
+#                       see `.github/actions/pages-upload/action.yml` header)
+#   - test            : contents:read
+#   - scan-suite      : contents:read, security-events:write (CodeQL),
+#                       pull-requests:read (dependency-review on PR)
+#   - coverage-report : contents:read, pull-requests:write (sticky comment)
+#
+# Reusable workflows can only NARROW the caller's grants, never broaden.
+# Consumers must mirror this matrix at their caller job's `permissions:`
+# block (documented in `docs/usage.md` and `docs/flows/static-webapp.md`).
+#
+# ## Build artifact handoff (build-and-upload collapse)
+#
+# `actions/upload-pages-artifact` packages a local directory; it cannot
+# reach across GHA jobs to pick up files produced by a prior job's
+# `build_command`. Two options exist:
+#   (a) Run `build_command` in one job, upload the output via
+#       `actions/upload-artifact`, then download it in a second job and
+#       feed it to `upload-pages-artifact`.
+#   (b) Collapse `build` and `pages-upload` into a single job so the
+#       build output is on the same runner filesystem when upload runs.
+#
+# We choose (b). Rationale:
+#   - Saves one third-party SHA pin (`actions/upload-artifact`) outside
+#     this iteration's verified-pin set (same trade-off documented in
+#     `nuget-package-ci.yml` for the restore-build/test relationship).
+#   - Eliminates a class of "wrong directory packaged" failure modes
+#     that the cross-job handoff would introduce (upload-artifact's
+#     `path:` and download-artifact's destination would have to agree
+#     with `pages-upload`'s `path:` input — three places to keep in sync
+#     versus zero).
+#   - The `test` and `scan-suite` jobs run in parallel with
+#     `build-and-upload`, so the collapse does NOT add wall-clock
+#     latency — total CI time is `max(build+upload, test, scan-suite)`
+#     either way.
+#
+# Trade-off: the `build-and-upload` job is slightly less symmetric with
+# the rest of the library's per-step job decomposition (npm/NuGet flows
+# have separate `lint`/`test` jobs that don't fuse anything). Acceptable
+# because the fusion is forced by the upload primitive's locality
+# requirement, not by a discretionary design choice.
+#
+# ## Trust boundary
+#
+# These workflow inputs flow into composite-action inputs and/or shell
+# command lines downstream (`run` blocks below, `pages-upload`'s `path`,
+# `scan-suite`'s `scan_disable`, `coverage-report`'s `coverage_path`).
+# Per D10d this is permitted but requires documented conventions: treat
+# the values as TRUSTED input. Do NOT pass values derived from PR
+# titles, issue bodies, branch names, commit messages,
+# fork-author-controlled tag names, or any other externally controlled
+# context — quoting cannot defend the downstream sinks.
+#   - node_version
+#   - build_command
+#   - output_dir
+#   - test_command
+#   - coverage_path
+#   - scan_disable
+#   - library_ref
+#
+# iter-4.2 security review m4: because `build_command` runs in the same
+# job that holds `id-token: write`, a consumer who violates this trust
+# contract can have their GitHub OIDC token exfiltrated by attacker-
+# controlled code; any cloud federation configured against this repo's
+# OIDC subject is in the blast radius. See `## Build artifact handoff`
+# for why the architectural split into a separate non-`id-token` build
+# job is not feasible without a new cross-job artifact handoff (forced
+# by `upload-pages-artifact`'s same-runner locality requirement).
+#
+# See `docs/usage.md` for the full trust model.
+#
+# ## SHA pins (NF2)
+#
+# All third-party `uses:` refs are pinned to a full 40-char commit SHA
+# with an inline version comment. Pins reused from iter 1.2 / 2.1 / 2.2
+# (verified upstream against the actions' release tags).
+#
+# ## Runtime contract: library-self-checkout via `library_ref` (D14)
+#
+# Same constraint and resolution as the other reusable workflows in this
+# library: GitHub's `uses:` keyword does NOT permit expressions in the
+# `@<ref>` portion (workflow-load-time parse). Every job that consumes
+# an in-repo composite action first checks out `skathio/hashira-ops` at
+# `${{ inputs.library_ref }}` into the reserved subdirectory `.hashira/`
+# with `persist-credentials: false` (iter-2.3 security review m4). The
+# composite-action `uses:` refs are then literal local paths
+# `uses: ./.hashira/.github/actions/<name>` (no expressions, satisfies
+# the load-time parser). The `library_ref` is substituted at runtime
+# through `actions/checkout`'s `ref:` input.
+#
+# Consumers pin `library_ref` to a SHA for reproducibility. Default is
+# `main` for convenience; production consumers SHOULD pin to a SHA.
+
+name: static-webapp-ci
+
+on:
+  workflow_call:
+    inputs:
+      node_version:
+        description: "Node major to install via actions/setup-node. Default '20'. Trusted input — see `## Trust boundary`."
+        required: false
+        type: string
+        default: "20"
+      build_command:
+        description: "Shell command that builds the static site. Default 'npm run build'. Trusted input (raw-shell sink per D10d; do NOT pass values derived from PR titles, issue bodies, branch names, or other externally controlled context)."
+        required: false
+        type: string
+        default: "npm run build"
+      output_dir:
+        description: "Directory containing the built static site (passed through to pages-upload's `path` input). Empty (default) triggers pages-upload's autodetect among `dist/`, `build/`, `out/`, `public/` (first-found wins). Trusted input."
+        required: false
+        type: string
+        default: ""
+      test_command:
+        description: "Shell command that runs the consumer's tests. Default 'npm test'. Trusted input (raw-shell sink per D10d)."
+        required: false
+        type: string
+        default: "npm test"
+      coverage_path:
+        description: "Path to the lcov coverage file produced by test_command. Default 'coverage/lcov.info'. Trusted input."
+        required: false
+        type: string
+        default: "coverage/lcov.info"
+      scan_disable:
+        description: "Comma-separated list of scans to skip (D10c). Default 'codeql,actionlint' — pass '' to enable all. Values: codeql,osv,gitleaks,dependency-review,actionlint."
+        required: false
+        type: string
+        default: "codeql,actionlint"
+      library_ref:
+        description: "SHA, tag, or branch of skathio/hashira-ops to check out for in-repo composite actions (D14). Default 'v1'. PIN TO A SHA for reproducible consumer builds."
+        required: false
+        type: string
+        default: "v1"
+
+# Deny-all baseline; jobs grant the minimum.
+permissions: {}
+
+jobs:
+  setup:
+    name: setup
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # actions/checkout v4.2.2 — consumer's tree.
+      # persist-credentials:false per iter-4.2 review Minor #2 (defense-in-depth:
+      # build_command / test_command run in these jobs and the default git
+      # credential could be exfiltrated if the trust contract is violated).
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      # actions/setup-node v4.1.0
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af
+        with:
+          node-version: ${{ inputs.node_version }}
+      - name: Input preflight (no-op for CI half)
+        shell: bash
+        env:
+          NODE_VERSION: ${{ inputs.node_version }}
+          BUILD_COMMAND: ${{ inputs.build_command }}
+          OUTPUT_DIR: ${{ inputs.output_dir }}
+        run: |
+          set -euo pipefail
+          # CI half requires no secrets (static webapps build from public
+          # source). The preflight pattern is documented here for symmetry
+          # with the Deploy half which validates environment_name per
+          # spec §8. We do emit a summary line naming the resolved inputs
+          # so the consumer can verify their wiring at a glance.
+          echo "static-webapp-ci: node_version='${NODE_VERSION}' build_command='${BUILD_COMMAND}' output_dir='${OUTPUT_DIR:-<autodetect>}'" >> "${GITHUB_STEP_SUMMARY}"
+
+  build-and-upload:
+    name: build-and-upload
+    needs: setup
+    runs-on: ubuntu-latest
+    # build_command runs in the consumer's tree, then pages-upload packages
+    # the result. Both steps must execute on the same runner (see "Build
+    # artifact handoff" in the workflow header for the rationale).
+    permissions:
+      contents: read
+      # id-token + pages required by upload-pages-artifact (see
+      # `.github/actions/pages-upload/action.yml` header `## Required
+      # caller permissions` block).
+      id-token: write
+      pages: write
+    steps:
+      # actions/checkout v4.2.2 — consumer's tree.
+      # persist-credentials:false per iter-4.2 review Minor #2 (defense-in-depth:
+      # build_command / test_command run in these jobs and the default git
+      # credential could be exfiltrated if the trust contract is violated).
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      # actions/setup-node v4.1.0
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af
+        with:
+          node-version: ${{ inputs.node_version }}
+      # Library self-checkout per D14 (persist-credentials:false per iter-2.3 m4).
+      - name: Checkout hashira-ops library (D14)
+        # actions/checkout v4.2.2
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: skathio/hashira-ops
+          ref: ${{ inputs.library_ref }}
+          path: .hashira
+          persist-credentials: false
+      - name: Build static site
+        shell: bash
+        env:
+          # Bind via env per the iter-2.1/2.3 trust-boundary pattern. The
+          # value is then dereferenced with `eval` because build_command
+          # is intentionally a raw-shell sink (D10d) — the consumer may
+          # legitimately need `&&`, env-var expansion, or pipes inside
+          # the command. The trust-boundary block at the top of the file
+          # forbids deriving this from externally controlled context.
+          BUILD_COMMAND: ${{ inputs.build_command }}
+        run: |
+          set -euo pipefail
+          # Echo the command for log triage, then run it via the shell so
+          # consumer-supplied composite shell forms (`&&`, pipes, env
+          # expansion) work as expected. This matches the run-tests-js
+          # pattern established in iter 1.2.
+          echo "static-webapp-ci/build-and-upload: running build_command"
+          eval "${BUILD_COMMAND}"
+      - name: Upload Pages artifact
+        uses: ./.hashira/.github/actions/pages-upload
+        with:
+          path: ${{ inputs.output_dir }}
+
+  test:
+    name: test
+    needs: setup
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # actions/checkout v4.2.2 — consumer's tree.
+      # persist-credentials:false per iter-4.2 review Minor #2 (defense-in-depth:
+      # build_command / test_command run in these jobs and the default git
+      # credential could be exfiltrated if the trust contract is violated).
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      # actions/setup-node v4.1.0
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af
+        with:
+          node-version: ${{ inputs.node_version }}
+      # Library self-checkout per D14.
+      - name: Checkout hashira-ops library (D14)
+        # actions/checkout v4.2.2
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: skathio/hashira-ops
+          ref: ${{ inputs.library_ref }}
+          path: .hashira
+          persist-credentials: false
+      - name: Run tests
+        uses: ./.hashira/.github/actions/run-tests-js
+        with:
+          command: ${{ inputs.test_command }}
+          coverage_path: ${{ inputs.coverage_path }}
+
+  scan-suite:
+    name: scan-suite
+    needs: setup
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # CodeQL needs security-events:write when enabled; granted here
+      # even when codeql is in the default skip list so consumers who
+      # enable it via scan_disable: '' don't hit a permissions error.
+      security-events: write
+      # dependency-review on PR events reads PR metadata.
+      pull-requests: read
+    steps:
+      # actions/checkout v4.2.2 — consumer's tree.
+      # persist-credentials:false per iter-4.2 review Minor #2 (defense-in-depth:
+      # build_command / test_command run in these jobs and the default git
+      # credential could be exfiltrated if the trust contract is violated).
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      # actions/setup-node v4.1.0 — visibility-detect shim runs via `node`.
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af
+        with:
+          node-version: ${{ inputs.node_version }}
+      # Library self-checkout per D14.
+      - name: Checkout hashira-ops library (D14)
+        # actions/checkout v4.2.2
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: skathio/hashira-ops
+          ref: ${{ inputs.library_ref }}
+          path: .hashira
+          persist-credentials: false
+      - name: Run scan-suite
+        uses: ./.hashira/.github/actions/scan-suite
+        with:
+          scan_disable: ${{ inputs.scan_disable }}
+
+  coverage-report:
+    name: coverage-report
+    needs: [build-and-upload, test, scan-suite]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      # actions/checkout v4.2.2 — consumer's tree.
+      # persist-credentials:false per iter-4.2 review Minor #2 (defense-in-depth:
+      # build_command / test_command run in these jobs and the default git
+      # credential could be exfiltrated if the trust contract is violated).
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      # actions/setup-node v4.1.0 — coverage-report's parser shim needs node.
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af
+        with:
+          node-version: ${{ inputs.node_version }}
+      # Library self-checkout per D14.
+      - name: Checkout hashira-ops library (D14)
+        # actions/checkout v4.2.2
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: skathio/hashira-ops
+          ref: ${{ inputs.library_ref }}
+          path: .hashira
+          persist-credentials: false
+      - name: Report coverage
+        uses: ./.hashira/.github/actions/coverage-report
+        with:
+          coverage_path: ${{ inputs.coverage_path }}

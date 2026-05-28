@@ -1,0 +1,16 @@
+version: 2
+updates:
+  # Refresh third-party GitHub Actions pinned by SHA across the repo weekly.
+  # `package-ecosystem: github-actions` with directory "/" covers both the
+  # workflows under .github/workflows/ AND any composite actions under
+  # .github/actions/<name>/action.yml in a single stanza (per the official
+  # Dependabot docs — github-actions recurses into action manifests under "/").
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    # Group all action bumps into one PR per week to keep review load low; the
+    # library's pin surface is small.
+    groups:
+      github-actions:
+        patterns: ["*"]

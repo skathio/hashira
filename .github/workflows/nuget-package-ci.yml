@@ -1,0 +1,280 @@
+# Reusable workflow: nuget-package-ci (CI half of the NuGet flow per D8).
+#
+# Runs restore-build → test (in series; tests consume build outputs) plus
+# scan-suite in parallel, then coverage-report. No pack or push. The
+# Publish half lives in `nuget-package-publish.yml` (iteration 3.3).
+#
+# ## Permissions baseline (NF6)
+#
+# Workflow-level `permissions: {}` (deny-all). Each job grants the
+# minimum it needs:
+#   - setup          : contents:read
+#   - restore-build  : contents:read
+#   - test           : contents:read
+#   - scan-suite     : contents:read, security-events:write (CodeQL),
+#                      pull-requests:read (dependency-review on PR)
+#   - coverage-report: contents:read, pull-requests:write (sticky comment)
+#
+# Reusable workflows can only NARROW the caller's grants, never broaden.
+# Consumers must mirror this matrix at their caller job's `permissions:`
+# block (documented in `docs/usage.md` and `docs/flows/nuget.md`).
+#
+# ## No commitlint (intentional)
+#
+# Unlike `npm-package-ci.yml`, this workflow does NOT run commitlint.
+# .NET projects don't have a Conventional-Commits equivalent worth
+# wiring in by default — semantic-release is the npm flow's reason for
+# CC; the NuGet flow uses MinVer for version inference (driven by git
+# tags, not commit message shapes) per phase 3 design. Consumers who
+# want commitlint on a .NET repo are welcome to wire it independently
+# in their caller workflow; the library doesn't impose it.
+#
+# ## Secret preflight (spec §8)
+#
+# The CI half has no required secrets. A no-op `preflight` step exists
+# in the `setup` job documenting the pattern; the Publish half (iter
+# 3.3) copies the structure for real `NUGET_API_KEY` presence/shape
+# checks.
+#
+# ## SHA pins (NF2)
+#
+# All third-party `uses:` refs are pinned to a full 40-char commit SHA
+# with an inline version comment. Pins reused from iter 1.2 (verified
+# upstream against the actions' release tags).
+#
+# ## Runtime contract: library-self-checkout via `library_ref` (D14)
+#
+# In-repo composite actions live at `.github/actions/<name>` in the
+# `skathio/hashira-ops` repo. When this workflow is invoked from a
+# consumer repo, the consumer's `$GITHUB_WORKSPACE` contains the
+# consumer's files, not the library's. GitHub's `uses:` keyword does
+# NOT permit expressions in the `@<ref>` portion (workflow-load-time
+# parse, before expression evaluation), so the originally-proposed
+# shape `uses: skathio/hashira-ops/.github/actions/<name>@${{
+# inputs.library_ref }}` is rejected by the runtime.
+#
+# Resolution (D14): every job that consumes an in-repo composite
+# action first checks out `skathio/hashira-ops` at
+# `${{ inputs.library_ref }}` into the reserved subdirectory
+# `.hashira/` with `persist-credentials: false` (iter-2.3 security
+# review m4). The composite-action `uses:` refs are then literal local
+# paths `uses: ./.hashira/.github/actions/<name>` (no expressions,
+# satisfies the load-time parser). The `library_ref` is substituted
+# at runtime through `actions/checkout`'s `ref:` input (where
+# expressions ARE permitted because it's a step input, not the
+# `uses:` keyword itself).
+#
+# Consumers pin `library_ref` to a SHA for reproducibility. Default is
+# `main` for convenience; production consumers SHOULD pin to a SHA.
+#
+# Trade-off: ~1–2s overhead per job for the library checkout.
+# Acceptable at v1; documented as the cost of the literal-`uses:`
+# constraint.
+#
+# ## Trust boundary
+#
+# These workflow inputs flow into composite-action inputs and/or shell
+# command lines downstream (run-tests-dotnet's `command`,
+# coverage-report's `coverage_path`, scan-suite's `scan_disable`, and
+# the `dotnet` CLI argv for restore/build/test). Per D10d this is
+# permitted but requires documented conventions: treat the values as
+# TRUSTED input. Do NOT pass values derived from PR titles, issue
+# bodies, branch names, commit messages, fork-author-controlled tag
+# names, or any other externally controlled context — quoting cannot
+# defend the downstream sinks.
+#   - dotnet_version
+#   - project_path
+#   - test_filter
+#   - coverage_path
+#   - scan_disable
+#   - library_ref
+# See `docs/usage.md` for the full trust model.
+
+name: nuget-package-ci
+
+on:
+  workflow_call:
+    inputs:
+      dotnet_version:
+        description: "Dotnet SDK version (channel) to install via actions/setup-dotnet. Default '8.0.x'."
+        required: false
+        type: string
+        default: "8.0.x"
+      project_path:
+        description: "Path to the .csproj or .sln to restore/build/test. Trusted input (interpolated into `dotnet` CLI argv)."
+        required: true
+        type: string
+      test_filter:
+        description: "Optional `dotnet test --filter` expression. Empty string runs all tests. Trusted input (interpolated into `dotnet` CLI argv)."
+        required: false
+        type: string
+        default: ""
+      coverage_path:
+        description: "Path to the cobertura coverage file produced by `dotnet test --collect:\"XPlat Code Coverage\"`. Default 'coverage/cobertura.xml'."
+        required: false
+        type: string
+        default: "coverage/cobertura.xml"
+      scan_disable:
+        description: "Comma-separated list of scans to skip (D10c). Default 'codeql,actionlint' — pass '' to enable all. Values: codeql,osv,gitleaks,dependency-review,actionlint."
+        required: false
+        type: string
+        default: "codeql,actionlint"
+      library_ref:
+        description: "SHA, tag, or branch of skathio/hashira-ops to check out for in-repo composite actions (D14). Default 'v1'. PIN TO A SHA for reproducible consumer builds."
+        required: false
+        type: string
+        default: "v1"
+
+# Deny-all baseline; jobs grant the minimum.
+permissions: {}
+
+jobs:
+  setup:
+    name: setup
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # actions/checkout v4.2.2 — consumer's tree.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      # actions/setup-dotnet v4.1.0
+      - uses: actions/setup-dotnet@3e891b0cb619bf60e2c25674b222b8940e2c1c25
+        with:
+          dotnet-version: ${{ inputs.dotnet_version }}
+      - name: Secret preflight (no-op for CI half)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # CI half requires no secrets. The preflight pattern is
+          # documented here for symmetry with the Publish half which
+          # validates NUGET_API_KEY presence + shape per spec §8.
+          echo "nuget-package-ci: secret preflight (no secrets required for CI)"
+
+  restore-build:
+    name: restore-build
+    needs: setup
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # actions/checkout v4.2.2 — consumer's tree.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      # actions/setup-dotnet v4.1.0
+      - uses: actions/setup-dotnet@3e891b0cb619bf60e2c25674b222b8940e2c1c25
+        with:
+          dotnet-version: ${{ inputs.dotnet_version }}
+      - name: Restore + build
+        shell: bash
+        env:
+          NC_PROJECT_PATH: ${{ inputs.project_path }}
+        run: |
+          set -euo pipefail
+          # Quoting via env var per the iter-2.1/2.3 trust-boundary pattern.
+          dotnet restore "${NC_PROJECT_PATH}"
+          dotnet build "${NC_PROJECT_PATH}" --configuration Release --no-restore
+
+  test:
+    name: test
+    # Depends on restore-build as a fail-fast gate: if compile is broken,
+    # we want to surface that BEFORE spinning up the test runner. Tests
+    # re-run `dotnet restore` + build implicitly (no `--no-build` flag)
+    # because GitHub Actions jobs don't share a filesystem and we
+    # deliberately avoid `actions/upload-artifact` + `download-artifact`
+    # cross-job handoff here (would add a new third-party SHA pin
+    # outside this iteration's verified-pin set; see diary note from
+    # iter 3.2). Cost: ~one extra restore+build per CI run. Acceptable
+    # at v1; revisit if NuGet consumers' build times grow painful.
+    # Asymmetric vs npm flow (which runs lint ∥ test ∥ scan-suite).
+    needs: restore-build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # actions/checkout v4.2.2 — consumer's tree.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      # actions/setup-dotnet v4.1.0
+      - uses: actions/setup-dotnet@3e891b0cb619bf60e2c25674b222b8940e2c1c25
+        with:
+          dotnet-version: ${{ inputs.dotnet_version }}
+      # Library self-checkout per D14 (persist-credentials:false per iter-2.3 m4).
+      - name: Checkout hashira-ops library (D14)
+        # actions/checkout v4.2.2
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: skathio/hashira-ops
+          ref: ${{ inputs.library_ref }}
+          path: .hashira
+          persist-credentials: false
+      - name: Run tests
+        uses: ./.hashira/.github/actions/run-tests-dotnet
+        with:
+          # Build the dotnet test command at this layer so test_filter can
+          # be omitted cleanly when empty (avoids a stray `--filter ''`
+          # that the dotnet CLI rejects on some 8.0.x patch versions).
+          #
+          # Iter-3.2 review Minor #2: the filter value is wrapped in SINGLE
+          # quotes (`--filter '{1}'`) rather than double quotes. xUnit /
+          # MSTest filter expressions commonly carry literal `"` around
+          # property values (`Category="Integration"`, `FullyQualifiedName!="X"`)
+          # but do NOT use single quotes — single-quote wrapping is the
+          # safer envelope. project_path is a path; single quotes around it
+          # are also safe (paths don't contain `'` on any realistic .NET
+          # repo layout, and the trust-boundary block forbids deriving
+          # project_path from externally-controlled context anyway).
+          command: ${{ inputs.test_filter == '' && format('dotnet test ''{0}'' --configuration Release --collect:"XPlat Code Coverage" --results-directory TestResults', inputs.project_path) || format('dotnet test ''{0}'' --configuration Release --filter ''{1}'' --collect:"XPlat Code Coverage" --results-directory TestResults', inputs.project_path, inputs.test_filter) }}
+          coverage_path: ${{ inputs.coverage_path }}
+          results_directory: TestResults
+
+  scan-suite:
+    name: scan-suite
+    # Parallel with restore-build/test (does not need build outputs).
+    needs: setup
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # CodeQL needs security-events:write when enabled; granted here
+      # even when codeql is in the default skip list so consumers who
+      # enable it via scan_disable: '' don't hit a permissions error.
+      security-events: write
+      # dependency-review on PR events reads PR metadata.
+      pull-requests: read
+    steps:
+      # actions/checkout v4.2.2 — consumer's tree.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      # Library self-checkout per D14.
+      - name: Checkout hashira-ops library (D14)
+        # actions/checkout v4.2.2
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: skathio/hashira-ops
+          ref: ${{ inputs.library_ref }}
+          path: .hashira
+          persist-credentials: false
+      - name: Run scan-suite
+        uses: ./.hashira/.github/actions/scan-suite
+        with:
+          scan_disable: ${{ inputs.scan_disable }}
+
+  coverage-report:
+    name: coverage-report
+    needs: [restore-build, test, scan-suite]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      # actions/checkout v4.2.2 — consumer's tree.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      # Library self-checkout per D14.
+      - name: Checkout hashira-ops library (D14)
+        # actions/checkout v4.2.2
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: skathio/hashira-ops
+          ref: ${{ inputs.library_ref }}
+          path: .hashira
+          persist-credentials: false
+      - name: Report coverage
+        uses: ./.hashira/.github/actions/coverage-report
+        with:
+          coverage_path: ${{ inputs.coverage_path }}

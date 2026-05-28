@@ -1,0 +1,9 @@
+{
+  "name": "hashira-run-tests-js-fixture",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Smoke fixture for the run-tests-js composite action. Test script writes a stub lcov coverage file and exits 0; no real test framework.",
+  "scripts": {
+    "test": "mkdir -p coverage && printf 'TN:\\nSF:fixture.js\\nLF:1\\nLH:1\\nBRF:0\\nBRH:0\\nend_of_record\\n' > coverage/lcov.info && echo 'run-tests-js fixture: stub coverage written'"
+  }
+}

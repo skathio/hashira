@@ -1,0 +1,83 @@
+# Composite action: scan-suite/scans/gitleaks
+#
+# Shell-installs gitleaks from the pinned release tarball with SHA-256
+# verification, then runs `gitleaks detect` over the repo. Chose shell-install
+# over `gitleaks/gitleaks-action` to avoid an additional Marketplace pin and
+# to keep the integrity anchor (the checksum) explicit in this file.
+# Always runs regardless of visibility.
+#
+# Writes one TAB-separated line to `${RUNNER_TEMP}/scan-suite-results.tsv`:
+#   gitleaks<TAB><status><TAB><details>
+#
+# ## Trust boundary
+#
+# The `config_path` input, if provided, is passed to gitleaks via its `-c`
+# argument (parsed by gitleaks, not interpolated into shell). Treat as
+# trusted input. See `docs/usage.md` (TBD — populated in phase 2).
+name: scan-suite/gitleaks
+description: gitleaks secret-leak history scan (always runs).
+
+inputs:
+  config_path:
+    description: "Optional path to gitleaks config file (e.g. .gitleaks.toml). Empty = built-in defaults."
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Install gitleaks (pinned v8.21.2)
+      shell: bash
+      run: |
+        set -euo pipefail
+        version="8.21.2"
+        archive="gitleaks_${version}_linux_x64.tar.gz"
+        # SHA-256 from gitleaks_8.21.2_checksums.txt release asset.
+        expected_sha="5bc41815076e6ed6ef8fbecc9d9b75bcae31f39029ceb55da08086315316e3ba"
+        tmp="$(mktemp -d)"
+        curl -fsSL -o "${tmp}/${archive}" \
+          "https://github.com/gitleaks/gitleaks/releases/download/v${version}/${archive}"
+        echo "${expected_sha}  ${tmp}/${archive}" | sha256sum -c -
+        tar -xzf "${tmp}/${archive}" -C "${tmp}" gitleaks
+        install -m 0755 "${tmp}/gitleaks" /usr/local/bin/gitleaks
+        gitleaks version
+
+    - name: Run gitleaks detect
+      id: run
+      shell: bash
+      env:
+        CFG: ${{ inputs.config_path }}
+      run: |
+        set -euo pipefail
+        args=(detect --no-banner --redact --report-format=json --report-path=gitleaks-report.json)
+        if [ -n "${CFG}" ]; then
+          args+=(-c "${CFG}")
+        fi
+        # gitleaks exits 1 when leaks are found; capture that without
+        # failing the step so we can record it as `ran (leaks found)`.
+        set +e
+        gitleaks "${args[@]}"
+        rc=$?
+        set -e
+        echo "rc=${rc}" >> "${GITHUB_OUTPUT}"
+
+    - name: Record result
+      shell: bash
+      env:
+        RC: ${{ steps.run.outputs.rc }}
+      run: |
+        set -euo pipefail
+        case "${RC}" in
+          0)
+            printf 'gitleaks\tran\tno leaks found\n' >> "${RUNNER_TEMP}/scan-suite-results.tsv"
+            echo "- gitleaks: ran (no leaks found)" >> "${GITHUB_STEP_SUMMARY}"
+            ;;
+          1)
+            printf 'gitleaks\tran\tleaks found (see gitleaks-report.json)\n' >> "${RUNNER_TEMP}/scan-suite-results.tsv"
+            echo "- gitleaks: ran (leaks found; see gitleaks-report.json artifact)" >> "${GITHUB_STEP_SUMMARY}"
+            ;;
+          *)
+            printf 'gitleaks\terror\texit=%s\n' "${RC}" >> "${RUNNER_TEMP}/scan-suite-results.tsv"
+            echo "- gitleaks: error (exit=${RC})" >> "${GITHUB_STEP_SUMMARY}"
+            ;;
+        esac

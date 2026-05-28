@@ -1,0 +1,98 @@
+# Composite action: run-tests-dotnet
+#
+# Runs `dotnet test` with the Coverlet collector and standardizes where
+# the coverage report lands so the downstream `coverage-report` action
+# has a single input contract regardless of the consumer's .NET project
+# shape.
+#
+# Contract: Coverlet writes a per-test-project Cobertura file to a
+# nondeterministic path under `TestResults/<guid>/coverage.cobertura.xml`.
+# This action copies the first such file it finds (the common
+# single-test-project case) to the standardized `coverage_path`.
+# Multi-test-project consumers should merge upstream before invoking
+# coverage-report; tracked as a follow-up rather than solved here.
+#
+# Per NF1: ≤ ~80 lines. Per D11: setup-dotnet lives at the workflow level.
+#
+# ## Trust boundary
+#
+# The `command` input is interpolated raw at YAML-expansion time before
+# bash sees it (canonical Actions-RCE sink). Per D10d this is a permitted
+# shape but requires documented conventions: treat the value as TRUSTED
+# input. Do NOT pass values derived from PR titles, issue bodies, branch
+# names, commit messages, fork-author-controlled tag names, or any other
+# externally controlled context — quoting cannot defend the sink. See
+# `docs/usage.md` (TBD — populated in phase 2 alongside the gate model)
+# for the full trust model.
+name: run-tests-dotnet
+description: Run `dotnet test` with Coverlet and standardize the cobertura coverage output path.
+
+inputs:
+  command:
+    description: "Shell command that runs the dotnet tests. Must include `--collect:\"XPlat Code Coverage\"` (or equivalent) so Coverlet emits cobertura output. Interpolated raw at YAML-expansion time before bash sees it; treat as trusted input. Do NOT pass values derived from PR titles, issue bodies, branch names, commit messages, or any other externally controlled context. See `docs/usage.md` (TBD — populated in phase 2 alongside the gate model) for the full trust model."
+    required: false
+    default: 'dotnet test --collect:"XPlat Code Coverage" --results-directory TestResults'
+  coverage_path:
+    description: "File path where the standardized cobertura coverage report should land."
+    required: false
+    default: "coverage/cobertura.xml"
+  results_directory:
+    description: "Directory the dotnet test command writes TestResults into (used to locate the Coverlet output)."
+    required: false
+    default: "TestResults"
+  working_directory:
+    description: "Directory in which to run the dotnet test command. Defaults to the repository root."
+    required: false
+    default: "."
+
+outputs:
+  coverage_path:
+    description: "Absolute path to the standardized cobertura coverage file."
+    value: ${{ steps.locate.outputs.coverage_path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Run dotnet tests
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      run: |
+        set -euo pipefail
+        echo "::group::run-tests-dotnet"
+        ${{ inputs.command }}
+        echo "::endgroup::"
+
+    - name: Locate + standardize coverage file
+      id: locate
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      run: |
+        set -euo pipefail
+        results_dir="${{ inputs.results_directory }}"
+        dest_rel="${{ inputs.coverage_path }}"
+        if [ ! -d "${results_dir}" ]; then
+          echo "::error::run-tests-dotnet: results directory '${results_dir}' not found after `dotnet test`. Either the test command failed silently or `--results-directory` doesn't match the 'results_directory' input." >&2
+          exit 1
+        fi
+        matches="$(find "${results_dir}" -type f -name 'coverage.cobertura.xml')"
+        count="$(printf '%s\n' "${matches}" | grep -c .)"
+        src="$(printf '%s\n' "${matches}" | head -n 1)"
+        if [ -z "${src}" ]; then
+          echo "::error::run-tests-dotnet: no coverage.cobertura.xml found under '${results_dir}'. Make sure the test command includes the Coverlet collector (e.g., --collect:\"XPlat Code Coverage\")." >&2
+          exit 1
+        fi
+        if [ "${count}" -gt 1 ]; then
+          echo "::warning::run-tests-dotnet: found ${count} cobertura files; using the first (${src}). Multi-test-project merging is not implemented in v1 — file a follow-up if you need it." >&2
+          echo "run-tests-dotnet: NOTE — ${count} cobertura files found; using the first (${src}). Multi-test-project merging is not implemented in v1." >> "${GITHUB_STEP_SUMMARY}"
+        fi
+        mkdir -p "$(dirname "${dest_rel}")"
+        cp "${src}" "${dest_rel}"
+        abs="$(cd "$(dirname "${dest_rel}")" && pwd)/$(basename "${dest_rel}")"
+        echo "coverage_path=${abs}" >> "${GITHUB_OUTPUT}"
+
+    - name: Summary
+      shell: bash
+      run: |
+        set -euo pipefail
+        size="$(wc -c < "${{ steps.locate.outputs.coverage_path }}" | tr -d ' ')"
+        echo "run-tests-dotnet: tests passed; coverage at ${{ steps.locate.outputs.coverage_path }} (${size} bytes)" >> "${GITHUB_STEP_SUMMARY}"

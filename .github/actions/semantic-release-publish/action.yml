@@ -1,0 +1,242 @@
+# Composite action: semantic-release-publish
+#
+# Wraps `semantic-release` with a pinned plugin set and an opinionated
+# `.releaserc` that the consumer never has to see. Per D3 the action runs
+# semantic-release wholly inside the gated publish job; per D10b the
+# unified `target` input names the registry. Pins live inside the action;
+# consumer adoption is one `uses:` line.
+#
+# Version baseline (every bump here is intentional; refresh deliberately):
+#   - semantic-release                       22.0.12
+#   - @semantic-release/commit-analyzer      11.1.0
+#   - @semantic-release/release-notes-generator 12.1.0
+#   - @semantic-release/changelog            6.0.3
+#   - @semantic-release/npm                  11.0.3   (≥ 11.0.0 per M1 — OIDC trusted-publishing)
+#   - @semantic-release/git                  10.0.1
+#   - @semantic-release/github               9.2.6
+#   - npm CLI                                ≥ 10.0.0 (verified at runtime; M1 baseline)
+#   - Node                                   default '20' (input-controlled; setup here)
+#
+# ## npm supply-chain trust model
+#
+# Unlike GitHub Actions (SHA-pinned), npm packages have no SHA-pin equivalent.
+# The integrity of semantic-release and its 6 plugins rests on npm's registry-
+# side integrity hash, verified by `npm install` at runtime. This install does
+# NOT use a lockfile, so transitive deps resolve to whatever the registry serves
+# at install time. Bumping any version in this list requires a deliberate
+# refresh — there is no Dependabot equivalent for inline-versions inside a
+# composite action. Supply-chain trust boundary: the npm registry, not git.
+# Accepted risk for v1; revisit if a lockfile-based approach becomes viable.
+# Same trust gap applies to the `@commitlint/*` deps inline-pinned in
+# `.github/workflows/npm-package-ci.yml`.
+#
+# Per NF1 the action.yml stays orchestration-only; the .releaserc shape lives
+# in `lib/build-releaserc.js` so the YAML reads as a thin shell wrapper.
+#
+# Runtime contract (surfaced because there is no real-consumer test yet):
+#   The consumer MUST have a `package.json` at `working_directory` before
+#   invoking this action; semantic-release reads it to determine the package
+#   name, current version, and (when not in dry-run) where to publish. The
+#   action does NOT synthesize one — semantic-release would refuse anyway.
+#
+# Dry-run hook: set env `HASHIRA_SEMANTIC_RELEASE_DRY_RUN=1` to add
+# `--dry-run --no-ci` to the semantic-release invocation. Used by the
+# library's own self-CI; consumers must not set this in production runs.
+#
+# ## Trust boundary
+#
+# These inputs are interpolated raw at YAML-expansion time before bash sees
+# them (canonical Actions-RCE sink). Per D10d this is permitted but
+# requires documented conventions: treat the values as TRUSTED input. Do
+# NOT pass values derived from PR titles, issue bodies, branch names,
+# commit messages, fork-author-controlled tag names, or any other
+# externally controlled context — quoting cannot defend the sink.
+#   - working_directory
+#   - target
+#   - prerelease_branches
+#   - maintenance_branches
+#   - x_releaserc_overrides
+#   - node_version (passed to actions/setup-node's `with:` map; not a raw
+#     shell sink, but listed here for uniformity — every interpolated
+#     input carries the Trusted-input contract.)
+# See `docs/usage.md` (TBD — populated in phase 2 alongside the gate model)
+# for the full trust model.
+#
+# ## Reserved env names
+#
+# `HASHIRA_SEMANTIC_RELEASE_DRY_RUN` is reserved by this library as a
+# test-only override (see "Dry-run hook" above). Consumers must not set it
+# in production — doing so silently turns publishes into no-ops.
+name: semantic-release-publish
+description: Run semantic-release with a pinned plugin set and a hidden .releaserc generated from inputs.
+
+inputs:
+  target:
+    description: "Registry URL to publish to (D10b unified target input). Trusted input — see `## Trust boundary` in this file."
+    required: false
+    default: "https://registry.npmjs.org"
+  prerelease_branches:
+    description: "Comma-separated list of prerelease branch names (composite actions can't take list inputs natively). Trusted input."
+    required: false
+    default: ""
+  maintenance_branches:
+    description: "Comma-separated list of maintenance branch names (e.g. '1.x,2.x'). Trusted input."
+    required: false
+    default: ""
+  node_version:
+    description: "Node major to install via actions/setup-node before running semantic-release. Trusted input — see `## Trust boundary`."
+    required: false
+    default: "20"
+  working_directory:
+    description: "Directory in which to run semantic-release. Must contain a package.json. Trusted input."
+    required: false
+    default: "."
+  x_releaserc_overrides:
+    description: "EXPERIMENTAL (x_-prefixed): JSON string of partial .releaserc to deep-merge over the generated base. Arrays REPLACE (do not concat). Trusted input."
+    required: false
+    default: ""
+
+outputs:
+  released:
+    description: "'true' if a release was published this run, else 'false'."
+    value: ${{ steps.run.outputs.released }}
+  version:
+    description: "Released version when released=='true', else empty."
+    value: ${{ steps.run.outputs.version }}
+
+runs:
+  using: composite
+  steps:
+    - name: Setup Node
+      # actions/setup-node v4.1.0
+      uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af
+      with:
+        node-version: ${{ inputs.node_version }}
+
+    - name: Verify npm CLI baseline (>= 10)
+      shell: bash
+      run: |
+        set -euo pipefail
+        v="$(npm --version)"
+        major="${v%%.*}"
+        if [ "${major}" -lt 10 ]; then
+          echo "::error::semantic-release-publish: npm CLI ${v} is too old; >= 10.0.0 required for OIDC trusted-publishing per M1." >&2
+          exit 1
+        fi
+        echo "semantic-release-publish: npm CLI ${v} (>=10 OK)"
+
+    - name: Generate .releaserc from inputs
+      id: build_rc
+      shell: bash
+      env:
+        SR_TARGET: ${{ inputs.target }}
+        SR_PRERELEASE: ${{ inputs.prerelease_branches }}
+        SR_MAINTENANCE: ${{ inputs.maintenance_branches }}
+        SR_OVERRIDES: ${{ inputs.x_releaserc_overrides }}
+      run: |
+        set -euo pipefail
+        rc_path="${RUNNER_TEMP}/.releaserc"
+        export RC_PATH="${rc_path}"
+        node -e '
+          const { buildReleaserc } = require(process.env.GITHUB_ACTION_PATH + "/lib/build-releaserc");
+          const rc = buildReleaserc({
+            target: process.env.SR_TARGET,
+            prerelease_branches: process.env.SR_PRERELEASE,
+            maintenance_branches: process.env.SR_MAINTENANCE,
+            x_releaserc_overrides: process.env.SR_OVERRIDES,
+          });
+          require("fs").writeFileSync(process.env.RC_PATH, JSON.stringify(rc, null, 2));
+        '
+        echo "rc_path=${rc_path}" >> "${GITHUB_OUTPUT}"
+        echo "semantic-release-publish: generated .releaserc at ${rc_path}"
+
+    - name: Install pinned semantic-release + plugins
+      shell: bash
+      working-directory: ${{ runner.temp }}
+      run: |
+        set -euo pipefail
+        # Install into a throwaway tree under $RUNNER_TEMP so the consumer's
+        # package.json/node_modules at working_directory is untouched.
+        cat > package.json <<'EOF'
+        {
+          "name": "hashira-semantic-release-publish-runtime",
+          "private": true,
+          "version": "0.0.0"
+        }
+        EOF
+        npm install --no-audit --no-fund --no-save \
+          semantic-release@22.0.12 \
+          @semantic-release/commit-analyzer@11.1.0 \
+          @semantic-release/release-notes-generator@12.1.0 \
+          @semantic-release/changelog@6.0.3 \
+          @semantic-release/npm@11.0.3 \
+          @semantic-release/git@10.0.1 \
+          @semantic-release/github@9.2.6
+
+    - name: Run semantic-release
+      id: run
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      env:
+        RC_PATH: ${{ steps.build_rc.outputs.rc_path }}
+        SR_BIN_DIR: ${{ runner.temp }}/node_modules/.bin
+        # GITHUB_TOKEN must be provided by the caller (forwarded into the
+        # job's env from secrets); we don't set it here. NPM_TOKEN /
+        # OIDC are handled by @semantic-release/npm.
+      run: |
+        set -euo pipefail
+        if [ ! -f package.json ]; then
+          echo "::error::semantic-release-publish: no package.json at '$(pwd)'. The consumer must check out / restore the package source at 'working_directory' before invoking this action." >&2
+          exit 1
+        fi
+        extra_args=""
+        if [ "${HASHIRA_SEMANTIC_RELEASE_DRY_RUN:-0}" = "1" ]; then
+          extra_args="--dry-run --no-ci"
+          echo "semantic-release-publish: HASHIRA_SEMANTIC_RELEASE_DRY_RUN=1 -> --dry-run --no-ci"
+        fi
+        log_file="${RUNNER_TEMP}/semantic-release.log"
+        # shellcheck disable=SC2086
+        "${SR_BIN_DIR}/semantic-release" --extends "${RC_PATH}" ${extra_args} 2>&1 | tee "${log_file}"
+        # Parse the log for the published-version line. semantic-release
+        # emits "Published release <version> on default channel" (and a
+        # similar "would publish" line in dry-run). Match both shapes.
+        #
+        # IMPORTANT (iter-2.1 review Major):
+        # The two log strings below — "Published release X.Y.Z" and
+        # "The next release version is X.Y.Z" — are NOT a documented
+        # public contract of semantic-release. They are human-readable
+        # signale log lines observed in `semantic-release@22.0.12` (the
+        # version pinned in this action's header). A version bump that
+        # reworded either string would silently flip these outputs to
+        # `released=false, version=""` on a real publish.
+        #
+        # The smoke jobs `semantic-release-publish-dry-run` AND
+        # `semantic-release-publish-released-true-smoke` in `_self-ci.yml`
+        # exercise BOTH parse branches (no-release + would-release) to
+        # catch a wording drift on the version-bump PR rather than on a
+        # consumer's first real publish a year later. Any deliberate
+        # refresh of the pinned `semantic-release` version MUST re-run
+        # both smoke jobs and update the strings here if needed.
+        version=""
+        released="false"
+        if grep -Eq 'Published release [0-9]+\.[0-9]+\.[0-9]+' "${log_file}"; then
+          version="$(grep -Eo 'Published release [0-9]+\.[0-9]+\.[0-9]+' "${log_file}" \
+            | head -n1 | awk '{ print $3 }')"
+          released="true"
+        elif grep -Eq 'The next release version is [0-9]+\.[0-9]+\.[0-9]+' "${log_file}"; then
+          # Dry-run path: semantic-release prints "The next release version is X.Y.Z"
+          # but does not actually publish. We surface it as released=false with
+          # the would-be version so the summary is informative.
+          version="$(grep -Eo 'The next release version is [0-9]+\.[0-9]+\.[0-9]+' "${log_file}" \
+            | head -n1 | awk '{ print $6 }')"
+          released="false"
+          echo "semantic-release-publish: would release v${version} (dry-run)" \
+            >> "${GITHUB_STEP_SUMMARY}"
+        fi
+        echo "released=${released}" >> "${GITHUB_OUTPUT}"
+        echo "version=${version}" >> "${GITHUB_OUTPUT}"
+        if [ "${released}" = "true" ]; then
+          echo "semantic-release-publish: published v${version}" >> "${GITHUB_STEP_SUMMARY}"
+        elif [ -z "${version}" ]; then
+          echo "semantic-release-publish: no release this run" >> "${GITHUB_STEP_SUMMARY}"
+        fi

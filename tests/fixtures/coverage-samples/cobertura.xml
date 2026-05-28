@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<coverage line-rate="0.8" branch-rate="0.5" version="1.9" timestamp="1700000000" lines-covered="8" lines-valid="10" branches-covered="2" branches-valid="4">
+  <sources>
+    <source>/repo/src</source>
+  </sources>
+  <packages>
+    <package name="Hashira.Sample" line-rate="0.8" branch-rate="0.5">
+      <classes>
+        <class name="Alpha" filename="src/Alpha.cs" line-rate="0.75" branch-rate="0.5">
+          <lines>
+            <line number="1" hits="3"/>
+            <line number="2" hits="3"/>
+            <line number="3" hits="3"/>
+            <line number="4" hits="0"/>
+          </lines>
+        </class>
+        <class name="Beta" filename="src/Beta.cs" line-rate="0.833" branch-rate="0.5">
+          <lines>
+            <line number="1" hits="5"/>
+            <line number="2" hits="5"/>
+            <line number="3" hits="5"/>
+            <line number="4" hits="5"/>
+            <line number="5" hits="5"/>
+            <line number="6" hits="0"/>
+          </lines>
+        </class>
+      </classes>
+    </package>
+  </packages>
+</coverage>

@@ -1,0 +1,11 @@
+{
+  "name": "hashira-semantic-release-publish-release-true-fixture",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Fixture for the semantic-release-publish released=true smoke test. Used by the `semantic-release-publish-released-true-smoke` self-CI job: the job inits a fresh git repo inside this directory at runtime and seeds a single `feat:` commit so semantic-release's --dry-run --no-ci path emits its 'The next release version is X.Y.Z' line. Defense in depth: `private: true` blocks any accidental real publish even if dry-run were bypassed.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/skathio/hashira-ops.git"
+  },
+  "license": "MIT"
+}
