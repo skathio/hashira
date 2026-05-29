@@ -183,10 +183,17 @@ jobs:
       # Explicit npm publish step for OIDC trusted publishing.
       # When NPM_TOKEN is absent, build-releaserc sets npmPublish:false to bypass
       # @semantic-release/npm@11's verifyConditions token check. The actual publish
-      # is done here instead, where npm performs the OIDC exchange natively via
-      # `npm publish --provenance` (npm detects ACTIONS_ID_TOKEN_REQUEST_TOKEN).
-      # When NPM_TOKEN is set, semantic-release already published above and this
-      # step is skipped (released==true + NPM_TOKEN present = already done).
+      # is done here instead using npm's native OIDC trusted publishing.
+      # When NPM_TOKEN is set, semantic-release already published above — skip.
+      - name: Setup Node for OIDC npm publish
+        if: ${{ steps.release.outputs.released == 'true' && env.NPM_TOKEN == '' }}
+        # actions/setup-node v4.1.0 — registry-url writes
+        # //registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN} to ~/.npmrc so npm
+        # uses NODE_AUTH_TOKEN (the OIDC JWT) as the Bearer token at publish time.
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af
+        with:
+          node-version: ${{ inputs.node_version }}
+          registry-url: 'https://registry.npmjs.org'
       - name: Publish to npm via OIDC trusted publishing
         if: ${{ steps.release.outputs.released == 'true' && env.NPM_TOKEN == '' }}
         shell: bash
@@ -194,6 +201,16 @@ jobs:
           NPM_CONFIG_PROVENANCE: "true"
         run: |
           set -euo pipefail
+          # Exchange the GitHub OIDC JWT (audience=npmjs.com) for the auth token.
+          # actions/setup-node wrote //registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}
+          # to ~/.npmrc; npm substitutes NODE_AUTH_TOKEN at publish time, sending the
+          # OIDC JWT as the Bearer token. The npm registry validates it against the
+          # configured OIDC trusted publisher for this repo/workflow/environment.
+          NODE_AUTH_TOKEN="$(curl -sS -f \
+            -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=npmjs.com" \
+            | jq -r '.value')"
+          export NODE_AUTH_TOKEN
           npm publish --provenance --access public
           echo "npm-package-publish: published to npm via OIDC trusted publishing" >> "${GITHUB_STEP_SUMMARY}"
       - name: Summarize release outcome
