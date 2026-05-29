@@ -306,8 +306,9 @@ jobs:
     name: semantic-release-publish-dry-run
     runs-on: ubuntu-latest
     permissions:
-      contents: write  # semantic-release --dry-run still runs `git push --dry-run` to verify credentials
+      contents: write  # semantic-release --dry-run runs `git push --dry-run` + @semantic-release/github token check
     env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       # Force the action into --dry-run --no-ci so no publish or git push
       # is attempted. Documented reserved env name; do NOT set in consumer
       # workflows.
@@ -405,8 +406,9 @@ jobs:
     name: semantic-release-publish-released-true-smoke
     runs-on: ubuntu-latest
     permissions:
-      contents: write  # semantic-release --dry-run still runs `git push --dry-run` to verify credentials
+      contents: write  # semantic-release --dry-run runs `git push --dry-run` + @semantic-release/github token check
     env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       HASHIRA_SEMANTIC_RELEASE_DRY_RUN: '1'
     steps:
       # actions/checkout v4.2.2
