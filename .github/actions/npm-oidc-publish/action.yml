@@ -34,6 +34,10 @@ inputs:
     description: "npm publish access level: 'public' or 'restricted'."
     required: false
     default: "public"
+  version:
+    description: "Version to publish (e.g. '1.2.3'). Required when using OIDC mode without @semantic-release/git, because the version bump is not committed back to the branch and the checkout will have the old version in package.json. Runs `npm version <v> --no-git-tag-version` before publish."
+    required: false
+    default: ""
 
 runs:
   using: composite
@@ -45,6 +49,20 @@ runs:
       with:
         node-version: ${{ inputs.node_version }}
         registry-url: 'https://registry.npmjs.org'
+
+    - name: Set package version
+      # In OIDC mode @semantic-release/git is omitted (no branch push allowed),
+      # so the version bump semantic-release made in the release job's working tree
+      # is never committed. This job checks out the current HEAD which still has
+      # the old version in package.json. Set it explicitly before publishing.
+      if: ${{ inputs.version != '' }}
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        npm version "${VERSION}" --no-git-tag-version --allow-same-version
+        echo "npm-oidc-publish: set package version to ${VERSION}"
 
     - name: Publish to npm via OIDC
       shell: bash
