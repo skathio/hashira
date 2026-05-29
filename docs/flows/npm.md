@@ -72,9 +72,10 @@ jobs:
   publish:
     uses: skathio/hashira-ops/.github/workflows/npm-package-publish.yml@main
     permissions:
-      id-token: write     # OIDC trusted-publishing token exchange
-      contents: write     # tag push + CHANGELOG commit
+      id-token: write      # OIDC trusted-publishing token exchange
+      contents: write      # tag push + CHANGELOG commit
       pull-requests: write # release notes comment
+      issues: write        # @semantic-release/github failure issue
     with:
       node_version: '20'
       target: 'https://registry.npmjs.org'
@@ -146,9 +147,9 @@ level + per-job grants.
 
 ### Publish permissions
 
-| Caller job calls           | `contents` | `pull-requests` | `id-token` | Why |
-|----------------------------|------------|-----------------|------------|-----|
-| `npm-package-publish.yml`  | `write`    | `write`         | `write`    | `id-token:write` for OIDC trusted-publishing token exchange. `contents:write` for semantic-release's tag push + CHANGELOG commit. `pull-requests:write` for release-note PR comment. |
+| Caller job calls           | `contents` | `pull-requests` | `id-token` | `issues` | Why |
+|----------------------------|------------|-----------------|------------|----------|-----|
+| `npm-package-publish.yml`  | `write`    | `write`         | `write`    | `write`  | `id-token:write` for OIDC trusted-publishing token exchange. `contents:write` for semantic-release's tag push + CHANGELOG commit. `pull-requests:write` for release-note PR comment. `issues:write` for `@semantic-release/github` failure notification issue. |
 
 The consumer's workflow-level `permissions: {}` (deny-all) is recommended;
 the per-job grants above are the minimum required for the reusable

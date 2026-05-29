@@ -11,7 +11,8 @@
 # Workflow-level `permissions: {}` (deny-all). Per-job grants:
 #   - preflight : contents:read   (no secret enforcement; informational only)
 #   - release   : id-token:write (OIDC), contents:write (tagging + CHANGELOG
-#                 commit), pull-requests:write (release notes / PR comment)
+#                 commit), pull-requests:write (release notes / PR comment),
+#                 issues:write (@semantic-release/github failure issue)
 #
 # Reusable workflows can only NARROW the caller's grants. Consumers must
 # mirror this matrix at their caller job's `permissions:` block (documented
@@ -144,8 +145,9 @@ jobs:
       id-token: write
       # Tag push + CHANGELOG commit by @semantic-release/git.
       contents: write
-      # Release-note PR comment by @semantic-release/github.
+      # Release-note PR comment + failure issue by @semantic-release/github.
       pull-requests: write
+      issues: write
     steps:
       # actions/checkout v4.2.2 — consumer's tree at FULL depth (semantic-release
       # walks git history to compute the next version).
