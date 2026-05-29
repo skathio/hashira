@@ -1,0 +1,76 @@
+# Composite action: npm-oidc-publish
+#
+# Publishes an npm package using npm OIDC trusted publishing. Must be called
+# from a step in the CONSUMER'S own workflow job (not from inside a reusable
+# workflow), because GitHub Actions sets `workflow_ref` in the OIDC token to
+# the reusable workflow file when a job is defined there. npm validates
+# `workflow_ref` against the "Workflow filename" configured in the trusted
+# publisher settings — these can never match through a reusable-workflow layer.
+#
+# Running this composite action as a step in the consumer's job ensures
+# `workflow_ref` = consumer's workflow file (e.g. publish.yml), matching the
+# npm trusted publisher configuration.
+#
+# Prerequisites (caller job must provide):
+#   - id-token: write  — runner injects ACTIONS_ID_TOKEN_REQUEST_TOKEN
+#   - contents: read   — checkout
+#   - actions/checkout must have run before this action
+#   - The npm package must already exist OR the @scope must be owned by the
+#     publishing identity (first-time publish of a new scope requires a token).
+#
+# ## Trust boundary
+#
+# `node_version` and `access` are interpolated into actions/setup-node inputs
+# (not raw shell sinks) — treat as trusted caller inputs.
+name: npm-oidc-publish
+description: Publish an npm package via OIDC trusted publishing. Call from the consumer's own workflow job, not from inside a reusable workflow.
+
+inputs:
+  node_version:
+    description: "Node major to install via actions/setup-node."
+    required: false
+    default: "20"
+  access:
+    description: "npm publish access level: 'public' or 'restricted'."
+    required: false
+    default: "public"
+
+runs:
+  using: composite
+  steps:
+    - name: Setup Node with registry
+      # actions/setup-node v4.1.0 — writes //registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}
+      # to ~/.npmrc so npm substitutes NODE_AUTH_TOKEN (the OIDC JWT) as the Bearer token.
+      uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af
+      with:
+        node-version: ${{ inputs.node_version }}
+        registry-url: 'https://registry.npmjs.org'
+
+    - name: Publish to npm via OIDC
+      shell: bash
+      env:
+        NPM_CONFIG_PROVENANCE: "true"
+        ACCESS: ${{ inputs.access }}
+      run: |
+        set -euo pipefail
+        if [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ]; then
+          echo "::error::npm-oidc-publish: ACTIONS_ID_TOKEN_REQUEST_TOKEN is not set. Ensure id-token:write is granted on the calling job." >&2
+          exit 1
+        fi
+        # Exchange the GitHub OIDC JWT (audience=npmjs.com) for an npm auth token.
+        # actions/setup-node wrote //registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}
+        # to ~/.npmrc; npm substitutes NODE_AUTH_TOKEN at publish time, sending the JWT
+        # as the Bearer token. The registry validates it against the OIDC trusted
+        # publisher config for this repo/workflow/environment.
+        NODE_AUTH_TOKEN="$(curl -sS -f \
+          -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+          "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=npmjs.com" \
+          | jq -r '.value')"
+        if [ -z "${NODE_AUTH_TOKEN}" ] || [ "${NODE_AUTH_TOKEN}" = "null" ]; then
+          echo "::error::npm-oidc-publish: failed to obtain OIDC token (audience=npmjs.com). Ensure id-token:write is granted and npm OIDC trusted publishing is configured." >&2
+          exit 1
+        fi
+        echo "::add-mask::${NODE_AUTH_TOKEN}"
+        export NODE_AUTH_TOKEN
+        npm publish --provenance "--access=${ACCESS}"
+        echo "npm-oidc-publish: published $(node -p "require('./package.json').name")@$(node -p "require('./package.json').version") via OIDC" >> "${GITHUB_STEP_SUMMARY}"
