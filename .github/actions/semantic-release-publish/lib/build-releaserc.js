@@ -72,23 +72,38 @@ function buildPlugins({ target }) {
   // when id-token:write is granted, so it is readable here at releaserc-build time.
   const useOidc = !process.env.NPM_TOKEN &&
     Boolean(process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN);
-  return [
+  // In OIDC mode, @semantic-release/git is omitted. Its prepare step pushes a
+  // release commit (CHANGELOG.md + package.json) directly to the branch, which
+  // branch protection rules block for the GitHub Actions bot (no bypass available
+  // in the ruleset UI for the built-in Actions identity). Omitting it also drops
+  // @semantic-release/changelog since without a git commit the file update is a
+  // no-op. semantic-release core still pushes the version tag (tag pushes are not
+  // gated by branch protection), @semantic-release/github creates the release, and
+  // the explicit npm publish step in npm-package-publish.yml handles npm.
+  // Consumers with a PAT or GitHub App that can bypass branch protection should use
+  // x_releaserc_overrides to restore these plugins.
+  const plugins = [
     '@semantic-release/commit-analyzer',
     '@semantic-release/release-notes-generator',
-    ['@semantic-release/changelog', { changelogFile: 'CHANGELOG.md' }],
-    ['@semantic-release/npm', {
-      npmPublish: !useOidc,
-      registry: target,
-    }],
-    [
+  ];
+  if (!useOidc) {
+    plugins.push(['@semantic-release/changelog', { changelogFile: 'CHANGELOG.md' }]);
+  }
+  plugins.push(['@semantic-release/npm', {
+    npmPublish: !useOidc,
+    registry: target,
+  }]);
+  if (!useOidc) {
+    plugins.push([
       '@semantic-release/git',
       {
         assets: ['CHANGELOG.md', 'package.json', 'package-lock.json'],
         message: 'chore(release): ${nextRelease.version}\n\n${nextRelease.notes}',
       },
-    ],
-    '@semantic-release/github',
-  ];
+    ]);
+  }
+  plugins.push('@semantic-release/github');
+  return plugins;
 }
 
 function isPlainObject(v) {
