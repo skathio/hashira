@@ -151,23 +151,37 @@ runs:
         echo "semantic-release-publish: generated .releaserc at ${rc_path}"
 
     - name: Obtain npm OIDC token for trusted publishing
-      # When NPM_TOKEN is not provided and we are running in GitHub Actions
-      # with id-token:write, exchange the GitHub OIDC JWT (audience=npmjs.com)
-      # for an npm auth token. The npm registry accepts the raw OIDC JWT as a
-      # Bearer token when trusted publishing is configured for this repo/workflow.
-      # This unblocks @semantic-release/npm@11's verifyConditions check, which
+      # When NPM_TOKEN is not provided and OIDC is available (id-token:write),
+      # exchange the GitHub OIDC JWT (audience=npmjs.com) for an npm auth token.
+      # The npm registry accepts the raw OIDC JWT as a Bearer token when OIDC
+      # trusted publishing is configured for this repo/workflow/environment.
+      # This unblocks @semantic-release/npm@11's verifyConditions check which
       # requires a non-empty NPM_TOKEN before it will attempt to publish.
-      # The step is a no-op when NPM_TOKEN is already set (token-based auth path).
-      if: ${{ env.NPM_TOKEN == '' && env.ACTIONS_ID_TOKEN_REQUEST_TOKEN != '' }}
+      #
+      # NOTE: the if: condition cannot use env.ACTIONS_ID_TOKEN_REQUEST_TOKEN
+      # because runner-provided variables are not in the expression env context.
+      # All conditional logic is handled inside the shell script instead.
+      # The step is always executed but is a no-op when NPM_TOKEN is already set
+      # or when OIDC is not available (non-GitHub-Actions environments).
       shell: bash
       run: |
         set -euo pipefail
+        # No-op if NPM_TOKEN is already set (token-based auth path).
+        if [ -n "${NPM_TOKEN:-}" ]; then
+          echo "semantic-release-publish: NPM_TOKEN is set — skipping OIDC token exchange"
+          exit 0
+        fi
+        # No-op if OIDC is not available (not running in GitHub Actions with id-token:write).
+        if [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ]; then
+          echo "::warning::semantic-release-publish: NPM_TOKEN is not set and OIDC is unavailable. Publish will fail unless auth is configured another way."
+          exit 0
+        fi
         oidc_token="$(curl -sS -f \
           -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
           "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=npmjs.com" \
           | jq -r '.value')"
         if [ -z "${oidc_token}" ] || [ "${oidc_token}" = "null" ]; then
-          echo "::error::semantic-release-publish: failed to obtain OIDC token from GitHub Actions (audience=npmjs.com). Ensure id-token:write is granted and npm OIDC trusted publishing is configured." >&2
+          echo "::error::semantic-release-publish: failed to obtain OIDC token from GitHub Actions (audience=npmjs.com). Ensure id-token:write is granted and npm OIDC trusted publishing is configured for this repo/workflow/environment." >&2
           exit 1
         fi
         echo "::add-mask::${oidc_token}"
