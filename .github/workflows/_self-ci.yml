@@ -336,10 +336,9 @@ jobs:
         run: |
           set -euo pipefail
           echo "released='${RELEASED}'  version='${VERSION}'"
-          # In dry-run on a fixture with no conventional-commit history we
-          # expect released=false; version may be empty (no release) or set
-          # (would-release line). Summary must contain one of the two
-          # expected sentences.
+          # released must always be false in dry-run mode (HASHIRA_SEMANTIC_RELEASE_DRY_RUN=1
+          # forces released=false regardless of semantic-release log output — semantic-release
+          # @22+ prints "Published release X.Y.Z" in dry-run, same as a real run).
           if [ "${RELEASED}" != "false" ]; then
             echo "expected released=false in dry-run, got '${RELEASED}'" >&2
             exit 1

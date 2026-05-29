@@ -198,25 +198,21 @@ runs:
         # shellcheck disable=SC2086
         "${SR_BIN_DIR}/semantic-release" --extends "${RC_PATH}" ${extra_args} 2>&1 | tee "${log_file}"
         # Parse the log for the published-version line. semantic-release
-        # emits "Published release <version> on default channel" (and a
-        # similar "would publish" line in dry-run). Match both shapes.
+        # emits "Published release <version> on default channel" for both
+        # real publishes AND --dry-run runs (semantic-release@22.0.12 uses
+        # the same log line in both modes). The fallback "The next release
+        # version is X.Y.Z" line is also matched for older versions.
         #
         # IMPORTANT (iter-2.1 review Major):
-        # The two log strings below — "Published release X.Y.Z" and
-        # "The next release version is X.Y.Z" — are NOT a documented
-        # public contract of semantic-release. They are human-readable
-        # signale log lines observed in `semantic-release@22.0.12` (the
-        # version pinned in this action's header). A version bump that
-        # reworded either string would silently flip these outputs to
-        # `released=false, version=""` on a real publish.
+        # These log strings are NOT a documented public contract of
+        # semantic-release. They are human-readable signale log lines.
+        # Any deliberate refresh of the pinned semantic-release version
+        # MUST re-run both smoke jobs and update the strings here if needed.
         #
-        # The smoke jobs `semantic-release-publish-dry-run` AND
-        # `semantic-release-publish-released-true-smoke` in `_self-ci.yml`
-        # exercise BOTH parse branches (no-release + would-release) to
-        # catch a wording drift on the version-bump PR rather than on a
-        # consumer's first real publish a year later. Any deliberate
-        # refresh of the pinned `semantic-release` version MUST re-run
-        # both smoke jobs and update the strings here if needed.
+        # Dry-run override: because --dry-run now prints "Published release"
+        # (same as a real run), we parse version from the log for
+        # informational purposes but always force released=false when
+        # HASHIRA_SEMANTIC_RELEASE_DRY_RUN=1. No actual publish occurred.
         version=""
         released="false"
         if grep -Eq 'Published release [0-9]+\.[0-9]+\.[0-9]+' "${log_file}"; then
@@ -224,19 +220,22 @@ runs:
             | head -n1 | awk '{ print $3 }')"
           released="true"
         elif grep -Eq 'The next release version is [0-9]+\.[0-9]+\.[0-9]+' "${log_file}"; then
-          # Dry-run path: semantic-release prints "The next release version is X.Y.Z"
-          # but does not actually publish. We surface it as released=false with
-          # the would-be version so the summary is informative.
           version="$(grep -Eo 'The next release version is [0-9]+\.[0-9]+\.[0-9]+' "${log_file}" \
             | head -n1 | awk '{ print $6 }')"
+        fi
+        # Dry-run override: --dry-run never actually publishes; force released=false
+        # regardless of what the log says (semantic-release@22+ prints the same
+        # "Published release" line in dry-run mode as in a real run).
+        if [ "${HASHIRA_SEMANTIC_RELEASE_DRY_RUN:-0}" = "1" ]; then
           released="false"
-          echo "semantic-release-publish: would release v${version} (dry-run)" \
-            >> "${GITHUB_STEP_SUMMARY}"
         fi
         echo "released=${released}" >> "${GITHUB_OUTPUT}"
         echo "version=${version}" >> "${GITHUB_OUTPUT}"
         if [ "${released}" = "true" ]; then
           echo "semantic-release-publish: published v${version}" >> "${GITHUB_STEP_SUMMARY}"
-        elif [ -z "${version}" ]; then
+        elif [ -n "${version}" ]; then
+          echo "semantic-release-publish: would release v${version} (dry-run)" \
+            >> "${GITHUB_STEP_SUMMARY}"
+        else
           echo "semantic-release-publish: no release this run" >> "${GITHUB_STEP_SUMMARY}"
         fi
