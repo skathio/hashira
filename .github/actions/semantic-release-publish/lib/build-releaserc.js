@@ -59,14 +59,17 @@ function buildPlugins({ target }) {
   // Order matters: commit-analyzer → release-notes-generator → changelog →
   // npm → git → github. (semantic-release default order with our additions.)
   //
-  // skipVerifyToken: @semantic-release/npm@11 checks for NPM_TOKEN at
-  // verifyConditions time, before npm ever runs. When using npm OIDC trusted
-  // publishing (no NPM_TOKEN, id-token:write granted), this check always fails.
-  // skipVerifyToken bypasses it so npm can perform the OIDC exchange natively
-  // at publish time via `npm publish --provenance`.
-  // Only set when NPM_TOKEN is absent and OIDC is available (detected via
-  // ACTIONS_ID_TOKEN_REQUEST_TOKEN, which the runner injects when id-token:write
-  // is granted — accessible in process.env because build-releaserc runs in node).
+  // npmPublish: @semantic-release/npm@11 checks for NPM_TOKEN at verifyConditions
+  // time — before npm ever runs — and throws ENONPMTOKEN when it is absent.
+  // skipVerifyToken does NOT exist in v11.0.3 (confirmed from package source).
+  //
+  // When using npm OIDC trusted publishing (no NPM_TOKEN, id-token:write granted)
+  // we set npmPublish:false to bypass verifyConditions entirely. The actual
+  // npm publish is handled by an explicit `npm publish --provenance` step added
+  // in npm-package-publish.yml, where npm performs the OIDC exchange natively.
+  //
+  // ACTIONS_ID_TOKEN_REQUEST_TOKEN is injected by the runner into process.env
+  // when id-token:write is granted, so it is readable here at releaserc-build time.
   const useOidc = !process.env.NPM_TOKEN &&
     Boolean(process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN);
   return [
@@ -74,9 +77,8 @@ function buildPlugins({ target }) {
     '@semantic-release/release-notes-generator',
     ['@semantic-release/changelog', { changelogFile: 'CHANGELOG.md' }],
     ['@semantic-release/npm', {
-      npmPublish: true,
+      npmPublish: !useOidc,
       registry: target,
-      ...(useOidc ? { skipVerifyToken: true } : {}),
     }],
     [
       '@semantic-release/git',
