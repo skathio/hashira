@@ -151,7 +151,7 @@ jobs:
     steps:
       # actions/checkout v4.2.2 — consumer's tree at FULL depth (semantic-release
       # walks git history to compute the next version).
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           fetch-depth: 0
           # Persist credentials so @semantic-release/git can push tag + commit.
@@ -159,7 +159,7 @@ jobs:
       # Library self-checkout per D14: ./.hashira/ holds hashira-ops at library_ref.
       - name: Checkout hashira-ops library (D14)
         # actions/checkout v4.2.2
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           repository: skathio/hashira-ops
           ref: ${{ inputs.library_ref }}

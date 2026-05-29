@@ -193,7 +193,7 @@ jobs:
     steps:
       # actions/checkout v4.2.2 — consumer's tree at FULL depth (MinVer
       # walks git history + tags to compute the next version).
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           fetch-depth: 0
           # Persist credentials so `gh release create` can authenticate
@@ -202,14 +202,14 @@ jobs:
       # Library self-checkout per D14 (persist-credentials:false per iter-2.3 m4).
       - name: Checkout hashira-ops library (D14)
         # actions/checkout v4.2.2
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           repository: skathio/hashira-ops
           ref: ${{ inputs.library_ref }}
           path: .hashira
           persist-credentials: false
       # actions/setup-dotnet v4.1.0
-      - uses: actions/setup-dotnet@3e891b0cb619bf60e2c25674b222b8940e2c1c25
+      - uses: actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2
         with:
           dotnet-version: ${{ inputs.dotnet_version }}
       - name: Pack (MinVer-driven version inference)
