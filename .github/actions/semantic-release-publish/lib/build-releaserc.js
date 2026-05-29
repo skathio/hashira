@@ -58,11 +58,26 @@ function buildBranches({ prerelease, maintenance }) {
 function buildPlugins({ target }) {
   // Order matters: commit-analyzer → release-notes-generator → changelog →
   // npm → git → github. (semantic-release default order with our additions.)
+  //
+  // skipVerifyToken: @semantic-release/npm@11 checks for NPM_TOKEN at
+  // verifyConditions time, before npm ever runs. When using npm OIDC trusted
+  // publishing (no NPM_TOKEN, id-token:write granted), this check always fails.
+  // skipVerifyToken bypasses it so npm can perform the OIDC exchange natively
+  // at publish time via `npm publish --provenance`.
+  // Only set when NPM_TOKEN is absent and OIDC is available (detected via
+  // ACTIONS_ID_TOKEN_REQUEST_TOKEN, which the runner injects when id-token:write
+  // is granted — accessible in process.env because build-releaserc runs in node).
+  const useOidc = !process.env.NPM_TOKEN &&
+    Boolean(process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN);
   return [
     '@semantic-release/commit-analyzer',
     '@semantic-release/release-notes-generator',
     ['@semantic-release/changelog', { changelogFile: 'CHANGELOG.md' }],
-    ['@semantic-release/npm', { npmPublish: true, registry: target }],
+    ['@semantic-release/npm', {
+      npmPublish: true,
+      registry: target,
+      ...(useOidc ? { skipVerifyToken: true } : {}),
+    }],
     [
       '@semantic-release/git',
       {
