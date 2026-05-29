@@ -182,9 +182,11 @@ jobs:
           if [ "${status}" -ne 0 ] && [ ! -s "${report}" ]; then
             inconclusive="true"
           fi
-          echo "report_path=${report}" >> "${GITHUB_OUTPUT}"
-          echo "status=${status}" >> "${GITHUB_OUTPUT}"
-          echo "inconclusive=${inconclusive}" >> "${GITHUB_OUTPUT}"
+          {
+            echo "report_path=${report}"
+            echo "status=${status}"
+            echo "inconclusive=${inconclusive}"
+          } >> "${GITHUB_OUTPUT}"
           if [ "${status}" -eq 0 ]; then
             echo "commitlint: clean (no non-CC commits in range)" >> "${GITHUB_STEP_SUMMARY}"
           elif [ "${inconclusive}" = "true" ]; then

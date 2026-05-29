@@ -25,10 +25,10 @@ inputs:
 runs:
   using: composite
   steps:
-    # google/osv-scanner-action v2.0.0
+    # google/osv-scanner-action v2.3.8
     - name: Run OSV-Scanner
       id: osv
-      uses: google/osv-scanner-action@98b584ee2ed2da3935ccce10e06739d54cdcd20b
+      uses: google/osv-scanner-action/osv-scanner-action@9a498708959aeaef5ef730655706c5a1df1edbc2
       continue-on-error: true
       with:
         scan-args: |-

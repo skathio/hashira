@@ -117,7 +117,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "${ENV_NAME}" ]; then
-            echo "::error::npm-package-publish: environment_name input is empty. The release job's `environment:` key MUST be set to a configured GitHub Environment with at least one required reviewer (per D13 the environment IS the gate)." >&2
+            echo "::error::npm-package-publish: environment_name input is empty. The release job's 'environment:' key MUST be set to a configured GitHub Environment with at least one required reviewer (per D13 the environment IS the gate)." >&2
             exit 1
           fi
           echo "npm-package-publish: environment_name='${ENV_NAME}'"

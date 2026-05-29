@@ -53,12 +53,19 @@ function main() {
   const result = parseCoverage({ path: coveragePath, format });
   const markdown = renderMarkdown(result, coveragePath);
 
+  const summaryLine = `coverage-report: lines ${result.lines_pct.toFixed(1)}% / branches ${result.branches_pct.toFixed(1)}% (source ${path.basename(coveragePath)})`;
+
   const summaryPath = process.env.GITHUB_STEP_SUMMARY;
   if (summaryPath) {
-    fs.appendFileSync(
-      summaryPath,
-      `coverage-report: lines ${result.lines_pct.toFixed(1)}% / branches ${result.branches_pct.toFixed(1)}% (source ${path.basename(coveragePath)})\n\n${markdown}\n`
-    );
+    fs.appendFileSync(summaryPath, `${summaryLine}\n\n${markdown}\n`);
+  }
+
+  // Accumulator for self-CI assertions: each invocation appends one line so
+  // the assertion step (a separate GitHub Actions step) can grep it after the
+  // composite action step completes.
+  const accPath = process.env.RUNNER_TEMP ? `${process.env.RUNNER_TEMP}/hashira-coverage-report.txt` : null;
+  if (accPath) {
+    fs.appendFileSync(accPath, `${summaryLine}\n`);
   }
 
   const outFile = process.env.COVERAGE_OUTPUT_FILE;

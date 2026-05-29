@@ -135,7 +135,7 @@ runs:
         SR_OVERRIDES: ${{ inputs.x_releaserc_overrides }}
       run: |
         set -euo pipefail
-        rc_path="${RUNNER_TEMP}/.releaserc"
+        rc_path="${RUNNER_TEMP}/.releaserc.json"
         export RC_PATH="${rc_path}"
         node -e '
           const { buildReleaserc } = require(process.env.GITHUB_ACTION_PATH + "/lib/build-releaserc");
