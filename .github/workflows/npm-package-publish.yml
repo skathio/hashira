@@ -180,6 +180,22 @@ jobs:
           prerelease_branches: ${{ inputs.prerelease_branches }}
           maintenance_branches: ${{ inputs.maintenance_branches }}
           node_version: ${{ inputs.node_version }}
+      # Explicit npm publish step for OIDC trusted publishing.
+      # When NPM_TOKEN is absent, build-releaserc sets npmPublish:false to bypass
+      # @semantic-release/npm@11's verifyConditions token check. The actual publish
+      # is done here instead, where npm performs the OIDC exchange natively via
+      # `npm publish --provenance` (npm detects ACTIONS_ID_TOKEN_REQUEST_TOKEN).
+      # When NPM_TOKEN is set, semantic-release already published above and this
+      # step is skipped (released==true + NPM_TOKEN present = already done).
+      - name: Publish to npm via OIDC trusted publishing
+        if: ${{ steps.release.outputs.released == 'true' && env.NPM_TOKEN == '' }}
+        shell: bash
+        env:
+          NPM_CONFIG_PROVENANCE: "true"
+        run: |
+          set -euo pipefail
+          npm publish --provenance --access public
+          echo "npm-package-publish: published to npm via OIDC trusted publishing" >> "${GITHUB_STEP_SUMMARY}"
       - name: Summarize release outcome
         shell: bash
         env:
