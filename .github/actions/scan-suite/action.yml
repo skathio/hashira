@@ -85,29 +85,29 @@ runs:
 
     - name: codeql
       if: steps.init.outputs.codeql_enabled == 'true'
-      uses: ./.github/actions/scan-suite/scans/codeql
+      uses: ./.hashira/.github/actions/scan-suite/scans/codeql
       with:
         languages: ${{ inputs.codeql_languages }}
 
     - name: osv
       if: steps.init.outputs.osv_enabled == 'true'
-      uses: ./.github/actions/scan-suite/scans/osv
+      uses: ./.hashira/.github/actions/scan-suite/scans/osv
       with:
         paths: ${{ inputs.osv_paths }}
 
     - name: gitleaks
       if: steps.init.outputs.gitleaks_enabled == 'true'
-      uses: ./.github/actions/scan-suite/scans/gitleaks
+      uses: ./.hashira/.github/actions/scan-suite/scans/gitleaks
       with:
         config_path: ${{ inputs.gitleaks_config }}
 
     - name: dependency-review
       if: steps.init.outputs.dependency_review_enabled == 'true'
-      uses: ./.github/actions/scan-suite/scans/dependency-review
+      uses: ./.hashira/.github/actions/scan-suite/scans/dependency-review
 
     - name: actionlint
       if: steps.init.outputs.actionlint_enabled == 'true'
-      uses: ./.github/actions/scan-suite/scans/actionlint
+      uses: ./.hashira/.github/actions/scan-suite/scans/actionlint
 
     - name: Summarize
       id: summarize

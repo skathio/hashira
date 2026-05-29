@@ -101,6 +101,13 @@ jobs:
     steps:
       # actions/checkout v4.2.2
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      # D14 self-checkout: composite actions reference library from .hashira/
+      - name: Checkout library into .hashira
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          path: .hashira
+          persist-credentials: false
 
       # actions/setup-node v4.1.0 — coverage-report depends on a `node`
       # binary on PATH for its parser shim. Run setup-node BEFORE invoking
@@ -112,17 +119,17 @@ jobs:
 
       # --- coverage-report smoke against the three fixture files --------
       - name: coverage-report — lcov fixture
-        uses: ./.github/actions/coverage-report
+        uses: ./.hashira/.github/actions/coverage-report
         with:
           coverage_path: tests/fixtures/coverage-samples/lcov.info
           artifact_name: coverage-smoke-lcov
       - name: coverage-report — cobertura fixture
-        uses: ./.github/actions/coverage-report
+        uses: ./.hashira/.github/actions/coverage-report
         with:
           coverage_path: tests/fixtures/coverage-samples/cobertura.xml
           artifact_name: coverage-smoke-cobertura
       - name: coverage-report — opencover fixture
-        uses: ./.github/actions/coverage-report
+        uses: ./.hashira/.github/actions/coverage-report
         with:
           coverage_path: tests/fixtures/coverage-samples/opencover.xml
           artifact_name: coverage-smoke-opencover
@@ -146,7 +153,7 @@ jobs:
       # coverage-report). No re-setup needed for run-tests-js.
       - name: run-tests-js — fixture project
         id: js
-        uses: ./.github/actions/run-tests-js
+        uses: ./.hashira/.github/actions/run-tests-js
         with:
           working_directory: tests/run-tests-js
           # Use plain `npm test` against the fixture's package.json. The
@@ -169,7 +176,7 @@ jobs:
           dotnet-version: '8.0.x'
       - name: run-tests-dotnet — fixture project
         id: dotnet
-        uses: ./.github/actions/run-tests-dotnet
+        uses: ./.hashira/.github/actions/run-tests-dotnet
         with:
           working_directory: tests/run-tests-dotnet
           command: 'dotnet test --collect:"XPlat Code Coverage" --results-directory TestResults'
@@ -212,13 +219,20 @@ jobs:
     steps:
       # actions/checkout v4.2.2
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      # D14 self-checkout: composite actions reference library from .hashira/
+      - name: Checkout library into .hashira
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          path: .hashira
+          persist-credentials: false
       # actions/setup-node v4.1.0 (for visibility-detect shim invocations).
       - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af
         with:
           node-version: '20'
       - name: Run scan-suite with default scan_disable
         id: ss
-        uses: ./.github/actions/scan-suite
+        uses: ./.hashira/.github/actions/scan-suite
       - name: Assert default summary shape
         shell: bash
         env:
@@ -245,13 +259,20 @@ jobs:
     steps:
       # actions/checkout v4.2.2
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      # D14 self-checkout: composite actions reference library from .hashira/
+      - name: Checkout library into .hashira
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          path: .hashira
+          persist-credentials: false
       # actions/setup-node v4.1.0
       - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af
         with:
           node-version: '20'
       - name: Run scan-suite with gitleaks also disabled
         id: ss
-        uses: ./.github/actions/scan-suite
+        uses: ./.hashira/.github/actions/scan-suite
         with:
           scan_disable: 'codeql,actionlint,gitleaks'
       - name: Assert gitleaks is skipped (consumer disabled)
@@ -294,9 +315,16 @@ jobs:
     steps:
       # actions/checkout v4.2.2
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      # D14 self-checkout: composite actions reference library from .hashira/
+      - name: Checkout library into .hashira
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          path: .hashira
+          persist-credentials: false
       - name: Run semantic-release-publish against the dry-run fixture
         id: srp
-        uses: ./.github/actions/semantic-release-publish
+        uses: ./.hashira/.github/actions/semantic-release-publish
         with:
           working_directory: tests/semantic-release-publish/dry-run-fixture
       - name: Assert dry-run produced a sensible summary
@@ -385,6 +413,13 @@ jobs:
     steps:
       # actions/checkout v4.2.2
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      # D14 self-checkout: composite actions reference library from .hashira/
+      - name: Checkout library into .hashira
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          path: .hashira
+          persist-credentials: false
       - name: Seed released-true fixture with a feat commit
         shell: bash
         working-directory: tests/semantic-release-publish/release-true-fixture
@@ -410,7 +445,7 @@ jobs:
           git log --oneline
       - name: Run semantic-release-publish against released-true fixture
         id: srp
-        uses: ./.github/actions/semantic-release-publish
+        uses: ./.hashira/.github/actions/semantic-release-publish
         with:
           working_directory: tests/semantic-release-publish/release-true-fixture
       - name: Assert released=true parsing path is exercised
@@ -467,13 +502,20 @@ jobs:
     steps:
       # actions/checkout v4.2.2
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      # D14 self-checkout: composite actions reference library from .hashira/
+      - name: Checkout library into .hashira
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          path: .hashira
+          persist-credentials: false
       # actions/setup-node v4.1.0
       - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af
         with:
           node-version: '20'
       - name: Run scan-suite with only actionlint disabled (codeql enabled)
         id: ss
-        uses: ./.github/actions/scan-suite
+        uses: ./.hashira/.github/actions/scan-suite
         with:
           scan_disable: 'actionlint'
       - name: Assert codeql skip-with-notice text
@@ -511,6 +553,13 @@ jobs:
     steps:
       # actions/checkout v4.2.2
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      # D14 self-checkout: composite actions reference library from .hashira/
+      - name: Checkout library into .hashira
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          path: .hashira
+          persist-credentials: false
       # actions/setup-node v4.1.0 (the action's MinVer-detect step shells
       # out to `node` against the shim).
       - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af
@@ -524,7 +573,7 @@ jobs:
       # --- minimal fixture (MinVer ref present) -------------------------
       - name: dotnet-pack-version — minimal fixture (MinVer present)
         id: pack_minimal
-        uses: ./.github/actions/dotnet-pack-version
+        uses: ./.hashira/.github/actions/dotnet-pack-version
         with:
           working_directory: tests/dotnet-pack-version/fixtures/minimal
           project_path: Project.csproj
@@ -551,7 +600,7 @@ jobs:
       # workflow command stream rather than depend on a non-zero exit.
       - name: dotnet-pack-version — no-MinVer fixture (warning path)
         id: pack_no_minver
-        uses: ./.github/actions/dotnet-pack-version
+        uses: ./.hashira/.github/actions/dotnet-pack-version
         with:
           working_directory: tests/dotnet-pack-version/fixtures/no-minver
           project_path: Project.csproj
@@ -609,8 +658,15 @@ jobs:
     steps:
       # actions/checkout v4.2.2
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      # D14 self-checkout: composite actions reference library from .hashira/
+      - name: Checkout library into .hashira
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          path: .hashira
+          persist-credentials: false
       - name: nuget-push — dry-run against a fake path
-        uses: ./.github/actions/nuget-push
+        uses: ./.hashira/.github/actions/nuget-push
         with:
           # Path does not need to exist in dry-run mode; the action exits
           # before touching the filesystem.
@@ -679,9 +735,16 @@ jobs:
     steps:
       # actions/checkout v4.2.2
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      # D14 self-checkout: composite actions reference library from .hashira/
+      - name: Checkout library into .hashira
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          path: .hashira
+          persist-credentials: false
       - name: pages-upload — explicit path against tests/pages-fixture
         id: pu
-        uses: ./.github/actions/pages-upload
+        uses: ./.hashira/.github/actions/pages-upload
         with:
           path: tests/pages-fixture
       - name: Assert explicit-path outputs + summary line
@@ -716,6 +779,13 @@ jobs:
     steps:
       # actions/checkout v4.2.2
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      # D14 self-checkout: composite actions reference library from .hashira/
+      - name: Checkout library into .hashira
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          path: .hashira
+          persist-credentials: false
       - name: Stage tests/pages-fixture into a dist/ directory at repo root
         shell: bash
         run: |
@@ -730,7 +800,7 @@ jobs:
           ls -la dist/
       - name: pages-upload — no path input; autodetect should find dist/
         id: pu
-        uses: ./.github/actions/pages-upload
+        uses: ./.hashira/.github/actions/pages-upload
       - name: Assert autodetect resolved to dist/
         shell: bash
         env:
