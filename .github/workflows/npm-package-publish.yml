@@ -96,9 +96,16 @@ on:
         required: false
         type: string
         default: "v1"
+    outputs:
+      released:
+        description: "'true' if semantic-release published a new release this run, 'false' otherwise."
+        value: ${{ jobs.release.outputs.released }}
+      version:
+        description: "Released version (e.g. '1.2.3') when released=='true', else empty."
+        value: ${{ jobs.release.outputs.version }}
     secrets:
       NPM_TOKEN:
-        description: "Optional long-lived npm publish token. If OIDC trusted-publishing is configured on the npm package, leave this unset; semantic-release-publish prefers OIDC when `@semantic-release/npm` >= 11.0.0 (pinned inside the composite action per M1). When BOTH are set, semantic-release's npm plugin precedence applies (OIDC + provenance preferred under `NPM_CONFIG_PROVENANCE=true`)."
+        description: "Optional long-lived npm publish token. When set, semantic-release publishes to npm directly. When unset, set npmPublish:false and expose released/version outputs so the consumer can run npm-oidc-publish composite action in their own job (where workflow_ref matches their npm OIDC trusted publisher config)."
         required: false
 
 # Deny-all baseline; jobs grant the minimum.
@@ -148,6 +155,9 @@ jobs:
       # Release-note PR comment + failure issue by @semantic-release/github.
       pull-requests: write
       issues: write
+    outputs:
+      released: ${{ steps.release.outputs.released }}
+      version: ${{ steps.release.outputs.version }}
     steps:
       # actions/checkout v4.2.2 — consumer's tree at FULL depth (semantic-release
       # walks git history to compute the next version).
@@ -180,39 +190,6 @@ jobs:
           prerelease_branches: ${{ inputs.prerelease_branches }}
           maintenance_branches: ${{ inputs.maintenance_branches }}
           node_version: ${{ inputs.node_version }}
-      # Explicit npm publish step for OIDC trusted publishing.
-      # When NPM_TOKEN is absent, build-releaserc sets npmPublish:false to bypass
-      # @semantic-release/npm@11's verifyConditions token check. The actual publish
-      # is done here instead using npm's native OIDC trusted publishing.
-      # When NPM_TOKEN is set, semantic-release already published above — skip.
-      - name: Setup Node for OIDC npm publish
-        if: ${{ steps.release.outputs.released == 'true' && env.NPM_TOKEN == '' }}
-        # actions/setup-node v4.1.0 — registry-url writes
-        # //registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN} to ~/.npmrc so npm
-        # uses NODE_AUTH_TOKEN (the OIDC JWT) as the Bearer token at publish time.
-        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af
-        with:
-          node-version: ${{ inputs.node_version }}
-          registry-url: 'https://registry.npmjs.org'
-      - name: Publish to npm via OIDC trusted publishing
-        if: ${{ steps.release.outputs.released == 'true' && env.NPM_TOKEN == '' }}
-        shell: bash
-        env:
-          NPM_CONFIG_PROVENANCE: "true"
-        run: |
-          set -euo pipefail
-          # Exchange the GitHub OIDC JWT (audience=npmjs.com) for the auth token.
-          # actions/setup-node wrote //registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}
-          # to ~/.npmrc; npm substitutes NODE_AUTH_TOKEN at publish time, sending the
-          # OIDC JWT as the Bearer token. The npm registry validates it against the
-          # configured OIDC trusted publisher for this repo/workflow/environment.
-          NODE_AUTH_TOKEN="$(curl -sS -f \
-            -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
-            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=npmjs.com" \
-            | jq -r '.value')"
-          export NODE_AUTH_TOKEN
-          npm publish --provenance --access public
-          echo "npm-package-publish: published to npm via OIDC trusted publishing" >> "${GITHUB_STEP_SUMMARY}"
       - name: Summarize release outcome
         shell: bash
         env:
