@@ -148,15 +148,23 @@ secret table. The reusable workflow's `secrets:` block carries the
 machine-readable contract (every secret has a `description:` per the
 D10 contract surface).
 
-Example consumer secret-passing block:
+Example consumer secret-passing — reusable workflows take a `secrets:` map
+(e.g. the NuGet publish flow); the npm **publish** flow is a composite action
+(`npm-release`) called from the consumer's own job, so any fallback `NPM_TOKEN`
+is passed as job/step `env` instead (the action cannot read `secrets.*`). On the
+official npm registry, OIDC trusted publishing needs no token at all:
 
 ```yaml
 jobs:
   publish:
-    uses: skathio/hashira-ops/.github/workflows/npm-package-publish.yml@<sha>
-    secrets:
-      # OIDC obviates NPM_TOKEN; omit when trusted-publisher is configured.
-      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+    # ... environment: production, id-token: write, etc.
+    steps:
+      - uses: actions/checkout@<sha>
+        with: { fetch-depth: 0, persist-credentials: true }
+      - uses: skathio/hashira/.github/actions/npm-release@v1
+        # Only for a non-official registry / no OIDC:
+        # env:
+        #   NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 ```
 
 ## Permissions baseline
@@ -174,7 +182,7 @@ Per-flow grants required at the consumer's caller job:
 | Flow                          | Caller job permissions required |
 |-------------------------------|---------------------------------|
 | `npm-package-ci.yml`          | `contents: read`, `pull-requests: write`, `security-events: write` |
-| `npm-package-publish.yml`     | `contents: write`, `pull-requests: write`, `id-token: write` |
+| npm publish — `npm-release` action (consumer `publish` job) | `contents: write`, `pull-requests: write`, `id-token: write`, `issues: write` |
 | `nuget-package-ci.yml`        | `contents: read`, `pull-requests: write`, `security-events: write` |
 | `nuget-package-publish.yml`   | `contents: write`, `pull-requests: write`, `id-token: write` |
 | `static-webapp-ci.yml`        | `contents: read`, `id-token: write`, `pages: write`, `pull-requests: write`, `security-events: write` |
@@ -293,12 +301,13 @@ publish time. Each flow's `docs/flows/<name>.md` contains the
 registry-specific onboarding steps; this section describes the generic
 narrative.
 
-For npm: the library uses `@semantic-release/npm` >= 11.0.0 (M1
-resolution; pinned inside `actions/semantic-release-publish/`) which
-supports OIDC trusted publishing natively. The publish workflow sets
-`NPM_CONFIG_PROVENANCE=true` so OIDC-published packages carry a signed
-provenance attestation linking them back to the GitHub Actions run.
-Step-by-step onboarding lives in [`flows/npm.md`](./flows/npm.md) §6.
+For npm: the `npm-release` composite action pins `@semantic-release/npm@13`,
+which performs npm OIDC trusted publishing natively (requests the OIDC token,
+exchanges it at the registry, publishes with `NPM_CONFIG_PROVENANCE=true` so the
+package carries a signed provenance attestation). The publish runs in the
+**consumer's own `publish.yml` job** so the OIDC `workflow_ref` matches the
+trusted-publisher config. Step-by-step onboarding lives in
+[`flows/npm.md`](./flows/npm.md) §6.
 
 For NuGet: nuget.org supports trusted-publishing (federated tokens) as a
 preview feature, but `dotnet nuget push` on dotnet SDK 8.0.x does NOT

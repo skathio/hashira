@@ -16,7 +16,7 @@
 # Per NF1 the action.yml stays orchestration-only; version parsing +
 # MinVer-ref detection live in `lib/parse-nupkg-version.js` so the YAML
 # reads as a thin shell wrapper. Same precedent as `coverage-report` and
-# `semantic-release-publish`.
+# `npm-release`.
 #
 # Runtime contract:
 #   The consumer MUST have a `<TargetFramework>` defined in `project_path`
