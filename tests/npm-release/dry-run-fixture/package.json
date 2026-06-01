@@ -1,0 +1,11 @@
+{
+  "name": "hashira-npm-release-dry-run-fixture",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Static fixture for the npm-release dry-run self-CI job. version 0.0.0 + no conventional-commit history → semantic-release reports 'no release this run'. 'private: true' is REQUIRED here (not just defense-in-depth): the npm-release builder always sets npmPublish:true, and @semantic-release/npm verifies npm auth ONLY when npmPublish!==false AND pkg.private!==true (index.js). The dry-run self-CI job grants no id-token/NPM_TOKEN, so private:true is what lets verifyConditions pass without auth. Removing it breaks the job with an opaque auth error.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/skathio/hashira.git"
+  },
+  "license": "MIT"
+}
