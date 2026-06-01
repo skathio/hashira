@@ -1,0 +1,303 @@
+# Composite action: npm-release
+#
+# Runs semantic-release end-to-end (analyze → version → tag → npm publish →
+# GitHub Release) in ONE process, inside the CONSUMER'S OWN job. This is the
+# whole point of the redesign (work item npm-publish-redesign, D1): npm OIDC
+# trusted publishing validates the OIDC token's `workflow_ref` against the
+# trusted-publisher "Workflow filename". A composite action runs in the
+# caller's job context, so `workflow_ref` = the consumer's own workflow file
+# (e.g. publish.yml) — which a reusable workflow could never achieve. The
+# actual publish is therefore performed here, natively, by @semantic-release/npm.
+#
+# Adoption (the entire consumer surface — NF1):
+#
+#   jobs:
+#     publish:
+#       runs-on: ubuntu-latest
+#       environment: production            # single gate, single approval
+#       permissions:
+#         id-token: write                  # npm OIDC token exchange
+#         contents: write                  # semantic-release pushes the version tag
+#         issues: write                    # @semantic-release/github
+#         pull-requests: write             # @semantic-release/github release-note comment
+#       steps:
+#         - uses: actions/checkout@<sha>
+#           with:
+#             fetch-depth: 0               # semantic-release walks full history
+#             persist-credentials: true    # REQUIRED: semantic-release core pushes the
+#                                          # version tag via these git credentials (with
+#                                          # @semantic-release/git dropped per D3, nothing
+#                                          # else provides them). This is checkout's
+#                                          # default, but set it explicitly — a consumer
+#                                          # who hardens with persist-credentials:false
+#                                          # gets a SILENT tag-push failure AFTER publish.
+#         - uses: skathio/hashira/.github/actions/npm-release@v1
+#           with:
+#             node_version: '24'
+#
+# ## Authentication model (D2; verified against @semantic-release/npm@13.1.5 source)
+#
+# On the official registry with `id-token: write` granted, @semantic-release/npm@13
+# performs npm OIDC trusted publishing NATIVELY:
+#   - It requests the GitHub OIDC token with audience `npm:registry.npmjs.org`
+#     and exchanges it at registry.npmjs.org's token-exchange endpoint
+#     (lib/trusted-publishing/*). No NPM_TOKEN is required and NONE is written
+#     to .npmrc (lib/verify-auth.js returns early when OIDC context is
+#     established).
+#   - The publish itself runs `npm publish` via execa with `preferLocal` from
+#     the consumer's working tree (lib/publish.js). It is the **npm CLI on PATH**
+#     that performs the OIDC exchange — so that npm MUST be >= 11.5.1. This is
+#     the load-bearing constraint (plan-review M1): the npm bundled inside the
+#     plugin is NOT the binary that runs. Node 24 (D7) ships npm 11.13.0, which
+#     satisfies it; the floor check below upgrades npm only if it is too old.
+#
+# NF4: this action does NOT pass `registry-url` to actions/setup-node and does
+# NOT write any `_authToken` line. Injecting an auth token would shadow/defeat
+# the plugin's native OIDC path.
+#
+# NF6: For non-OIDC use (custom registry, or OIDC unavailable) the consumer
+# supplies `NPM_TOKEN` as a job/step `env:` — it propagates into this composite
+# action's steps and @semantic-release/npm falls back to token auth. This action
+# does not read `secrets.*` (composite actions have no secrets context).
+#
+# ## Versioning model (D3 — tag-driven, no commit-back)
+#
+# @semantic-release/git and @semantic-release/changelog are intentionally
+# omitted (see lib/build-releaserc.js). semantic-release core pushes the version
+# TAG (not gated by branch protection) and @semantic-release/github creates the
+# Release; package.json / CHANGELOG are NOT committed back to the branch. No
+# `npm version` hack is needed — @semantic-release/npm's prepare step bumps
+# package.json in the job's working tree before publish.
+#
+# ## Trust boundary
+#
+# These inputs are interpolated into bash / setup-node inputs. Treat them as
+# TRUSTED — do NOT derive their values from PR titles, issue bodies, branch
+# names, commit messages, fork-author-controlled tag names, or other externally
+# controlled context; quoting cannot defend the YAML-expansion sink:
+#   - node_version, target, prerelease_branches, maintenance_branches,
+#     working_directory, x_releaserc_overrides
+#
+# ## Pinned toolchain (refreshed for native OIDC — D2/R3)
+#
+# Every bump here is intentional; refresh deliberately and re-run the self-CI
+# dry-run smoke (iter 1.3). There is no lockfile (same accepted supply-chain
+# gap as the retired semantic-release-publish action; trust anchor = npm
+# registry integrity hash at install time):
+#   - semantic-release                          25.0.3
+#   - @semantic-release/commit-analyzer         13.0.1
+#   - @semantic-release/release-notes-generator 14.1.1
+#   - @semantic-release/npm                     13.1.5  (native OIDC; bundles npm 11.x)
+#   - @semantic-release/github                  12.0.8
+#   - Node                                      '24' default (LTS; ships npm 11.13.0)
+#   - npm CLI                                   >= 11.5.1 enforced at runtime (M1);
+#                                               pinned upgrade target npm@11.13.0 when below floor
+#
+# Engine note: semantic-release@25, @semantic-release/npm@13, and
+# @semantic-release/github@12 require Node `^22.14.0 || >= 24.10.0`.
+#
+# ## Dry-run hook
+#
+# Set env `HASHIRA_SEMANTIC_RELEASE_DRY_RUN=1` to add `--dry-run --no-ci`. Used
+# by the library's own self-CI (iter 1.3); consumers must not set it in
+# production — it silently turns publishes into no-ops.
+name: npm-release
+description: >-
+  Run semantic-release (analyze → version → tag → npm publish via native OIDC →
+  GitHub Release) in the consumer's own job. Tag-driven, provenance on, no
+  long-lived secret on the OIDC path. Call from a job in your own publish.yml.
+
+inputs:
+  node_version:
+    description: "Node major to install via actions/setup-node. Default '24' (LTS; ships npm >= 11.5.1 for OIDC). Trusted input."
+    required: false
+    default: "24"
+  target:
+    description: "Registry URL to publish to. Default 'https://registry.npmjs.org'. OIDC trusted publishing engages only for the official registry; other registries fall back to NPM_TOKEN. Trusted input."
+    required: false
+    default: "https://registry.npmjs.org"
+  prerelease_branches:
+    description: "Comma-separated prerelease branch names (e.g. 'next,beta'). Empty by default. Trusted input."
+    required: false
+    default: ""
+  maintenance_branches:
+    description: "Comma-separated maintenance branch names (e.g. '1.x,2.x'). Empty by default. Trusted input."
+    required: false
+    default: ""
+  working_directory:
+    description: "Directory to run semantic-release in. Must contain a package.json. Default '.'. Trusted input."
+    required: false
+    default: "."
+  x_releaserc_overrides:
+    description: "EXPERIMENTAL (x_-prefixed): JSON string of partial .releaserc deep-merged over the generated base. Arrays REPLACE (do not concat). Trusted input."
+    required: false
+    default: ""
+
+outputs:
+  released:
+    description: "'true' if a release was published this run, else 'false'."
+    value: ${{ steps.run.outputs.released }}
+  version:
+    description: "Released version when released=='true', else empty."
+    value: ${{ steps.run.outputs.version }}
+
+runs:
+  using: composite
+  steps:
+    - name: Setup Node
+      # actions/setup-node v4.1.0. NO registry-url: NF4 — we must not write an
+      # _authToken line that would shadow @semantic-release/npm's native OIDC.
+      uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af
+      with:
+        node-version: ${{ inputs.node_version }}
+
+    - name: Verify Node + npm floors (Node >= 22.14, npm >= 11.5.1) — M1
+      shell: bash
+      run: |
+        set -euo pipefail
+        # --- Node engine floor (semantic-release@25 / npm@13 / github@12) ---
+        node_v="$(node --version)"        # e.g. v24.16.0
+        node_v="${node_v#v}"
+        node_major="${node_v%%.*}"
+        node_rest="${node_v#*.}"
+        node_minor="${node_rest%%.*}"
+        if [ "${node_major}" -lt 22 ] || { [ "${node_major}" -eq 22 ] && [ "${node_minor}" -lt 14 ]; }; then
+          echo "::error::npm-release: Node ${node_v} is too old; semantic-release@25 requires Node >= 22.14 (or >= 24.10). Set node_version to '24'." >&2
+          exit 1
+        fi
+        # --- npm floor (LOAD-BEARING for OIDC, M1): the PATH npm performs the
+        # trusted-publishing exchange, so it must be >= 11.5.1. Node 24 already
+        # ships npm 11.13.0; only upgrade if the runner's npm is older. ---
+        npm_v="$(npm --version)"
+        need_upgrade=0
+        npm_major="${npm_v%%.*}"
+        npm_rest="${npm_v#*.}"
+        npm_minor="${npm_rest%%.*}"
+        npm_patch="${npm_rest#*.}"
+        if [ "${npm_major}" -lt 11 ]; then
+          need_upgrade=1
+        elif [ "${npm_major}" -eq 11 ]; then
+          if [ "${npm_minor}" -lt 5 ]; then
+            need_upgrade=1
+          elif [ "${npm_minor}" -eq 5 ] && [ "${npm_patch}" -lt 1 ]; then
+            need_upgrade=1
+          fi
+        fi
+        if [ "${need_upgrade}" -eq 1 ]; then
+          # Pinned upgrade target (NF2) — not npm@latest. This npm becomes the
+          # root of trust for the OIDC publish, so it must be a deliberate pin,
+          # refreshed alongside the toolchain list in the header. Matches the
+          # npm bundled with the default Node 24.
+          echo "npm-release: npm ${npm_v} < 11.5.1 (no OIDC trusted publishing); upgrading to npm@11.13.0"
+          npm install -g npm@11.13.0
+          npm_v="$(npm --version)"
+        fi
+        echo "npm-release: Node ${node_v} (OK), npm ${npm_v} (OK for OIDC trusted publishing)"
+
+    - name: Generate .releaserc from inputs
+      id: build_rc
+      shell: bash
+      env:
+        SR_TARGET: ${{ inputs.target }}
+        SR_PRERELEASE: ${{ inputs.prerelease_branches }}
+        SR_MAINTENANCE: ${{ inputs.maintenance_branches }}
+        SR_OVERRIDES: ${{ inputs.x_releaserc_overrides }}
+      run: |
+        set -euo pipefail
+        rc_path="${RUNNER_TEMP}/.releaserc.json"
+        export RC_PATH="${rc_path}"
+        node -e '
+          const { buildReleaserc } = require(process.env.GITHUB_ACTION_PATH + "/lib/build-releaserc");
+          const rc = buildReleaserc({
+            target: process.env.SR_TARGET,
+            prerelease_branches: process.env.SR_PRERELEASE,
+            maintenance_branches: process.env.SR_MAINTENANCE,
+            x_releaserc_overrides: process.env.SR_OVERRIDES,
+          });
+          require("fs").writeFileSync(process.env.RC_PATH, JSON.stringify(rc, null, 2));
+        '
+        echo "rc_path=${rc_path}" >> "${GITHUB_OUTPUT}"
+        echo "npm-release: generated .releaserc at ${rc_path}"
+
+    - name: Install pinned semantic-release + plugins
+      shell: bash
+      working-directory: ${{ runner.temp }}
+      run: |
+        set -euo pipefail
+        # Install into a throwaway tree under $RUNNER_TEMP so the consumer's
+        # package.json/node_modules at working_directory is untouched.
+        cat > package.json <<'EOF'
+        {
+          "name": "hashira-npm-release-runtime",
+          "private": true,
+          "version": "0.0.0"
+        }
+        EOF
+        npm install --no-audit --no-fund --no-save \
+          semantic-release@25.0.3 \
+          @semantic-release/commit-analyzer@13.0.1 \
+          @semantic-release/release-notes-generator@14.1.1 \
+          @semantic-release/npm@13.1.5 \
+          @semantic-release/github@12.0.8
+
+    - name: Run semantic-release
+      id: run
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      env:
+        RC_PATH: ${{ steps.build_rc.outputs.rc_path }}
+        SR_BIN_DIR: ${{ runner.temp }}/node_modules/.bin
+        # NF5: composite actions have NO `secrets` context. Source the GitHub
+        # token from the github context — required for @semantic-release/github
+        # and for semantic-release's tag push.
+        GITHUB_TOKEN: ${{ github.token }}
+        # R5: provenance attestation (free with OIDC).
+        NPM_CONFIG_PROVENANCE: "true"
+        # NF6: NPM_TOKEN is NOT set here. If the consumer exported it as a
+        # job/step env it propagates into this step automatically and
+        # @semantic-release/npm uses it as the token-auth fallback. On the
+        # official registry with id-token:write, no token is needed (native OIDC).
+      run: |
+        set -euo pipefail
+        if [ ! -f package.json ]; then
+          echo "::error::npm-release: no package.json at '$(pwd)'. Check out the package source at working_directory (and use fetch-depth: 0) before invoking this action." >&2
+          exit 1
+        fi
+        extra_args=""
+        if [ "${HASHIRA_SEMANTIC_RELEASE_DRY_RUN:-0}" = "1" ]; then
+          extra_args="--dry-run --no-ci"
+          echo "npm-release: HASHIRA_SEMANTIC_RELEASE_DRY_RUN=1 -> --dry-run --no-ci"
+        fi
+        log_file="${RUNNER_TEMP}/semantic-release.log"
+        # shellcheck disable=SC2086
+        "${SR_BIN_DIR}/semantic-release" --extends "${RC_PATH}" ${extra_args} 2>&1 | tee "${log_file}"
+        # Parse the log for the published-version line. These strings are NOT a
+        # documented public contract of semantic-release — they are
+        # human-readable log lines. Any deliberate bump of the pinned
+        # semantic-release version MUST re-run the self-CI dry-run smoke and
+        # update these patterns if the wording changed. Outputs are
+        # informational only — no second job consumes them (the publish is
+        # atomic within this action).
+        version=""
+        released="false"
+        if grep -Eq 'Published release [0-9]+\.[0-9]+\.[0-9]+' "${log_file}"; then
+          version="$(grep -Eo 'Published release [0-9]+\.[0-9]+\.[0-9]+' "${log_file}" \
+            | head -n1 | awk '{ print $3 }')"
+          released="true"
+        elif grep -Eq 'The next release version is [0-9]+\.[0-9]+\.[0-9]+' "${log_file}"; then
+          version="$(grep -Eo 'The next release version is [0-9]+\.[0-9]+\.[0-9]+' "${log_file}" \
+            | head -n1 | awk '{ print $6 }')"
+        fi
+        # --dry-run never publishes; force released=false regardless of the log.
+        if [ "${HASHIRA_SEMANTIC_RELEASE_DRY_RUN:-0}" = "1" ]; then
+          released="false"
+        fi
+        echo "released=${released}" >> "${GITHUB_OUTPUT}"
+        echo "version=${version}" >> "${GITHUB_OUTPUT}"
+        if [ "${released}" = "true" ]; then
+          echo "npm-release: published v${version} via OIDC trusted publishing" >> "${GITHUB_STEP_SUMMARY}"
+        elif [ -n "${version}" ]; then
+          echo "npm-release: would release v${version} (dry-run)" >> "${GITHUB_STEP_SUMMARY}"
+        else
+          echo "npm-release: no release this run" >> "${GITHUB_STEP_SUMMARY}"
+        fi
