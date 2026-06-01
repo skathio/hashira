@@ -1,8 +1,9 @@
 # Reusable workflow: npm-package-ci (CI half of the npm flow per D8).
 #
 # Runs lint (with inline non-blocking commitlint warning per D11) + test +
-# scan-suite + coverage-report. No publish step. The Publish half lives in
-# `npm-package-publish.yml`.
+# scan-suite + coverage-report. No publish step. The Publish half is the
+# `npm-release` composite action (`.github/actions/npm-release/`), invoked
+# from the consumer's own publish.yml job (see docs/flows/npm.md).
 #
 # ## Permissions baseline (NF6)
 #
@@ -27,7 +28,7 @@
 # does not block"). The commitlint CLI + config-conventional are pinned
 # inside this workflow's `npx` invocation; see the npm supply-chain trust
 # model documented at the top of
-# `.github/actions/semantic-release-publish/action.yml` — the same trust
+# `.github/actions/npm-release/action.yml` — the same trust
 # gap applies (npm has no SHA-pin equivalent; integrity rests on the
 # registry-side hash verified at install time).
 #
@@ -163,7 +164,7 @@ jobs:
           # Pin commitlint CLI + config-conventional inside the npx
           # invocation. npm has no SHA-pin equivalent; see the npm
           # supply-chain trust model paragraph in
-          # `.github/actions/semantic-release-publish/action.yml`.
+          # `.github/actions/npm-release/action.yml`.
           report="${RUNNER_TEMP}/commitlint-report.txt"
           : > "${report}"
           npx --yes \

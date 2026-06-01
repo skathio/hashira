@@ -274,8 +274,8 @@ require `node_modules` at build time, `build_command` may include
 transitive-dependency lifecycle hooks (postinstall scripts running
 inside the `id-token: write` job) can add `--ignore-scripts` to the
 install step: `npm install --ignore-scripts && npm run build`. This is
-the same defense-in-depth the npm flow's `semantic-release-publish`
-discussion recommends.
+the same defense-in-depth the npm flow's publish path (the `npm-release`
+action) recommends.
 
 ## 8. Common failure modes
 
