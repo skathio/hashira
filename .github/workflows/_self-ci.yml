@@ -22,7 +22,7 @@ jobs:
       contents: read
     steps:
       # actions/checkout v4.2.2
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
       # Pin actionlint by downloading the release binary at a fixed version +
       # verifying the SHA-256 of the archive. Chosen over `rhysd/actionlint@<sha>`
       # so the toolchain has one fewer Marketplace-action pin to refresh; the
@@ -56,7 +56,7 @@ jobs:
       contents: read
     steps:
       # actions/checkout v4.2.2
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
       - name: List composite-action directories (scaffold smoke)
         run: |
           set -euo pipefail
@@ -77,7 +77,7 @@ jobs:
       contents: read
     steps:
       # actions/checkout v4.2.2
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
       # actions/setup-node v4.1.0 — needed only for a recent enough node
       # to have `node --test` (>= 18). Default ubuntu-latest node would
       # also work but pinning makes the matrix explicit.
@@ -100,10 +100,10 @@ jobs:
       pull-requests: write
     steps:
       # actions/checkout v4.2.2
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
       # D14 self-checkout: composite actions reference library from .hashira/
       - name: Checkout library into .hashira
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
           ref: ${{ github.sha }}
           path: .hashira
@@ -196,7 +196,7 @@ jobs:
       contents: read
     steps:
       # actions/checkout v4.2.2
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
       # actions/setup-node v4.1.0
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
         with:
@@ -218,10 +218,10 @@ jobs:
       security-events: write
     steps:
       # actions/checkout v4.2.2
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
       # D14 self-checkout: composite actions reference library from .hashira/
       - name: Checkout library into .hashira
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
           ref: ${{ github.sha }}
           path: .hashira
@@ -258,10 +258,10 @@ jobs:
       security-events: write
     steps:
       # actions/checkout v4.2.2
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
       # D14 self-checkout: composite actions reference library from .hashira/
       - name: Checkout library into .hashira
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
           ref: ${{ github.sha }}
           path: .hashira
@@ -291,7 +291,7 @@ jobs:
       contents: read
     steps:
       # actions/checkout v4.2.2
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
       # actions/setup-node v4.1.0 — Node 24 matches the action's runtime (D7).
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
         with:
@@ -319,10 +319,10 @@ jobs:
       HASHIRA_SEMANTIC_RELEASE_DRY_RUN: '1'
     steps:
       # actions/checkout v4.2.2
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
       # D14 self-checkout: composite actions are referenced from .hashira/.
       - name: Checkout library into .hashira
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
           ref: ${{ github.sha }}
           path: .hashira
@@ -354,7 +354,7 @@ jobs:
       contents: read
     steps:
       # actions/checkout v4.2.2
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
       - name: Verify python3 + pyyaml availability
         shell: bash
         run: |
@@ -379,10 +379,10 @@ jobs:
       HASHIRA_FORCE_PRIVATE_NO_GHAS: '1'
     steps:
       # actions/checkout v4.2.2
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
       # D14 self-checkout: composite actions reference library from .hashira/
       - name: Checkout library into .hashira
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
           ref: ${{ github.sha }}
           path: .hashira
@@ -412,7 +412,7 @@ jobs:
       contents: read
     steps:
       # actions/checkout v4.2.2
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
       # actions/setup-node v4.1.0
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
         with:
@@ -430,10 +430,10 @@ jobs:
       contents: read
     steps:
       # actions/checkout v4.2.2
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
       # D14 self-checkout: composite actions reference library from .hashira/
       - name: Checkout library into .hashira
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
           ref: ${{ github.sha }}
           path: .hashira
@@ -510,7 +510,7 @@ jobs:
       contents: read
     steps:
       # actions/checkout v4.2.2
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
       - name: Verify python3 + pyyaml availability
         shell: bash
         run: |
@@ -534,10 +534,10 @@ jobs:
       HASHIRA_NUGET_PUSH_DRY_RUN: '1'
     steps:
       # actions/checkout v4.2.2
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
       # D14 self-checkout: composite actions reference library from .hashira/
       - name: Checkout library into .hashira
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
           ref: ${{ github.sha }}
           path: .hashira
@@ -562,7 +562,7 @@ jobs:
       contents: read
     steps:
       # actions/checkout v4.2.2
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
       - name: Verify python3 + pyyaml availability
         shell: bash
         run: |
@@ -581,7 +581,7 @@ jobs:
       contents: read
     steps:
       # actions/checkout v4.2.2
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
       - name: Verify python3 + pyyaml availability
         shell: bash
         run: |
@@ -611,10 +611,10 @@ jobs:
       HASHIRA_PAGES_UPLOAD_DRY_RUN: '1'
     steps:
       # actions/checkout v4.2.2
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
       # D14 self-checkout: composite actions reference library from .hashira/
       - name: Checkout library into .hashira
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
           ref: ${{ github.sha }}
           path: .hashira
@@ -652,10 +652,10 @@ jobs:
       HASHIRA_PAGES_UPLOAD_DRY_RUN: '1'
     steps:
       # actions/checkout v4.2.2
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
       # D14 self-checkout: composite actions reference library from .hashira/
       - name: Checkout library into .hashira
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
           ref: ${{ github.sha }}
           path: .hashira
@@ -707,7 +707,7 @@ jobs:
       contents: read
     steps:
       # actions/checkout v4.2.2
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
       - name: Verify python3 + pyyaml availability
         shell: bash
         run: |
@@ -731,7 +731,7 @@ jobs:
       contents: read
     steps:
       # actions/checkout v4.2.2
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
       - name: Verify python3 + pyyaml availability
         shell: bash
         run: |
@@ -750,7 +750,7 @@ jobs:
       contents: read
     steps:
       # actions/checkout v4.2.2
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
       - name: Verify python3 + pyyaml availability
         shell: bash
         run: |
@@ -769,7 +769,7 @@ jobs:
       contents: read
     steps:
       # actions/checkout v4.2.2
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
       - name: Verify python3 + pyyaml availability
         shell: bash
         run: |
@@ -788,7 +788,7 @@ jobs:
       contents: read
     steps:
       # actions/checkout v4.2.2
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
       - name: Verify python3 + pyyaml availability
         shell: bash
         run: |
