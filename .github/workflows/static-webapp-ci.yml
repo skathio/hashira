@@ -161,7 +161,7 @@ jobs:
       # persist-credentials:false per iter-4.2 review Minor #2 (defense-in-depth:
       # build_command / test_command run in these jobs and the default git
       # credential could be exfiltrated if the trust contract is violated).
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
           persist-credentials: false
       # actions/setup-node v4.1.0
@@ -202,7 +202,7 @@ jobs:
       # persist-credentials:false per iter-4.2 review Minor #2 (defense-in-depth:
       # build_command / test_command run in these jobs and the default git
       # credential could be exfiltrated if the trust contract is violated).
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
           persist-credentials: false
       # actions/setup-node v4.1.0
@@ -212,7 +212,7 @@ jobs:
       # Library self-checkout per D14 (persist-credentials:false per iter-2.3 m4).
       - name: Checkout hashira-ops library (D14)
         # actions/checkout v4.2.2
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
           repository: skathio/hashira-ops
           ref: ${{ inputs.library_ref }}
@@ -252,7 +252,7 @@ jobs:
       # persist-credentials:false per iter-4.2 review Minor #2 (defense-in-depth:
       # build_command / test_command run in these jobs and the default git
       # credential could be exfiltrated if the trust contract is violated).
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
           persist-credentials: false
       # actions/setup-node v4.1.0
@@ -262,7 +262,7 @@ jobs:
       # Library self-checkout per D14.
       - name: Checkout hashira-ops library (D14)
         # actions/checkout v4.2.2
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
           repository: skathio/hashira-ops
           ref: ${{ inputs.library_ref }}
@@ -291,7 +291,7 @@ jobs:
       # persist-credentials:false per iter-4.2 review Minor #2 (defense-in-depth:
       # build_command / test_command run in these jobs and the default git
       # credential could be exfiltrated if the trust contract is violated).
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
           persist-credentials: false
       # actions/setup-node v4.1.0 — visibility-detect shim runs via `node`.
@@ -301,7 +301,7 @@ jobs:
       # Library self-checkout per D14.
       - name: Checkout hashira-ops library (D14)
         # actions/checkout v4.2.2
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
           repository: skathio/hashira-ops
           ref: ${{ inputs.library_ref }}
@@ -324,7 +324,7 @@ jobs:
       # persist-credentials:false per iter-4.2 review Minor #2 (defense-in-depth:
       # build_command / test_command run in these jobs and the default git
       # credential could be exfiltrated if the trust contract is violated).
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
           persist-credentials: false
       # actions/setup-node v4.1.0 — coverage-report's parser shim needs node.
@@ -334,7 +334,7 @@ jobs:
       # Library self-checkout per D14.
       - name: Checkout hashira-ops library (D14)
         # actions/checkout v4.2.2
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
           repository: skathio/hashira-ops
           ref: ${{ inputs.library_ref }}
