@@ -82,7 +82,10 @@ runs:
     # trusted-publishing policy is scoped to. Skipped entirely when an API
     # key is provided.
     - name: NuGet trusted-publishing login (OIDC)
-      if: ${{ inputs.api_key == '' }}
+      # OIDC path only (no api_key), and never during the dry-run smoke test
+      # (HASHIRA_NUGET_PUSH_DRY_RUN=1) — there is no real OIDC token or user
+      # there, so a login attempt would fail before the dry-run short-circuit.
+      if: ${{ inputs.api_key == '' && env.HASHIRA_NUGET_PUSH_DRY_RUN != '1' }}
       id: nuget_login
       # NuGet/login v1.2.0
       uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841
