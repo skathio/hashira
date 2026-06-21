@@ -42,6 +42,7 @@ DOCUMENTED_INPUTS = [
     "version_increment",
     "environment_name",
     "library_ref",
+    "nuget_user",
 ]
 
 DOCUMENTED_SECRETS = ["NUGET_API_KEY"]

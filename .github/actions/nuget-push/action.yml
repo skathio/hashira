@@ -3,13 +3,13 @@
 # Pushes a `.nupkg` to a NuGet feed (default `https://api.nuget.org/v3/index.json`,
 # per D10b unified `target`). Supports two auth shapes:
 #   - API key (long-lived, passed via `api_key` input → `NUGET_API_KEY` env)
-#   - OIDC / federated tokens (api_key empty → no `--api-key` flag).
-#     Note: NuGet's OIDC story is fiddlier than npm's — the feed must be
-#     configured for federated trust against this repo. Documented in
-#     `docs/flows/nuget.md` (iter 3.3); for now we emit a clear notice
-#     when the OIDC path is selected so a misconfigured feed produces a
-#     visible signal rather than a silent "could not authenticate" error
-#     buried in dotnet logs.
+#   - OIDC trusted publishing (api_key empty): the `NuGet/login` action
+#     exchanges the GitHub OIDC token for a short-lived nuget.org API key,
+#     which is then handed to `dotnet nuget push --api-key`. Requires the
+#     calling JOB to grant `id-token: write`, the `nuget_user` input set to
+#     the nuget.org account that owns the policy, and a trusted-publishing
+#     policy on nuget.org matching this repo/workflow/environment. See
+#     `docs/flows/nuget.md` §7.
 #
 # Per NF1 the action stays under the ~80-line soft cap (no JS shim
 # needed — logic is push + dry-run hook + summary).
@@ -57,7 +57,11 @@ inputs:
     required: false
     default: "https://api.nuget.org/v3/index.json"
   api_key:
-    description: "NuGet API key. Pass via `secrets:` block. Empty = OIDC/federated auth path. Trusted input (secret)."
+    description: "NuGet API key. Pass via `secrets:` block. Empty selects the OIDC trusted-publishing path (NuGet/login). Trusted input (secret)."
+    required: false
+    default: ""
+  nuget_user:
+    description: "nuget.org username that owns the trusted-publishing policy. Used only on the OIDC path (api_key empty) as the `NuGet/login` user. Trusted input."
     required: false
     default: ""
   skip_duplicate:
@@ -72,6 +76,21 @@ inputs:
 runs:
   using: composite
   steps:
+    # OIDC trusted publishing: with no API key supplied, exchange the GitHub
+    # OIDC token for a short-lived nuget.org key. Requires the calling JOB to
+    # grant `id-token: write` and run in the Environment the nuget.org
+    # trusted-publishing policy is scoped to. Skipped entirely when an API
+    # key is provided.
+    - name: NuGet trusted-publishing login (OIDC)
+      # OIDC path only (no api_key), and never during the dry-run smoke test
+      # (HASHIRA_NUGET_PUSH_DRY_RUN=1) — there is no real OIDC token or user
+      # there, so a login attempt would fail before the dry-run short-circuit.
+      if: ${{ inputs.api_key == '' && env.HASHIRA_NUGET_PUSH_DRY_RUN != '1' }}
+      id: nuget_login
+      # NuGet/login v1.2.0
+      uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841
+      with:
+        user: ${{ inputs.nuget_user }}
     - name: Push to NuGet feed
       shell: bash
       working-directory: ${{ inputs.working_directory }}
@@ -96,7 +115,9 @@ runs:
         # so the argv exposure is bounded; on self-hosted multi-tenant
         # runners consumers should consider a credential-provider plugin
         # instead. See iter-3.1 review Minor #1 trade-off note.
-        NUGET_API_KEY: ${{ inputs.api_key }}
+        # The API key when provided; otherwise the short-lived key minted by
+        # the NuGet/login step above (OIDC trusted publishing).
+        NUGET_API_KEY: ${{ inputs.api_key != '' && inputs.api_key || steps.nuget_login.outputs.NUGET_API_KEY }}
         NP_SKIP_DUP: ${{ inputs.skip_duplicate }}
       run: |
         set -euo pipefail
@@ -115,14 +136,13 @@ runs:
         if [ -n "${NUGET_API_KEY}" ]; then
           push_args+=( --api-key "${NUGET_API_KEY}" )
         else
-          # iter-3.1 review Minor #3: `dotnet nuget push` does NOT
-          # auto-exchange OIDC tokens for NuGet feed credentials.
-          # Consumers must either (a) wire a federated-token →
-          # short-lived API key exchange externally (see docs/flows/
-          # nuget.md once iter 3.3 lands), or (b) configure a NuGet
-          # credential provider that performs the exchange. Without one
-          # of those, this push will fail authentication.
-          echo "::notice::nuget-push: API key not provided. dotnet nuget push does NOT auto-exchange OIDC tokens; consumer must wire a federated-token -> short-lived API key exchange externally OR configure a credential provider (see docs/flows/nuget.md §6 once iter 3.3 lands)."
+          # Reached only when api_key is empty AND the OIDC NuGet/login step
+          # produced no key (e.g. nuget_user empty, the job lacked
+          # `id-token: write`, or no trusted-publishing policy matched). Fail
+          # fast with guidance rather than letting dotnet emit an opaque auth
+          # error.
+          echo "::error::nuget-push: no credential available. Provide 'api_key', OR set 'nuget_user' and grant the job 'id-token: write' with a matching nuget.org trusted-publishing policy (see docs/flows/nuget.md §7)." >&2
+          exit 1
         fi
         if [ "${NP_SKIP_DUP}" = "true" ]; then
           push_args+=( --skip-duplicate )
