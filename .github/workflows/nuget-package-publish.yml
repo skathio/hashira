@@ -203,7 +203,7 @@ jobs:
     steps:
       # actions/checkout v4.2.2 — consumer's tree at FULL depth (MinVer
       # walks git history + tags to compute the next version).
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
           fetch-depth: 0
           # Persist credentials so `gh release create` can authenticate
@@ -212,7 +212,7 @@ jobs:
       # Library self-checkout per D14 (persist-credentials:false per iter-2.3 m4).
       - name: Checkout hashira-ops library (D14)
         # actions/checkout v4.2.2
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
           repository: skathio/hashira-ops
           ref: ${{ inputs.library_ref }}
