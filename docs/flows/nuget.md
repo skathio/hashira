@@ -74,7 +74,7 @@ jobs:
     # MUST pin to a SHA — see §11.
     uses: skathio/hashira-ops/.github/workflows/nuget-package-publish.yml@<40-char-sha>
     permissions:
-      id-token: write     # for any OIDC scenarios you wire externally
+      id-token: write     # required for OIDC trusted publishing (NuGet/login)
       contents: write     # gh release create tags + creates the GitHub Release
       pull-requests: write # gh release create --generate-notes may post on linked PRs
     with:
@@ -85,11 +85,13 @@ jobs:
       # prerelease_identifier: 'alpha'
       # version_increment: 'minor'   # one of: minor, major, '' (patch — default)
       library_ref: '<40-char-sha>'  # MUST be the SAME SHA as @<…> above.
+      # OIDC trusted publishing (recommended): set nuget_user to your
+      # nuget.org username and DO NOT pass the NUGET_API_KEY secret below.
+      nuget_user: 'your-nuget-username'
     secrets:
-      # NUGET_API_KEY is REQUIRED for nuget.org unless you've wired an
-      # external federated-token -> short-lived API key conversion before
-      # this workflow runs (see §7). dotnet nuget push does NOT
-      # auto-exchange OIDC tokens.
+      # Pick ONE auth path:
+      #  - OIDC trusted publishing (above): omit this secret entirely.
+      #  - API key: pass it here and leave `nuget_user` unset.
       NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
 ```
 
@@ -148,12 +150,13 @@ Every input across both `nuget-package-ci.yml` and
 | `version_increment`    | string | `""`                                     | MinVer auto-increment hint. One of `minor`, `major`, or empty (patch — MinVer default). **Trusted input**. |
 | `environment_name`     | string | `"production"`                           | Name of the GitHub Environment to gate the pack-and-push job on (D13). Must have >=1 required reviewer for the gate to be effective. **Trusted input**. |
 | `library_ref`          | string | `"main"`                                 | SHA, tag, or branch of `skathio/hashira-ops` checked out into `.hashira/` (D14). **PIN TO A SHA** for reproducible builds. |
+| `nuget_user`           | string | `""`                                     | nuget.org username that owns the trusted-publishing policy. Set this (and leave `NUGET_API_KEY` unset) to publish via OIDC trusted publishing — `nuget-push` runs `NuGet/login` to mint a short-lived key. Empty = API-key path. **Trusted input**. See §7. |
 
 ## 5. Secret table
 
 | Secret          | Required                                | Workflow                    | Purpose | OIDC obviates? |
 |-----------------|-----------------------------------------|-----------------------------|---------|----------------|
-| `NUGET_API_KEY` | yes (unless external OIDC wiring; see §7) | `nuget-package-publish.yml` | API key for `dotnet nuget push`. | Partially. `dotnet nuget push` does NOT auto-exchange OIDC tokens on dotnet 8.0.x; consumers wanting OIDC must wire a federated-token -> short-lived API key conversion **externally** before this workflow runs (see §7). Without that, `NUGET_API_KEY` is required. |
+| `NUGET_API_KEY` | only on the API-key path — omit it to use OIDC (see §7) | `nuget-package-publish.yml` | API key for `dotnet nuget push`. | Yes. Set the `nuget_user` input and leave this secret unset: `nuget-push` runs `NuGet/login` to mint a short-lived key from the job's OIDC token (see §7). |
 
 CI half has no required secrets (the workflow inherits the caller's
 `GITHUB_TOKEN` only).
@@ -187,12 +190,11 @@ workflows to function. Granting more at workflow level inflates the
 
 > **Inferred from NuGet documentation — confirm with first real adoption.**
 
-Federated-token publishing eliminates long-lived `NUGET_API_KEY` secrets
-by trading a short-lived GitHub OIDC token for a NuGet feed credential.
-nuget.org introduced trusted-publishing as a preview feature; the steps
-below follow that flow. As of writing, `dotnet nuget push` on dotnet
-SDK 8.0.x does NOT auto-exchange the OIDC token — consumers must wire
-the exchange themselves before the push step.
+Trusted publishing eliminates long-lived `NUGET_API_KEY` secrets by trading
+a short-lived GitHub OIDC token for a nuget.org credential. `dotnet nuget
+push` does not exchange the OIDC token itself, so the `nuget-push` action
+runs the official `NuGet/login` action to mint the short-lived key — you do
+NOT need a caller-side exchange step (see §7.2).
 
 ### 7.1 nuget.org trusted-publisher setup (one-time)
 
@@ -206,69 +208,33 @@ the exchange themselves before the push step.
    - **Workflow file**: `publish.yml` (matches the file you created in §2)
    - **Environment** (optional but recommended): `production` (matches
      the `environment_name` input from §2)
-5. Save the trusted-publisher configuration. nuget.org returns a
-   **Trusted Publisher ID** — record it; you reference it from the
-   federated-token exchange step below.
+5. Save the trusted-publisher configuration. `NuGet/login` matches the
+   policy automatically by repository / workflow / environment — there is
+   no publisher ID to copy into the workflow.
 
-### 7.2 Federated-token exchange (in your publish workflow)
+### 7.2 Built-in OIDC trusted publishing (recommended)
 
-Because `dotnet nuget push` does not auto-exchange OIDC tokens on
-dotnet 8.0.x, you wire the exchange as a **caller-side step that runs
-before invoking `nuget-package-publish.yml`** — OR you skip federation
-entirely and use the API-key fallback (§7.3, recommended for v1).
+`nuget-package-publish.yml` has first-class OIDC support — **no caller-side
+exchange step**. The `nuget-push` action runs the official `NuGet/login`
+action, which trades the job's GitHub OIDC token for a short-lived nuget.org
+API key scoped to the policy from §7.1, then hands it to `dotnet nuget push`.
 
-A caller-side exchange step looks like:
+In your `publish.yml` caller (§2):
 
-```yaml
-# .github/workflows/publish.yml (consumer side, with federation)
-jobs:
-  exchange:
-    runs-on: ubuntu-latest
-    permissions:
-      id-token: write
-      contents: read
-    outputs:
-      api_key: ${{ steps.x.outputs.api_key }}
-    steps:
-      - name: Exchange GitHub OIDC token for short-lived NuGet API key
-        id: x
-        env:
-          NUGET_TRUSTED_PUBLISHER_ID: '<id-from-7.1>'
-        run: |
-          # Reach the GitHub OIDC endpoint for an ID token bound to the
-          # nuget.org audience, then POST it to nuget.org's federation
-          # endpoint. (Exact endpoint URLs evolve; consult nuget.org
-          # docs at adoption time.)
-          # Output: a short-lived API key the publish workflow consumes.
-          ...
-          echo "api_key=<short-lived-key>" >> "${GITHUB_OUTPUT}"
-  publish:
-    needs: exchange
-    uses: skathio/hashira-ops/.github/workflows/nuget-package-publish.yml@<40-char-sha>
-    permissions:
-      id-token: write
-      contents: write
-      pull-requests: write
-    with:
-      project_path: 'src/MyLib/MyLib.csproj'
-      environment_name: 'production'
-      library_ref: '<40-char-sha>'
-    secrets:
-      NUGET_API_KEY: ${{ needs.exchange.outputs.api_key }}
-```
+1. Grant the `publish` job `id-token: write` (already in the §2 template).
+2. Pass `nuget_user: '<your-nuget.org-username>'` in `with:`.
+3. Do **not** pass the `NUGET_API_KEY` secret.
+4. Keep `environment_name: 'production'` matching the Environment in your
+   trusted-publishing policy (§7.1).
 
-> **Inferred shape — confirm with first real adoption.** The exact NuGet
-> federation endpoint contract is documented on nuget.org. The library's
-> contract is unchanged regardless of whether the API key is long-lived
-> (from `secrets.NUGET_API_KEY`) or short-lived (from a caller-side
-> exchange step) — `nuget-package-publish.yml` consumes whatever you pass
-> as the secret value.
+Every release mints a fresh key from OIDC — there is no long-lived secret to
+store or rotate. (If `NUGET_API_KEY` is set it takes precedence and the OIDC
+path is skipped, so set exactly one.)
 
-### 7.3 API-key fallback path (recommended for v1)
+### 7.3 API-key alternative
 
-Federation is fiddlier than npm's trusted-publishing on the NuGet side
-(verified vs inferred status differs across feeds; tooling support
-varies). For v1 of this library we recommend the API-key path:
+If you prefer a long-lived key, or your nuget.org tenant can't use trusted
+publishing yet, skip §7.2 and use an API key instead:
 
 1. Sign in to <https://www.nuget.org>.
 2. Open **Account** → **API Keys** → **Create**.
@@ -278,12 +244,11 @@ varies). For v1 of this library we recommend the API-key path:
    once.
 5. In your package repo, open **Settings** → **Environments** →
    **production** → **Secrets** → **Add secret**. Name it
-   `NUGET_API_KEY`; paste the value.
+   `NUGET_API_KEY`; paste the value. Leave `nuget_user` unset.
 6. Rotate the key on schedule (Dependabot does not rotate NuGet API
    keys; this is on your calendar).
 
-Use this if federation is too brittle on your tenant. The library's
-contract is identical either way.
+The library's contract is identical either way.
 
 ## 8. `production` Environment setup checklist
 

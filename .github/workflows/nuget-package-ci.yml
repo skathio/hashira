@@ -1,8 +1,12 @@
 # Reusable workflow: nuget-package-ci (CI half of the NuGet flow per D8).
 #
 # Runs restore-build → test (in series; tests consume build outputs) plus
-# scan-suite in parallel, then coverage-report. No pack or push. The
-# Publish half lives in `nuget-package-publish.yml` (iteration 3.3).
+# scan-suite in parallel. Coverage is reported INSIDE the test job: the
+# cobertura file run-tests-dotnet standardizes only exists in the test
+# job's workspace, and a previous separate `coverage-report` job ran on a
+# fresh runner with no artifact handoff, so it always failed "file not
+# found". No pack or push. The Publish half lives in
+# `nuget-package-publish.yml` (iteration 3.3).
 #
 # ## Permissions baseline (NF6)
 #
@@ -10,10 +14,10 @@
 # minimum it needs:
 #   - setup          : contents:read
 #   - restore-build  : contents:read
-#   - test           : contents:read
+#   - test           : contents:read, pull-requests:write (coverage runs
+#                      here now and posts the sticky comment — see below)
 #   - scan-suite     : contents:read, security-events:write (CodeQL),
 #                      pull-requests:read (dependency-review on PR)
-#   - coverage-report: contents:read, pull-requests:write (sticky comment)
 #
 # Reusable workflows can only NARROW the caller's grants, never broaden.
 # Consumers must mirror this matrix at their caller job's `permissions:`
@@ -189,6 +193,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      # coverage-report (run as the last step of this job) posts a sticky PR
+      # comment via actions/github-script on pull_request events.
+      pull-requests: write
     steps:
       # actions/checkout v4.2.2 — consumer's tree.
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
@@ -224,6 +231,20 @@ jobs:
           command: ${{ inputs.test_filter == '' && format('dotnet test ''{0}'' --configuration Release --collect:"XPlat Code Coverage" --results-directory TestResults', inputs.project_path) || format('dotnet test ''{0}'' --configuration Release --filter ''{1}'' --collect:"XPlat Code Coverage" --results-directory TestResults', inputs.project_path, inputs.test_filter) }}
           coverage_path: ${{ inputs.coverage_path }}
           results_directory: TestResults
+      # actions/setup-node v4.1.0 — coverage-report's parser shim needs a
+      # `node` binary on PATH. ubuntu-latest ships one, but pin it explicitly
+      # so the dependency is visible (mirrors _self-ci.yml's actions-smoke job).
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: '20'
+      # Report coverage IN THIS JOB: run-tests-dotnet just standardized the
+      # cobertura file at `coverage_path` in this workspace, so it is present
+      # here. (The former separate coverage-report job ran on a fresh runner
+      # with no artifact handoff and always failed "file not found".)
+      - name: Report coverage
+        uses: ./.hashira/.github/actions/coverage-report
+        with:
+          coverage_path: ${{ inputs.coverage_path }}
 
   scan-suite:
     name: scan-suite
@@ -254,27 +275,3 @@ jobs:
         uses: ./.hashira/.github/actions/scan-suite
         with:
           scan_disable: ${{ inputs.scan_disable }}
-
-  coverage-report:
-    name: coverage-report
-    needs: [restore-build, test, scan-suite]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: write
-    steps:
-      # actions/checkout v4.2.2 — consumer's tree.
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
-      # Library self-checkout per D14.
-      - name: Checkout hashira-ops library (D14)
-        # actions/checkout v4.2.2
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
-        with:
-          repository: skathio/hashira-ops
-          ref: ${{ inputs.library_ref }}
-          path: .hashira
-          persist-credentials: false
-      - name: Report coverage
-        uses: ./.hashira/.github/actions/coverage-report
-        with:
-          coverage_path: ${{ inputs.coverage_path }}

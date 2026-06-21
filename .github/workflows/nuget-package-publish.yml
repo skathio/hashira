@@ -36,6 +36,7 @@
 #   - version_increment      (passed to MinVer via env)
 #   - environment_name       (GitHub Environment to gate on)
 #   - library_ref            (D14 SHA/tag/branch of hashira-ops)
+#   - nuget_user             (nuget.org user for OIDC trusted publishing)
 # Plus one secret:
 #   - NUGET_API_KEY          (optional; see below)
 # See `docs/usage.md` for the full trust model.
@@ -68,13 +69,17 @@
 #
 # ## API key vs OIDC trust model
 #
-# `dotnet nuget push` does NOT auto-exchange OIDC tokens for NuGet feed
-# credentials on dotnet SDK 8.0.x (verified against Microsoft's published
-# `dotnet nuget push` reference; only `-k|--api-key` accepts the
-# credential). Consumers wanting OIDC must wire a federated-token ->
-# short-lived API key conversion externally before invoking this workflow
-# (see `docs/flows/nuget.md` §7). Without that, this workflow needs
-# `NUGET_API_KEY`.
+# Two auth paths, selected by whether `NUGET_API_KEY` is set:
+#   - API key: set the `NUGET_API_KEY` secret. Passed straight to
+#     `dotnet nuget push --api-key`.
+#   - OIDC trusted publishing: leave `NUGET_API_KEY` unset and pass
+#     `nuget_user` (your nuget.org username). The `nuget-push` action runs
+#     `NuGet/login` to exchange this job's OIDC token (granted via the
+#     pack-and-push `id-token: write` below) for a short-lived key, scoped
+#     to the trusted-publishing policy you configure on nuget.org for this
+#     repo/workflow/environment. `dotnet nuget push` still authenticates
+#     with `--api-key` — the difference is the key is minted per-run from
+#     OIDC instead of being a long-lived secret. See `docs/flows/nuget.md` §7.
 #
 # API-key supply-chain trust model: same gap as npm — the NuGet ecosystem
 # has no SHA-pin equivalent for the feed itself; integrity is anchored on
@@ -121,9 +126,14 @@ on:
         required: false
         type: string
         default: "v1"
+      nuget_user:
+        description: "nuget.org username that owns the trusted-publishing policy. Set this (and leave NUGET_API_KEY unset) to publish via OIDC trusted publishing instead of an API key. Empty = API-key path. Trusted input."
+        required: false
+        type: string
+        default: ""
     secrets:
       NUGET_API_KEY:
-        description: "NuGet feed API key. Optional in principle (an OIDC/federated-token path is supported by the composite action), but `dotnet nuget push` does NOT auto-exchange OIDC tokens on dotnet 8.0.x — consumers wanting OIDC must wire a federated-token -> short-lived API key conversion externally (see docs/flows/nuget.md §7). For nuget.org without external OIDC wiring, this secret IS required."
+        description: "NuGet feed API key. Leave unset to use OIDC trusted publishing instead — set the `nuget_user` input and configure a nuget.org trusted-publishing policy; the nuget-push action mints a short-lived key via NuGet/login (see docs/flows/nuget.md §7). Required only when NOT using the OIDC path."
         required: false
 
 # Deny-all baseline; jobs grant the minimum.
@@ -225,6 +235,7 @@ jobs:
           nupkg_path: ${{ steps.pack.outputs.nupkg_path }}
           target: ${{ inputs.target }}
           api_key: ${{ secrets.NUGET_API_KEY }}
+          nuget_user: ${{ inputs.nuget_user }}
       - name: Tag release (idempotent; D4 release-creates-the-tag)
         shell: bash
         env:
