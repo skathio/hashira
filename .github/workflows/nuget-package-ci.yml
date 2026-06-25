@@ -140,7 +140,7 @@ jobs:
       contents: read
     steps:
       # actions/checkout v4.2.2 — consumer's tree.
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
       # actions/setup-dotnet v4.1.0
       - uses: actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2
         with:
@@ -162,7 +162,7 @@ jobs:
       contents: read
     steps:
       # actions/checkout v4.2.2 — consumer's tree.
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
       # actions/setup-dotnet v4.1.0
       - uses: actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2
         with:
@@ -198,7 +198,7 @@ jobs:
       pull-requests: write
     steps:
       # actions/checkout v4.2.2 — consumer's tree.
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
       # actions/setup-dotnet v4.1.0
       - uses: actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2
         with:
@@ -206,7 +206,7 @@ jobs:
       # Library self-checkout per D14 (persist-credentials:false per iter-2.3 m4).
       - name: Checkout hashira-ops library (D14)
         # actions/checkout v4.2.2
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           repository: skathio/hashira-ops
           ref: ${{ inputs.library_ref }}
@@ -261,11 +261,11 @@ jobs:
       pull-requests: read
     steps:
       # actions/checkout v4.2.2 — consumer's tree.
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
       # Library self-checkout per D14.
       - name: Checkout hashira-ops library (D14)
         # actions/checkout v4.2.2
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           repository: skathio/hashira-ops
           ref: ${{ inputs.library_ref }}
@@ -285,11 +285,11 @@ jobs:
       pull-requests: write
     steps:
       # actions/checkout v4.2.2 — consumer's tree.
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
       # Library self-checkout per D14.
       - name: Checkout hashira-ops library (D14)
         # actions/checkout v4.2.2
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           repository: skathio/hashira-ops
           ref: ${{ inputs.library_ref }}
