@@ -95,7 +95,7 @@
 # Same constraint and resolution as the other reusable workflows in this
 # library: GitHub's `uses:` keyword does NOT permit expressions in the
 # `@<ref>` portion (workflow-load-time parse). Every job that consumes
-# an in-repo composite action first checks out `skathio/hashira-ops` at
+# an in-repo composite action first checks out `skathio/hashira` at
 # `${{ inputs.library_ref }}` into the reserved subdirectory `.hashira/`
 # with `persist-credentials: false` (iter-2.3 security review m4). The
 # composite-action `uses:` refs are then literal local paths
@@ -103,8 +103,13 @@
 # the load-time parser). The `library_ref` is substituted at runtime
 # through `actions/checkout`'s `ref:` input.
 #
-# Consumers pin `library_ref` to a SHA for reproducibility. Default is
-# `main` for convenience; production consumers SHOULD pin to a SHA.
+# `library_ref` is a REQUIRED input (no default) as of v2 phase 1
+# iteration 1.1 — see decisions.md D9 / phases/01-naming-unification.md.
+# v1's default ('v1', with a stale comment claiming 'main') was a
+# consumer-visible contract mismatch; rather than pick a new default to
+# defend, every caller must now pin explicitly. This is a
+# breaking-contract change for any v1 caller relying on the implicit
+# default; callers MUST pass `library_ref` explicitly going forward.
 
 name: static-webapp-ci
 
@@ -142,10 +147,9 @@ on:
         type: string
         default: "codeql,actionlint"
       library_ref:
-        description: "SHA, tag, or branch of skathio/hashira-ops to check out for in-repo composite actions (D14). Default 'v1'. PIN TO A SHA for reproducible consumer builds."
-        required: false
+        description: "SHA, tag, or branch of skathio/hashira to check out for in-repo composite actions (D14). REQUIRED — no default (v2 phase 1 iteration 1.1). PIN TO A SHA for reproducible consumer builds."
+        required: true
         type: string
-        default: "v1"
 
 # Deny-all baseline; jobs grant the minimum.
 permissions: {}
@@ -214,7 +218,7 @@ jobs:
         # actions/checkout v4.2.2
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
-          repository: skathio/hashira-ops
+          repository: skathio/hashira
           ref: ${{ inputs.library_ref }}
           path: .hashira
           persist-credentials: false
@@ -264,7 +268,7 @@ jobs:
         # actions/checkout v4.2.2
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
-          repository: skathio/hashira-ops
+          repository: skathio/hashira
           ref: ${{ inputs.library_ref }}
           path: .hashira
           persist-credentials: false
@@ -303,7 +307,7 @@ jobs:
         # actions/checkout v4.2.2
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
-          repository: skathio/hashira-ops
+          repository: skathio/hashira
           ref: ${{ inputs.library_ref }}
           path: .hashira
           persist-credentials: false
@@ -336,7 +340,7 @@ jobs:
         # actions/checkout v4.2.2
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
-          repository: skathio/hashira-ops
+          repository: skathio/hashira
           ref: ${{ inputs.library_ref }}
           path: .hashira
           persist-credentials: false
