@@ -26,6 +26,24 @@ dry-run hook against a fake `.nupkg` path in the self-CI smoke).
   `<Version>0.0.1</Version>` directly so `dotnet pack` still produces a
   .nupkg (otherwise the pack step would fail before the warning surfaces).
 
+## `version_override` (D1/D8, phase 2 iteration 2.3)
+
+The action's `version_override` input (wired to MinVer's own
+`MinVerVersionOverride` env var) is additive and orthogonal to the two
+fixtures above — it does not need a third fixture directory because its
+behavior doesn't depend on the *project file's* shape, only on whether the
+input is set. It was verified directly against the `minimal/` fixture's
+`.csproj` in a throwaway git repo with a real tag (not committed here,
+since proving "override wins over tag-inference" requires a git history
+the fixture's checked-in form can't carry): packing without
+`version_override` set produces MinVer's tag-inferred version; packing
+with it set to an arbitrary value produces a `.nupkg` whose filename, its
+`.nuspec`'s `<version>`, and the assembly's informational version all
+reflect the override verbatim — proving it wins over tag-inference rather
+than coincidentally matching it. `nuget-package-ci.yml`'s `version` job
+exercises this same input end-to-end against a consumer's real tag
+history.
+
 ## Why these fixtures exist
 
 The `dotnet-pack-version` action wraps `dotnet pack` + MinVer; the

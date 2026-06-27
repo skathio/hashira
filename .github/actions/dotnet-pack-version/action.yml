@@ -18,6 +18,36 @@
 # reads as a thin shell wrapper. Same precedent as `coverage-report` and
 # `npm-release`.
 #
+# ## Explicit version override (D1/D8, phase 2 iteration 2.3)
+#
+# `version_override` wires MinVer's own escape hatch — the
+# `MinVerVersionOverride` MSBuild property MinVer reads at pack time. When
+# non-empty, MinVer uses this value VERBATIM instead of computing one from
+# git tag history; when empty (the default), behavior is byte-for-byte
+# unchanged from before this iteration (MinVer infers from tags as it
+# always did). This is how the version-resolver's (D1/D8) explicit,
+# dispatch-driven version reaches `dotnet pack` for the NuGet flow: the
+# caller workflow resolves the version first (resolver action, never this
+# action), then passes it here as `version_override` so packing still goes
+# through ordinary `dotnet pack` + MinVer, but explicit always wins over
+# inferred. Verified directly: with `version_override` set, the produced
+# `.nuspec`'s `<version>` and the assembly's informational version both
+# reflect the override, not a tag-inferred guess — proving the override
+# genuinely wins rather than coincidentally matching (confirmed against a
+# real git-tagged fixture, and independently against MinVer's own upstream
+# source — `Options.cs`'s `IsNullOrEmpty` guard normalizes an empty
+# override to `null` before any branch is taken, so empty is provably a
+# true no-op, not a special-cased empty string).
+#
+# CALLER NOTE: `nuget-package-ci.yml`'s `version` job packs from an
+# isolated staging copy that excludes `.git` entirely (D1 stamp-only
+# mechanism) — MinVer's tag-inference fallback is therefore UNREACHABLE
+# on that path, not merely overridden by preference. Any caller invoking
+# this action from a similarly `.git`-less tree (e.g. a consumer composing
+# it directly per D10) MUST pass a non-empty `version_override`; there is
+# no real tag-inferred version to fall back to. (pass-1 review, iteration
+# 2.3, Major — verification rigor; see diary.)
+#
 # Runtime contract:
 #   The consumer MUST have a `<TargetFramework>` defined in `project_path`
 #   and `dotnet` on PATH (typically via setup-dotnet at the workflow
@@ -39,6 +69,10 @@
 #   - working_directory
 #   - prerelease_identifier   (exported into env for MinVer)
 #   - version_increment       (exported into env for MinVer)
+#   - version_override        (exported into env for MinVer; security.md B7 —
+#     this is the resolver's already-two-checkpoint-validated output when
+#     called from nuget-package-ci.yml's `version` job; never derived from
+#     externally-controlled context directly)
 # See `docs/usage.md` for the full trust model.
 name: dotnet-pack-version
 description: Run `dotnet pack` with MinVer-driven versioning; emit the resolved version and .nupkg path as outputs.
@@ -53,6 +87,10 @@ inputs:
     default: ""
   version_increment:
     description: "Passed to MinVer's `MinVerAutoIncrement` env var. One of `minor`, `major`, or empty (patch — MinVer default). Trusted input."
+    required: false
+    default: ""
+  version_override:
+    description: "Passed to MinVer's `MinVerVersionOverride` env var (e.g. '1.3.0'). When non-empty, MinVer uses this value verbatim instead of inferring from git tag history — explicit always wins over inferred. Empty (default) preserves the prior tag-inference behavior unchanged. Trusted input — see `## Trust boundary`."
     required: false
     default: ""
   output_directory:
@@ -110,6 +148,11 @@ runs:
         # MinVer uses its default. Exporting empty strings is safe.
         MinVerDefaultPreReleaseIdentifiers: ${{ inputs.prerelease_identifier }}
         MinVerAutoIncrement: ${{ inputs.version_increment }}
+        # Empty MinVerVersionOverride is the MinVer-documented "no override"
+        # state — exporting an empty string is safe (same precedent as the
+        # two env vars above) and preserves prior tag-inference behavior
+        # exactly when this iteration's new input isn't used.
+        MinVerVersionOverride: ${{ inputs.version_override }}
       run: |
         set -euo pipefail
         mkdir -p "${DPV_OUTPUT_DIRECTORY}"
