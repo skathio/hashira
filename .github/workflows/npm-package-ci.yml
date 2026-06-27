@@ -5,10 +5,46 @@
 # `npm-release` composite action (`.github/actions/npm-release/`), invoked
 # from the consumer's own publish.yml job (see docs/flows/npm.md).
 #
+# ## Version resolution + stamp (D1/D8, iteration 2.2)
+#
+# A `version` job, gated at the JOB level on `inputs.bump != ''`, resolves the
+# next release version via `.github/actions/version-resolver` and stamps it
+# into an `npm pack`-built tarball — never into the checked-out working tree
+# (D1's stamp-only, no-commit-back invariant; verified by a `git status`
+# assertion step). When `bump` is empty (every routine PR/push CI run that
+# isn't cutting a release) the `version` job is skipped entirely and every
+# other job runs exactly as before this iteration — `version` neither gates
+# nor is gated by `lint`/`test`/`scan-suite`/`coverage-report`.
+#
+# CI->CD output-boundary contract (D8, phase 2 exit criteria "Major 3 fix"):
+# this workflow declares exactly ONE workflow-level output, `resolved_version`
+# — the resolver's single scalar, mapped straight through
+# (`jobs.version.outputs.resolved_version` <- `steps.resolve.outputs.version`).
+# No second output for the `v`-prefixed tag form or the bump kind. A
+# consumer's CD job reads it via
+# `needs.<this-job-id>.outputs.resolved_version` and derives the `v`-prefix
+# itself (`v${{ needs.ci.outputs.resolved_version }}`) — this exact "second
+# output for convenience" mistake has been flagged across three review
+# passes (discovery, plan-review, phase 2.1's own architecture review).
+#
+# ## Same-run artifact handoff (sdd.md §8 open item, resolved iter 2.2 pass 2)
+#
+# The packed tarball (`${RUNNER_TEMP}/hashira-pack-output/*.tgz`) is uploaded
+# via `actions/upload-artifact` under the stable name `npm-tarball`,
+# `retention-days: 5`. Phase 3's CD job downloads this exact artifact by name
+# (`actions/download-artifact`) to publish — it MUST NOT re-pack from a fresh
+# checkout, which would silently break the byte-identical guarantee
+# NFR-Rel-1 requires (the CD job's checkout happens on a different runner,
+# potentially after further commits land on the branch). 5 days covers the
+# gap between a CI release run and a maintainer triggering/approving the CD
+# publish job (FR-8: re-publish without re-running CI) without keeping
+# stale release tarballs indefinitely.
+#
 # ## Permissions baseline (NF6)
 #
 # Workflow-level `permissions: {}` (deny-all). Each job grants the minimum
 # it needs:
+#   - version : contents:read (resolver + pack/stamp; no working-tree write)
 #   - lint  : contents:read, pull-requests:write   (commitlint sticky-comment)
 #   - test  : contents:read
 #   - scan-suite : contents:read, security-events:write (CodeQL),
@@ -105,6 +141,28 @@ on:
         description: "SHA, tag, or branch of skathio/hashira to check out for in-repo composite actions (D14). REQUIRED — no default (v2 phase 1 iteration 1.1). PIN TO A SHA for reproducible consumer builds."
         required: true
         type: string
+      bump:
+        description: "One of 'patch' | 'minor' | 'major'. OPTIONAL — leave empty/unset for routine PR/push CI runs that aren't cutting a release. When set, the version job resolves the next version, surfaces it in the run summary, and stamps it into a packed tarball's package.json (D1/D8). Empty by default so every non-release CI run is unaffected."
+        required: false
+        type: string
+        default: ""
+      seed_version:
+        description: "Bare semver baseline (e.g. '0.0.0') for a major/initial release with no prior stable tag (FR-3). Passed through to the version-resolver action unchanged; ignored when a stable tag already exists or when 'bump' is empty."
+        required: false
+        type: string
+        default: ""
+    outputs:
+      # CI->CD output-boundary contract (D8 / phases/02-version-resolver.md
+      # exit criteria, "Major 3 fix"): exactly ONE workflow-level output,
+      # mapped straight through from the version job's single scalar. No
+      # second output for the `v`-prefixed tag form or the bump kind — the
+      # consumer's CD job derives those locally
+      # (`v${{ needs.<ci-job-id>.outputs.resolved_version }}`, and `bump` is
+      # already its own dispatch input). Empty when `bump` was not provided
+      # (the `version` job did not run).
+      resolved_version:
+        description: "The resolved, validated bare semver string (e.g. '1.3.0', no 'v' prefix). Empty when 'bump' was not provided. The workflow's only output (D8)."
+        value: ${{ jobs.version.outputs.resolved_version }}
 
 # Deny-all baseline; jobs grant the minimum.
 permissions: {}
@@ -130,6 +188,153 @@ jobs:
           # here for symmetry with the Publish half which validates
           # NPM_TOKEN presence + shape per spec §8.
           echo "npm-package-ci: secret preflight (no secrets required for CI)"
+
+  # Resolves + stamps the release version (D1/D8). Gated at the JOB level on
+  # `inputs.bump != ''` so a routine PR/push CI run (bump unset) skips this
+  # job entirely — no resolver invocation, no checkout-with-full-tags, no
+  # pack/stamp work — and shows as "skipped" rather than running pointless
+  # steps behind a step-level `if:`. Deliberately independent of `setup`/
+  # `lint`/`test`/`scan-suite`/`coverage-report`: nothing here gates them and
+  # nothing here is gated by them, so existing CI behavior for non-release
+  # runs is provably unaffected by this job's presence.
+  version:
+    name: version
+    if: ${{ inputs.bump != '' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      resolved_version: ${{ steps.resolve.outputs.version }}
+    steps:
+      # actions/checkout v4.2.2 — consumer's tree. Full history + tags
+      # (fetch-depth: 0, fetch-tags: true) so the resolver can see the real
+      # tag list via `git tag --list` below; the other jobs' shallow
+      # checkout is intentionally left as-is (they don't need tag history).
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      # Library self-checkout per D14: ./.hashira/ holds hashira at library_ref.
+      - name: Checkout hashira library (D14)
+        # actions/checkout v4.2.2
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          repository: skathio/hashira
+          ref: ${{ inputs.library_ref }}
+          path: .hashira
+          persist-credentials: false
+      # actions/setup-node v4.1.0 — needed for `npm pack`/`npm pkg set` below.
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: ${{ inputs.node_version }}
+      - name: Gather tag list
+        id: tags
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Newline-separated tag list, the shape version-resolver expects
+          # (security.md B7: passed via env below, never interpolated into
+          # a `run:` string by the resolver itself).
+          tag_list="$(git tag --list)"
+          {
+            echo "tags<<HASHIRA_TAGS_EOF"
+            echo "${tag_list}"
+            echo "HASHIRA_TAGS_EOF"
+          } >> "${GITHUB_OUTPUT}"
+      - name: Resolve next version
+        id: resolve
+        uses: ./.hashira/.github/actions/version-resolver
+        with:
+          tags: ${{ steps.tags.outputs.tags }}
+          bump: ${{ inputs.bump }}
+          seed_version: ${{ inputs.seed_version }}
+      - name: Surface resolved version in run summary (NFR-DX-3)
+        shell: bash
+        env:
+          RESOLVED_VERSION: ${{ steps.resolve.outputs.version }}
+          BUMP: ${{ inputs.bump }}
+        run: |
+          set -euo pipefail
+          echo "npm-package-ci: resolved version ${RESOLVED_VERSION} (bump=${BUMP})" >> "${GITHUB_STEP_SUMMARY}"
+      - name: Pack tarball with stamped version (D1 — stamp-only, no commit-back)
+        shell: bash
+        env:
+          RESOLVED_VERSION: ${{ steps.resolve.outputs.version }}
+        run: |
+          set -euo pipefail
+          # Stamp + pack in an ISOLATED COPY of the working tree, never the
+          # checked-out tree itself. This is the mechanism that makes the
+          # "no commit-back" invariant (D1) true by construction rather than
+          # by discipline: package.json in $GITHUB_WORKSPACE is never opened
+          # for writing.
+          pack_dir="${RUNNER_TEMP}/hashira-pack"
+          rm -rf "${pack_dir}"
+          mkdir -p "${pack_dir}"
+          # Snapshot of the consumer's package source, excluding VCS/build
+          # metadata that has no business in the tarball. `.hashira` is the
+          # D14 library self-checkout for THIS job, not part of the
+          # consumer's package — without this exclude it would ship inside
+          # the published npm tarball for any consumer lacking a tight
+          # `package.json` `files` allowlist (pass-1 review, Major #2).
+          rsync -a --exclude='.git' --exclude='.hashira' --exclude="${pack_dir}" ./ "${pack_dir}/"
+          (
+            cd "${pack_dir}"
+            npm pkg set version="${RESOLVED_VERSION}"
+            mkdir -p "${RUNNER_TEMP}/hashira-pack-output"
+            npm pack --pack-destination "${RUNNER_TEMP}/hashira-pack-output"
+          )
+          echo "npm-package-ci: packed tarball stamped with version ${RESOLVED_VERSION} at ${RUNNER_TEMP}/hashira-pack-output" >> "${GITHUB_STEP_SUMMARY}"
+      - name: Upload packed tarball (same-run CI->CD artifact handoff)
+        # actions/upload-artifact v4.4.3 — same pin already verified and in
+        # use at .github/actions/coverage-report/action.yml; reused here
+        # rather than introducing a new pin to the verified-pin set.
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882
+        with:
+          # Stable, documented name: Phase 3's CD job downloads this exact
+          # name to publish "the same-run artifact" (sdd.md §8's open item;
+          # this iteration is where the in-run upload-artifact /
+          # download-artifact mechanism is chosen concretely — architecture
+          # reviewer Major fix, pass 1). Re-packing in the CD job instead of
+          # downloading this artifact is explicitly forbidden by
+          # phases/03-cd-composite-normalization.md — it would silently
+          # break the byte-identical guarantee NFR-Rel-1 requires.
+          name: npm-tarball
+          path: ${{ runner.temp }}/hashira-pack-output/*.tgz
+          if-no-files-found: error
+          # A few days, not the default 90: this artifact only needs to
+          # outlive the gap between "CI cuts a release" and "a maintainer
+          # triggers/approves the CD publish job," which FR-8 requires to be
+          # possible without re-running CI. 5 days covers a maintainer being
+          # away for a weekend without keeping stale release tarballs around
+          # indefinitely (GitHub's per-artifact storage cost is real, if
+          # small, at scale across many releases).
+          retention-days: 5
+      - name: Assert stamp did not touch the checked-out working tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          # D1's stamp-only / no-commit-back invariant: the previous step
+          # wrote only inside $RUNNER_TEMP (outside $GITHUB_WORKSPACE). This
+          # assertion proves it rather than just asserting it by convention.
+          #
+          # `--untracked-files=no` is deliberate (pass-1 review, Blocker):
+          # the D14 library self-checkout above lands `.hashira/` as
+          # UNTRACKED content in $GITHUB_WORKSPACE, and nothing gitignores
+          # it. Bare `git status --porcelain` reports untracked files too,
+          # so without this flag the assertion fired on every real release,
+          # not just one where the working tree was actually modified. The
+          # iteration's own acceptance criterion is "no TRACKED-file diff
+          # outside the artifact output path" (phases/02-version-resolver.md)
+          # — scoping to tracked content is what D1 actually requires; it
+          # still catches any modification to a tracked file (the real
+          # invariant), it just stops flagging the expected, harmless
+          # `.hashira/` self-checkout dir as a violation.
+          if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+            echo "::error::npm-package-ci: working tree changed during version/pack steps — stamp must only touch the packed output, never the checked-out tree" >&2
+            git status --porcelain --untracked-files=no >&2
+            exit 1
+          fi
+          echo "npm-package-ci: git status (tracked files) clean after stamp — no commit-back occurred" >> "${GITHUB_STEP_SUMMARY}"
 
   lint:
     name: lint
