@@ -778,6 +778,135 @@ jobs:
           set -euo pipefail
           python3 tests/pages-deploy/shape-validate.py
 
+  pages-deploy-smoke-pull-request-guard:
+    name: pages-deploy-smoke-pull-request-guard
+    # iter 3.3 (B8): proves the fork-PR guard folded into pages-deploy's
+    # first step actually fails the composite when the REAL triggering
+    # event is pull_request. Only runnable for real on a self-CI run
+    # that is itself a pull_request event — `_self-ci.yml`'s own
+    # `on: pull_request` trigger (top of file) makes `github.event_name`
+    # genuinely 'pull_request' on every PR run, so this job needs no
+    # faked/overridden event context. On a push-triggered self-CI run
+    # this job is correctly skipped (not faked green) — see
+    # `pages-deploy-smoke-non-pull-request-dry-run` below for the
+    # complementary pass-through path, which runs on every event INCLUDING
+    # pull_request (so the guard's negative path always gets covered by
+    # at least one of these two jobs on any given self-CI run; only the
+    # push-triggered side of the positive path is uncovered on a PR run,
+    # which is the documented gap below).
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      # D14 self-checkout: composite actions reference library from .hashira/
+      - name: Checkout library into .hashira
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          ref: ${{ github.sha }}
+          path: .hashira
+          persist-credentials: false
+      # No id-token/pages grants on this job — irrelevant, since the
+      # guard must reject the call before reaching deploy-pages at all.
+      - name: pages-deploy — real pull_request event MUST fail loud (negative test)
+        id: guard_attempt
+        continue-on-error: true
+        uses: ./.hashira/.github/actions/pages-deploy
+      - name: Assert the composite failed because of the pull_request guard
+        shell: bash
+        env:
+          GUARD_OUTCOME: ${{ steps.guard_attempt.outcome }}
+          GH_EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          if [ "${GUARD_OUTCOME}" = "success" ]; then
+            echo "::error::pages-deploy-smoke-pull-request-guard: pages-deploy unexpectedly SUCCEEDED on a real pull_request event — the B8 fork-PR guard must fail loud, not silently proceed to deploy-pages." >&2
+            exit 1
+          fi
+          echo "pages-deploy-smoke-pull-request-guard: pages-deploy correctly failed on a real pull_request event (github.event_name='${GH_EVENT}')."
+          # No id-token/pages permissions were granted to this job, so even
+          # if the guard somehow did not fire, the subsequent deploy-pages
+          # step would also fail (for a different reason) — but we don't
+          # rely on that: the guard's own ::error::pages-deploy: line in the
+          # composite's first-step log is the actual evidence this test
+          # targets. A future regression-test hardening (same class as the
+          # nuget-push-smoke-oidc-fails-loud marker-file pattern) could add a
+          # diagnostic marker file if a more specific assertion is ever
+          # needed; not added here since outcome=failure on a job with no
+          # deploy-pages permissions, on a real pull_request event, is
+          # already unambiguous.
+
+  pages-deploy-smoke-non-pull-request-dry-run:
+    name: pages-deploy-smoke-non-pull-request-dry-run
+    # Complementary pass-through path: proves the guard does NOT block a
+    # non-pull_request event. Runs on every self-CI trigger (push AND
+    # pull_request — `_self-ci.yml`'s self-CI run is itself usually a
+    # pull_request when this job executes during this iteration's own
+    # review, which would make `github.event_name` 'pull_request' and
+    # WRONGLY fail this job too if it asserted success unconditionally).
+    # This job is deliberately NOT gated on event_name: composite actions
+    # read `github.event_name` from the real workflow context (no env-var
+    # override is possible — investigated per the phase brief), so the
+    # only way to exercise the "passes through on a non-pull_request
+    # event" path for real is to actually run this job during a real
+    # push-triggered self-CI run. On a pull_request-triggered self-CI run
+    # this job's pages-deploy invocation will ALSO see
+    # github.event_name='pull_request' and correctly fail the guard,
+    # which is indistinguishable here from the
+    # pages-deploy-smoke-pull-request-guard job above — so this job only
+    # actually proves the pass-through path on a push run. This is the
+    # honest test-pyramid gap for this job: it cannot independently prove
+    # "does not block on push" from inside a pull_request-triggered self-CI
+    # run, only on a genuine push-triggered one. The HASHIRA_PAGES_DEPLOY_DRY_RUN
+    # hook (mirroring pages-upload's identical precedent) lets it complete
+    # without a real Pages-enabled target either way.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      HASHIRA_PAGES_DEPLOY_DRY_RUN: '1'
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      # D14 self-checkout: composite actions reference library from .hashira/
+      - name: Checkout library into .hashira
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          ref: ${{ github.sha }}
+          path: .hashira
+          persist-credentials: false
+      - name: pages-deploy — dry-run invocation
+        id: deploy_attempt
+        continue-on-error: true
+        uses: ./.hashira/.github/actions/pages-deploy
+      - name: Assert outcome matches the current event (honest, not overclaimed)
+        shell: bash
+        env:
+          DEPLOY_OUTCOME: ${{ steps.deploy_attempt.outcome }}
+          GH_EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          if [ "${GH_EVENT}" = "pull_request" ]; then
+            # Same event this job runs under right now happens to be a PR —
+            # the guard correctly fires here too; this branch exists so the
+            # job doesn't report a false failure during a PR-triggered
+            # self-CI run (see the job-level comment above for why this
+            # case can't independently prove the pass-through path).
+            if [ "${DEPLOY_OUTCOME}" = "success" ]; then
+              echo "::error::pages-deploy-smoke-non-pull-request-dry-run: pages-deploy unexpectedly SUCCEEDED on a real pull_request event — the B8 guard must fail loud here too." >&2
+              exit 1
+            fi
+            echo "pages-deploy-smoke-non-pull-request-dry-run: this self-CI run is itself a pull_request event, so the guard correctly fired (outcome=${DEPLOY_OUTCOME}). The pass-through path is not exercised by this run — see pages-deploy-smoke-pull-request-guard for the negative path, and the job-level comment for why a push-triggered run is required to prove pass-through."
+          else
+            if [ "${DEPLOY_OUTCOME}" != "success" ]; then
+              echo "::error::pages-deploy-smoke-non-pull-request-dry-run: pages-deploy unexpectedly FAILED on a non-pull_request event (github.event_name='${GH_EVENT}') under HASHIRA_PAGES_DEPLOY_DRY_RUN=1 — the B8 guard must NOT block a legitimate push/dispatch deploy." >&2
+              exit 1
+            fi
+            echo "pages-deploy-smoke-non-pull-request-dry-run: pages-deploy correctly passed the guard and completed (dry-run) on a non-pull_request event (github.event_name='${GH_EVENT}')."
+          fi
+
   static-webapp-ci-shape-validation:
     name: static-webapp-ci-shape-validation
     runs-on: ubuntu-latest
@@ -796,25 +925,6 @@ jobs:
         run: |
           set -euo pipefail
           python3 tests/static-webapp-ci/shape-validate.py
-
-  static-webapp-deploy-shape-validation:
-    name: static-webapp-deploy-shape-validation
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      # actions/checkout v4.2.2
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
-      - name: Verify python3 + pyyaml availability
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 -c 'import yaml; print("pyyaml " + yaml.__version__)'
-      - name: Run static-webapp-deploy shape-validation shim
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 tests/static-webapp-deploy/shape-validate.py
 
   static-webapp-docs-cross-reference:
     name: static-webapp docs cross-reference

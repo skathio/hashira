@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """
 Cross-reference check: every `inputs:` entry in
-`.github/workflows/static-webapp-ci.yml` (and `static-webapp-deploy.yml`)
-appears in the corresponding markdown input table in
-`docs/flows/static-webapp.md`, and vice versa.
+`.github/workflows/static-webapp-ci.yml` appears in the corresponding
+markdown input table in `docs/flows/static-webapp.md`, and vice versa.
 
 Also asserts:
-  - neither workflow declares a `secrets:` block (per phase 4.2 acceptance:
+  - the workflow declares no `secrets:` block (per phase 4.2 acceptance:
     the static-webapp flow takes no consumer secrets — Pages deploy
     authenticates via OIDC, build is from public source).
   - the first fenced YAML code block inside section 1 of
@@ -14,6 +13,16 @@ Also asserts:
     parseable by `yaml.safe_load`.
 
 Acceptance criterion in phase 04 iteration 4.3.
+
+iter 3.3 note: this shim originally also cross-referenced
+`static-webapp-deploy.yml`'s `Deploy inputs` table — that reusable
+workflow was retired in iter 3.3 (D2 refinement B: deploy converted to
+the `pages-deploy` composite, invoked directly by consumers with no
+`workflow_call` inputs of its own to cross-reference). The `Deploy
+inputs` table in `docs/flows/static-webapp.md` and this check's
+corresponding assertions are stale until Phase 4.3 rewrites that doc for
+the composite shape — tracked as a Phase 4 follow-up, not closed here
+(out of this iteration's declared scope).
 
 Run from repo root: python3 tests/static-webapp/docs-cross-ref.py
 """
@@ -26,7 +35,6 @@ import yaml
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 CI_WF = os.path.join(REPO_ROOT, ".github", "workflows", "static-webapp-ci.yml")
-DEP_WF = os.path.join(REPO_ROOT, ".github", "workflows", "static-webapp-deploy.yml")
 DOC = os.path.join(REPO_ROOT, "docs", "flows", "static-webapp.md")
 
 
@@ -134,33 +142,26 @@ def extract_first_yaml_block_in_section(md_text, section_heading_substring):
 
 
 def main():
-    for p in [CI_WF, DEP_WF, DOC]:
+    for p in [CI_WF, DOC]:
         if not os.path.isfile(p):
             fail(f"required file not found: {p}")
 
     ci_inputs, ci_secrets = load_workflow_inputs_secrets(CI_WF)
-    dep_inputs, dep_secrets = load_workflow_inputs_secrets(DEP_WF)
 
     # No-secrets assertion (phase 4.2 acceptance).
     if ci_secrets:
         fail(
             f"static-webapp-ci.yml unexpectedly declares secrets: {sorted(ci_secrets)}"
         )
-    if dep_secrets:
-        fail(
-            f"static-webapp-deploy.yml unexpectedly declares secrets: {sorted(dep_secrets)}"
-        )
-    print("docs-cross-ref: OK  no-secrets: both static-webapp workflows declare no secrets")
+    print("docs-cross-ref: OK  no-secrets: static-webapp-ci.yml declares no secrets")
 
     with open(DOC, "r", encoding="utf-8") as f:
         md = f.read()
 
     doc_ci_inputs = parse_table_names_under_heading(md, "CI inputs")
-    doc_dep_inputs = parse_table_names_under_heading(md, "Deploy inputs")
 
     all_ok = True
     all_ok &= diff("CI inputs", ci_inputs, doc_ci_inputs)
-    all_ok &= diff("Deploy inputs", dep_inputs, doc_dep_inputs)
 
     # Caller-snippet YAML parse — section 1.
     snippet = extract_first_yaml_block_in_section(

@@ -82,6 +82,24 @@
 # job is not feasible without a new cross-job artifact handoff (forced
 # by `upload-pages-artifact`'s same-runner locality requirement).
 #
+# ## `pull_request_target` is forbidden (B8, iter 3.3)
+#
+# Consumers calling this reusable workflow MUST trigger it via
+# `pull_request`, and MUST NOT use `pull_request_target`. This is the
+# canonical privilege-escalation pattern (B8/AP7, `security.md` §1/§6):
+# `pull_request_target` runs in the BASE repo's context — with the base
+# repo's secrets and a token scoped to the base repo — even for a
+# fork-originated PR, so a fork PR author's `build_command`/
+# `test_command` (both raw-shell sinks per D10d above) would execute
+# with that elevated context instead of the fork's own restricted
+# token. This workflow's `build-and-upload` job already holds
+# `id-token: write` (see the permissions baseline above); combining that
+# grant with `pull_request_target`'s base-repo context on every fork PR
+# is exactly the escalation B8 exists to prevent. Use `pull_request`
+# (read-only fork token, no secrets) for PR-triggered CI; never switch
+# to `pull_request_target` to work around the read-only token's
+# limitations — that "fix" is the footgun, not a solution.
+#
 # See `docs/usage.md` for the full trust model.
 #
 # ## SHA pins (NF2)
