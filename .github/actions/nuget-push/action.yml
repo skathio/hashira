@@ -1,52 +1,120 @@
 # Composite action: nuget-push
 #
 # Pushes a `.nupkg` to a NuGet feed (default `https://api.nuget.org/v3/index.json`,
-# per D10b unified `target`). Supports two auth shapes:
-#   - API key (long-lived, passed via `api_key` input → `NUGET_API_KEY` env)
-#   - OIDC trusted publishing (api_key empty): the `NuGet/login` action
-#     exchanges the GitHub OIDC token for a short-lived nuget.org API key,
-#     which is then handed to `dotnet nuget push --api-key`. Requires the
-#     calling JOB to grant `id-token: write`, the `nuget_user` input set to
-#     the nuget.org account that owns the policy, and a trusted-publishing
-#     policy on nuget.org matching this repo/workflow/environment. See
-#     `docs/flows/nuget.md` §7.
+# per D10b unified `target`), then (after a successful push) creates the git tag +
+# GitHub Release for the resolved version (D4 atomicity, D13 `--generate-notes`).
 #
-# Per NF1 the action stays under the ~80-line soft cap (no JS shim
-# needed — logic is push + dry-run hook + summary).
+# ## Auth model (D3/D11) — explicit `auth: oidc | token | auto` enum
 #
-# Per D4 idempotency: `--skip-duplicate` is enabled by default so a retry
-# after a partial publish doesn't crash on the already-published package.
+# `auth` replaces the old binary "api_key empty means OIDC" model with an explicit,
+# validated 3-state enum (default `auto`):
+#   - `auth: oidc`  — always attempt `NuGet/login` (OIDC trusted publishing).
+#     Requires `nuget_user` non-empty. On OIDC failure (no key minted), FAILS LOUD —
+#     never falls back to `api_key`, even if one is set. This is the secure,
+#     recommended setting: `oidc` must never silently degrade to a long-lived secret.
+#   - `auth: token` — always use `api_key` directly. Requires `api_key` non-empty.
+#     Never attempts `NuGet/login`/OIDC. An explicit opt-out of OIDC entirely.
+#   - `auth: auto`  — (default) attempt OIDC if `nuget_user` is set; if OIDC fails
+#     AND `api_key` is present, fall back to it with an `::warning::` (the old
+#     default behavior, now opt-in only). If OIDC fails and no `api_key` is
+#     present, fails loud, same as `oidc`.
+# See `docs/flows/nuget.md` §7.
+#
+# ## Tag + Release creation (D4 atomicity, D13)
+#
+# After a successful push (and only after — see "## Atomicity" below), creates the
+# git tag + GitHub Release for `version` (a required input: the resolved, validated
+# bare semver string from Phase 2's version-resolver, e.g. "1.3.0"). This action does
+# NOT compute or re-derive a version — `version` is the caller's already-validated
+# output, consumed as-is (D8 one-scalar CI->CD boundary contract). Skipped entirely
+# in dry-run mode (HASHIRA_NUGET_PUSH_DRY_RUN=1).
+#
+# Per NF1 the action stays reasonably scoped (logic is auth-mode branching + push +
+# tag/release + dry-run hook + summary — no JS shim needed). This file grew well past
+# the original ~80-line soft cap (it's ~300 lines) by deliberate choice, not drift:
+# D4 atomicity requires the push and the tag/release step to be co-located in one
+# unit (the "tag created but push failed" failure mode is only structurally
+# impossible if both steps are sequential `shell: bash` steps in the same composite).
+# Splitting them into two composites would reopen that exact failure mode. The bash
+# is linear branching (no recursion/data structures), so a `lib/` shim was
+# considered and rejected — it would add indirection without reducing risk.
+#
+# Per D4 idempotency: `--skip-duplicate` is enabled by default so a retry after a
+# partial publish doesn't crash on the already-published package; the tag/release
+# step is independently idempotent via `gh release view` first.
 #
 # Runtime contract:
-#   The caller MUST have a `dotnet` CLI on PATH (typically via setup-dotnet
-#   at the workflow level per D11). The caller MUST have produced a
-#   `.nupkg` at `nupkg_path` (typically via `dotnet-pack-version`). The
-#   caller MUST provide `api_key` (via `secrets:` block) or have OIDC
-#   federation configured on the feed side.
+#   The caller MUST have a `dotnet` CLI on PATH (typically via setup-dotnet at the
+#   workflow level per D11) and a `gh` CLI on PATH (preinstalled on GitHub-hosted
+#   runners). The caller MUST have produced a `.nupkg` at `nupkg_path` (typically via
+#   `dotnet-pack-version`). The caller MUST provide `version` (the resolver's output,
+#   not recomputed here). Depending on `auth`: `api_key` (via `secrets:` block),
+#   and/or `nuget_user` + OIDC federation configured on the feed side. The caller's
+#   job MUST ALSO have `actions/checkout`'d the consumer's repo at the commit being
+#   released BEFORE this composite runs — the tag/Release step's `gh` invocation and
+#   its `--target "${GITHUB_SHA}"` resolve against that checkout; this composite has
+#   no way to perform or verify the checkout itself (pass-1 review, iter 3.2, Minor).
+#
+# ## Caller-job permissions (the composite itself cannot declare `permissions:`)
+#
+# The calling job MUST grant, in addition to whatever `auth` mode requires
+# (`id-token: write` for `auth: oidc`/`auto`):
+#   - `contents: write`     — `gh release create` tags the commit + creates the
+#                             GitHub Release.
+#   - `pull-requests: read` — `--generate-notes` (D13) reads merged-PR metadata to
+#                             compose the notes; it does NOT write to or comment on
+#                             PRs (verified against GitHub's documented behavior —
+#                             `write` was over-granted in the deleted workflow this
+#                             logic was carried from; corrected here, pass-1 review
+#                             iter 3.2, Minor/NFR-Sec-5 least-privilege).
+# This mirrors the permission matrix the now-deleted `nuget-package-publish.yml`
+# reusable workflow documented on its `pack-and-push` job — folding the tag/release
+# step into this composite moves the *logic* here, but the *permission grant* still
+# lives in the caller's job (composite actions cannot declare `permissions:`).
+# Document this matrix in `docs/flows/nuget.md`.
+#
+# ## Atomicity (per D4 walk-through, carried unchanged from the deleted
+# ## nuget-package-publish.yml's pack-and-push job)
+#
+# `dotnet nuget push --skip-duplicate` is the irreversible step. Tag creation happens
+# AFTER a successful push (`gh release view "v${VERSION}" || gh release create
+# "v${VERSION}" --generate-notes --target "${GITHUB_SHA}"`), so the failure mode "tag
+# created but push failed" cannot occur. If push fails, no tag is created; the next
+# attempt re-runs the gated job with the same resolved version, and `--skip-duplicate`
+# makes the retry safe. If push succeeds but tag-create fails on a duplicate (race
+# with a parallel run), `gh release view` returns success and the step exits 0.
 #
 # ## Trust boundary
 #
 # These inputs are interpolated into shell commands (bound via `env:` and
-# dereferenced with quoting per the iter-2.1/2.3 pattern). Per D10d this
-# is permitted but requires documented conventions: treat the values as
-# TRUSTED input. Do NOT pass values derived from PR titles, issue bodies,
-# branch names, commit messages, fork-author-controlled tag names, or any
-# other externally controlled context — quoting cannot defend the sink.
+# dereferenced with quoting per the iter-2.1/2.3 pattern). Per D10d this is permitted
+# but requires documented conventions: treat the values as TRUSTED input. Do NOT pass
+# values derived from PR titles, issue bodies, branch names, commit messages,
+# fork-author-controlled tag names, or any other externally controlled context —
+# quoting cannot defend the sink.
 #   - nupkg_path
 #   - target
 #   - api_key                (also a secret; never logged)
+#   - nuget_user
+#   - auth
+#   - version                (the resolver's already-validated output; D8/B7 —
+#                             re-validated against a strict semver regex below as
+#                             this action's own checkpoint-2, per B7's framing of
+#                             the CD composite's tag/Release step as a privileged
+#                             sink in its own right, not merely a passthrough of
+#                             the resolver's checkpoint)
 #   - skip_duplicate
 #   - working_directory
 # See `docs/usage.md` for the full trust model.
 #
 # ## Reserved env names
 #
-# `HASHIRA_NUGET_PUSH_DRY_RUN` is reserved by this library as a test-only
-# override. When set to `1`, the action SKIPS the actual push and emits a
-# dry-run summary line. Consumers MUST NOT set this in production — doing
-# so silently turns publishes into no-ops.
+# `HASHIRA_NUGET_PUSH_DRY_RUN` is reserved by this library as a test-only override.
+# When set to `1`, the action SKIPS the actual push AND the tag/release step, and
+# emits a dry-run summary line. Consumers MUST NOT set this in production — doing so
+# silently turns publishes into no-ops.
 name: nuget-push
-description: Push a .nupkg to a NuGet feed (default nuget.org) with --skip-duplicate and OIDC support.
+description: Push a .nupkg to a NuGet feed (default nuget.org) with --skip-duplicate, explicit OIDC/token auth, and tag + GitHub Release creation.
 
 inputs:
   nupkg_path:
@@ -56,14 +124,21 @@ inputs:
     description: "Feed URL to push to (D10b unified `target`). Trusted input."
     required: false
     default: "https://api.nuget.org/v3/index.json"
+  auth:
+    description: "Auth mode: 'oidc' (always attempt NuGet/login; fails loud on failure, never falls back to api_key), 'token' (always use api_key directly, never attempts OIDC), or 'auto' (default; try OIDC if nuget_user is set, fall back to a present api_key with a ::warning:: on OIDC failure). See '## Auth model' above. Trusted input."
+    required: false
+    default: "auto"
   api_key:
-    description: "NuGet API key. Pass via `secrets:` block. Empty selects the OIDC trusted-publishing path (NuGet/login). Trusted input (secret)."
+    description: "NuGet API key. Pass via `secrets:` block. Required (and used directly) when auth=token; usable as the auto-fallback when auth=auto; ignored when auth=oidc. Trusted input (secret)."
     required: false
     default: ""
   nuget_user:
-    description: "nuget.org username that owns the trusted-publishing policy. Used only on the OIDC path (api_key empty) as the `NuGet/login` user. Trusted input."
+    description: "nuget.org username that owns the trusted-publishing policy. Required when auth=oidc; used as the auto-attempt user when auth=auto. Used as the `NuGet/login` user. Trusted input."
     required: false
     default: ""
+  version:
+    description: "The resolved, validated bare semver string (e.g. '1.3.0', no 'v' prefix) to tag and release. This is the caller's already-validated output (Phase 2's version-resolver, D8's one-scalar CI->CD boundary contract) — this action does not compute or re-derive a version. Required."
+    required: true
   skip_duplicate:
     description: "If 'true', add `--skip-duplicate` to dotnet nuget push (idempotency for D4 retries). Trusted input."
     required: false
@@ -76,48 +151,143 @@ inputs:
 runs:
   using: composite
   steps:
-    # OIDC trusted publishing: with no API key supplied, exchange the GitHub
-    # OIDC token for a short-lived nuget.org key. Requires the calling JOB to
-    # grant `id-token: write` and run in the Environment the nuget.org
-    # trusted-publishing policy is scoped to. Skipped entirely when an API
-    # key is provided.
+    - name: Validate auth input
+      shell: bash
+      env:
+        NP_AUTH: ${{ inputs.auth }}
+      run: |
+        set -euo pipefail
+        case "${NP_AUTH}" in
+          oidc|token|auto) ;;
+          *)
+            echo "::error::nuget-push: invalid 'auth' input '${NP_AUTH}'. Must be one of: oidc, token, auto." >&2
+            exit 1
+            ;;
+        esac
+    - name: Validate version input (B7 checkpoint 2 — this composite's own sink)
+      shell: bash
+      env:
+        NP_VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        if [ -z "${NP_VERSION}" ]; then
+          echo "::error::nuget-push: 'version' input is empty. This action consumes the resolver's already-validated output (D8) — it does not compute one." >&2
+          exit 1
+        fi
+        # B7 names the CD composite's tag/Release step as a privileged sink in its
+        # own right (not merely a passthrough of the resolver's own checkpoints) —
+        # this action is independently callable (D4/D10's consumer-composition
+        # contract), so it cannot assume every caller already validated `version`.
+        # Re-validate against the same strict-semver shape the resolver enforces
+        # (bare semver, optional prerelease/build metadata) before it ever reaches
+        # `tag="v${NP_VERSION}"` / `gh release create`.
+        if ! [[ "${NP_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
+          echo "::error::nuget-push: 'version' input '${NP_VERSION}' is not a valid bare semver string (expected e.g. '1.3.0' or '1.3.0-rc.1'). Refusing to tag/release — this action does not trust an unvalidated caller-supplied version (B7)." >&2
+          exit 1
+        fi
+    # OIDC trusted publishing: exchange the GitHub OIDC token for a short-lived
+    # nuget.org key. Requires the calling JOB to grant `id-token: write` and run in
+    # the Environment the nuget.org trusted-publishing policy is scoped to.
+    # Attempted when auth=oidc (always) or auth=auto (only if nuget_user is set).
+    # Never attempted when auth=token, and never during the dry-run smoke test
+    # (HASHIRA_NUGET_PUSH_DRY_RUN=1) — there is no real OIDC token or user there, so a
+    # login attempt would fail before the dry-run short-circuit.
     - name: NuGet trusted-publishing login (OIDC)
-      # OIDC path only (no api_key), and never during the dry-run smoke test
-      # (HASHIRA_NUGET_PUSH_DRY_RUN=1) — there is no real OIDC token or user
-      # there, so a login attempt would fail before the dry-run short-circuit.
-      if: ${{ inputs.api_key == '' && env.HASHIRA_NUGET_PUSH_DRY_RUN != '1' }}
+      if: ${{ env.HASHIRA_NUGET_PUSH_DRY_RUN != '1' && (inputs.auth == 'oidc' || (inputs.auth == 'auto' && inputs.nuget_user != '')) }}
       id: nuget_login
       # NuGet/login v1.2.0
       uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841
       with:
         user: ${{ inputs.nuget_user }}
+      # Soft-fail: under auth=oidc this step's failure is detected and reported
+      # with a clear, non-generic error in the next step (auth-mode branching needs
+      # to distinguish "OIDC failed" from "OIDC produced no key" uniformly, and
+      # composite steps cannot branch on a prior step's success status from `if:`
+      # without continue-on-error here).
+      continue-on-error: true
+    - name: Determine credential per auth mode
+      id: resolve_auth
+      shell: bash
+      env:
+        NP_AUTH: ${{ inputs.auth }}
+        NP_API_KEY: ${{ inputs.api_key }}
+        NP_NUGET_USER: ${{ inputs.nuget_user }}
+        NP_LOGIN_OUTCOME: ${{ steps.nuget_login.outcome }}
+        NP_LOGIN_KEY: ${{ steps.nuget_login.outputs.NUGET_API_KEY }}
+      run: |
+        set -euo pipefail
+
+        # In dry-run mode, no credential is needed at all — the push step below
+        # short-circuits before touching any credential. Emit nothing here.
+        if [ "${HASHIRA_NUGET_PUSH_DRY_RUN:-0}" = "1" ]; then
+          echo "credential=" >> "${GITHUB_OUTPUT}"
+          exit 0
+        fi
+
+        case "${NP_AUTH}" in
+          token)
+            if [ -z "${NP_API_KEY}" ]; then
+              echo "::error::nuget-push: auth=token requires a non-empty 'api_key'." >&2
+              exit 1
+            fi
+            echo "nuget-push: auth=token; using the provided api_key directly." >> "${GITHUB_STEP_SUMMARY}"
+            echo "credential=${NP_API_KEY}" >> "${GITHUB_OUTPUT}"
+            ;;
+          oidc)
+            if [ -z "${NP_NUGET_USER}" ]; then
+              echo "::error::nuget-push: auth=oidc requires a non-empty 'nuget_user'." >&2
+              exit 1
+            fi
+            if [ "${NP_LOGIN_OUTCOME}" != "success" ] || [ -z "${NP_LOGIN_KEY}" ]; then
+              # Diagnostic-only marker (not a public output/contract — pass-1
+              # review iter 3.2, Minor): lets a self-CI negative test assert
+              # *this specific* failure reason, not merely "the step failed",
+              # so a future change adding an earlier-failing check (e.g. the
+              # version regex above) can't silently stop exercising this path
+              # while the test stays green for the wrong reason.
+              echo "oidc_no_key" > "${RUNNER_TEMP}/nuget-push-failure-reason.txt" 2>/dev/null || true
+              echo "::error::nuget-push: auth=oidc failed — NuGet/login did not mint a key (ref/job-workflow mismatch with the configured nuget.org trusted-publishing policy, missing 'id-token: write' on the calling job, or no matching policy). auth=oidc never falls back to a long-lived api_key, even if one is set. See docs/flows/nuget.md §7." >&2
+              exit 1
+            fi
+            echo "nuget-push: auth=oidc; using the OIDC-minted key." >> "${GITHUB_STEP_SUMMARY}"
+            echo "credential=${NP_LOGIN_KEY}" >> "${GITHUB_OUTPUT}"
+            ;;
+          auto)
+            if [ "${NP_LOGIN_OUTCOME}" = "success" ] && [ -n "${NP_LOGIN_KEY}" ]; then
+              echo "nuget-push: auth=auto; OIDC succeeded, using the OIDC-minted key." >> "${GITHUB_STEP_SUMMARY}"
+              echo "credential=${NP_LOGIN_KEY}" >> "${GITHUB_OUTPUT}"
+            elif [ -n "${NP_API_KEY}" ]; then
+              echo "::warning::nuget-push: auth=auto; OIDC was not attempted or failed, falling back to the provided api_key. This is a posture downgrade (no long-lived secret -> long-lived secret) — set auth=oidc and fix the trusted-publishing config to avoid this, or set auth=token to make the fallback explicit."
+              echo "nuget-push: auth=auto; OIDC unavailable, fell back to api_key (see ::warning:: above)." >> "${GITHUB_STEP_SUMMARY}"
+              echo "credential=${NP_API_KEY}" >> "${GITHUB_OUTPUT}"
+            else
+              echo "::error::nuget-push: auth=auto; OIDC was not attempted or failed, and no 'api_key' is present to fall back to. Provide 'api_key', OR set 'nuget_user' and grant the job 'id-token: write' with a matching nuget.org trusted-publishing policy (see docs/flows/nuget.md §7)." >&2
+              exit 1
+            fi
+            ;;
+        esac
     - name: Push to NuGet feed
       shell: bash
       working-directory: ${{ inputs.working_directory }}
       env:
         NP_NUPKG_PATH: ${{ inputs.nupkg_path }}
         NP_TARGET: ${{ inputs.target }}
-        # NUGET_API_KEY is bound via `env:` (so the value never appears
-        # in the shell-level `${{ }}` expansion log or in the workflow
-        # YAML when echoed). It IS then passed to `dotnet nuget push`
-        # via the `--api-key` flag on argv — `dotnet nuget push` has no
-        # documented env-var fallback for the key on 8.0.x (see the
-        # env: comment below). On GitHub-hosted runners (single-tenant)
-        # the argv exposure is bounded. Honest trade-off per iter-3.1
-        # review Minor #1.
-        # NUGET_API_KEY is also exported as an env var (some dotnet tooling
-        # picks it up via NuGet.config credential providers); the actual
-        # `dotnet nuget push` CLI does NOT have a documented env-var
-        # fallback for the API key (verified against Microsoft's published
-        # `dotnet nuget push` reference for 8.0.x — only `-k|--api-key`
-        # accepts it). We therefore still pass it on argv below. On the
-        # GitHub-hosted ubuntu-latest runner the process is single-tenant
-        # so the argv exposure is bounded; on self-hosted multi-tenant
-        # runners consumers should consider a credential-provider plugin
-        # instead. See iter-3.1 review Minor #1 trade-off note.
-        # The API key when provided; otherwise the short-lived key minted by
-        # the NuGet/login step above (OIDC trusted publishing).
-        NUGET_API_KEY: ${{ inputs.api_key != '' && inputs.api_key || steps.nuget_login.outputs.NUGET_API_KEY }}
+        # NUGET_API_KEY is bound via `env:` (so the value never appears in the
+        # shell-level `${{ }}` expansion log or in the workflow YAML when echoed).
+        # It IS then passed to `dotnet nuget push` via the `--api-key` flag on argv —
+        # `dotnet nuget push` has no documented env-var fallback for the key on
+        # 8.0.x (see the comment below). On GitHub-hosted runners (single-tenant)
+        # the argv exposure is bounded. Honest trade-off per iter-3.1 review Minor #1.
+        # The actual `dotnet nuget push` CLI does NOT have a documented env-var
+        # fallback for the API key (verified against Microsoft's published `dotnet
+        # nuget push` reference for 8.0.x — only `-k|--api-key` accepts it). We
+        # therefore still pass it on argv below. On the GitHub-hosted ubuntu-latest
+        # runner the process is single-tenant so the argv exposure is bounded; on
+        # self-hosted multi-tenant runners consumers should consider a
+        # credential-provider plugin instead. See iter-3.1 review Minor #1 trade-off.
+        # The credential resolved by the auth-mode step above (token, OIDC-minted
+        # key, or auto's choice of either) — empty only in dry-run mode.
+        NUGET_API_KEY: ${{ steps.resolve_auth.outputs.credential }}
         NP_SKIP_DUP: ${{ inputs.skip_duplicate }}
       run: |
         set -euo pipefail
@@ -130,20 +300,10 @@ runs:
           exit 0
         fi
 
-        # Build the argument list. --api-key is omitted entirely when empty
-        # (OIDC path — dotnet's federated-token discovery kicks in then).
-        push_args=( "${NP_NUPKG_PATH}" --source "${NP_TARGET}" )
-        if [ -n "${NUGET_API_KEY}" ]; then
-          push_args+=( --api-key "${NUGET_API_KEY}" )
-        else
-          # Reached only when api_key is empty AND the OIDC NuGet/login step
-          # produced no key (e.g. nuget_user empty, the job lacked
-          # `id-token: write`, or no trusted-publishing policy matched). Fail
-          # fast with guidance rather than letting dotnet emit an opaque auth
-          # error.
-          echo "::error::nuget-push: no credential available. Provide 'api_key', OR set 'nuget_user' and grant the job 'id-token: write' with a matching nuget.org trusted-publishing policy (see docs/flows/nuget.md §7)." >&2
-          exit 1
-        fi
+        # Build the argument list. The auth-mode step above already validated and
+        # failed loud if no credential was resolvable, so NUGET_API_KEY here is
+        # always non-empty.
+        push_args=( "${NP_NUPKG_PATH}" --source "${NP_TARGET}" --api-key "${NUGET_API_KEY}" )
         if [ "${NP_SKIP_DUP}" = "true" ]; then
           push_args+=( --skip-duplicate )
         fi
@@ -159,4 +319,36 @@ runs:
           echo "nuget-push: skipped (duplicate)" >> "${GITHUB_STEP_SUMMARY}"
         else
           echo "nuget-push: pushed ${filename} to ${NP_TARGET}" >> "${GITHUB_STEP_SUMMARY}"
+        fi
+    # Tag + Release creation (D4 atomicity, D13). Runs only after a successful push
+    # (this step is unconditional in the YAML, but the push step above already
+    # `set -euo pipefail`'d / `exit 1`'d on any push failure, so a non-zero push
+    # never reaches here — composite-action steps run sequentially and a failed
+    # `shell: bash` step with `set -e` halts the run). Skipped entirely in dry-run
+    # mode, matching the deleted nuget-package-publish.yml's pack-and-push job
+    # exactly (see '## Atomicity' above).
+    - name: Tag + GitHub Release (idempotent; D4 release-creates-the-tag)
+      if: ${{ env.HASHIRA_NUGET_PUSH_DRY_RUN != '1' }}
+      shell: bash
+      env:
+        # NF5: composite actions have NO `secrets` context (see npm-release's
+        # identical comment, which uses this same `GITHUB_TOKEN` env name). Source
+        # the GitHub token from the `github` context — required for the `gh` CLI
+        # below (it checks `GH_TOKEN` then `GITHUB_TOKEN`; using `GITHUB_TOKEN`
+        # matches npm-release's convention exactly rather than just being
+        # functionally equivalent).
+        GITHUB_TOKEN: ${{ github.token }}
+        NP_VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        tag="v${NP_VERSION}"
+        # Idempotency (D4): if the release already exists (parallel run or retry
+        # after a partial earlier attempt), do nothing. Otherwise create the
+        # release + tag in one shot against $GITHUB_SHA so the tag points at
+        # exactly the commit whose artifact was pushed.
+        if gh release view "${tag}" --json id >/dev/null 2>&1; then
+          echo "nuget-push: release ${tag} already exists; skipping tag (idempotent)." >> "${GITHUB_STEP_SUMMARY}"
+        else
+          gh release create "${tag}" --generate-notes --target "${GITHUB_SHA}"
+          echo "nuget-push: created release ${tag} at ${GITHUB_SHA}" >> "${GITHUB_STEP_SUMMARY}"
         fi
