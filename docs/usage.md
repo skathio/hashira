@@ -581,11 +581,20 @@ doesn't touch those paths, the check never reports and the PR can become
 permanently un-mergeable despite being otherwise green. This is a documented
 risk of the consumer-composition pattern, not unique to hashira, but worth
 calling out here because adopting parallel custom jobs increases the chance
-of hitting it. The mitigation (one aggregating required check rather than
-requiring every path-filtered job individually) is **documented, not solved,
-here** — Phase 5.3 of this work item owns the concrete self-CI-side
-mitigation; this section exists so a consumer adopting the pattern knows the
-failure mode exists before they hit it in practice.
+of hitting it. The mitigation — one aggregating required check rather than
+requiring every path-filtered job individually — is a **consumer-side
+branch-protection setting**, not something hashira's own files can fix on a
+consumer's behalf.
+
+hashira's own self-CI (`_self-ci.yml`) was audited for this exact risk
+(work-item Phase 5.3): it is the repo's only `pull_request`-triggered
+workflow, and **none of its jobs are path-filtered** — every job runs on
+every PR regardless of which files changed, so the deadlock cannot occur
+there. Confirmed-sufficient, not a hypothetical: verified directly against
+the actual `on:`/`if:` conditions of all 34 jobs, not assumed. If a future
+job in this file ever gains a `paths:`/path-conditional `if:`, re-audit
+this section — the structural guarantee that makes "no change needed" true
+today would no longer hold.
 
 ## Additive-only v1.x evolution rule
 
