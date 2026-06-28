@@ -1,0 +1,28 @@
+# Negative-test fixture (phase 5 iteration 5.1, CHECK 1).
+#
+# A deliberately introduced `uses: ./.github/workflows/foo.yml` step inside
+# an otherwise-ordinary CD composite action. This is the prohibited shape
+# NFR-Sec-1 corollary (1) forbids — a `workflow_call` boundary nested inside
+# a composite that is supposed to run inline in the caller's job. This
+# fixture exists ONLY to prove the no-nested-reusable-workflow check fails
+# closed on the SAME-REPO form of a reusable-workflow `uses:` target; it is
+# not a real composite action and is never wired into any real workflow.
+name: fixture-nested-reusable-workflow-same-repo
+description: Negative-test fixture for tests/shape-lints/no-nested-reusable-workflow.py CHECK 1 (same-repo form).
+
+inputs:
+  version:
+    description: "Placeholder input, mirrors the real CD composites' shape."
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Innocuous setup step
+      shell: bash
+      run: |
+        echo "setting up"
+    - name: Deliberately prohibited nested reusable-workflow call
+      uses: ./.github/workflows/foo.yml
+      with:
+        version: ${{ inputs.version }}

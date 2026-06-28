@@ -1183,3 +1183,71 @@ jobs:
         run: |
           set -euo pipefail
           python3 tests/dual-pin/lint.py --self-test
+
+  composite-shape-invariant-lint:
+    name: composite-shape-invariant-lint
+    # Phase 5 iteration 5.1 (security.md B3/§2 corollary (1); NFR-Sec-1;
+    # decisions.md; FR-15). Two structural checks against the three CD
+    # composite actions (nuget-push, npm-release, pages-deploy):
+    #   1. no `uses:` step resolving to a `.github/workflows/*.yml` path
+    #      (same-repo or cross-repo) — re-introducing a `workflow_call`
+    #      boundary inside a CD composite would break the OIDC token's
+    #      `job_workflow_ref` claim match (AP1).
+    #   2. no CD-side stamp — no step writing to package.json/.nuspec/
+    #      assembly-version metadata (Phase 3.4's "consume the CI-stamped
+    #      artifact byte-identical" invariant, NFR-Rel-1, mechanized).
+    # Single-hop by design (inspects each composite's own action.yml only,
+    # not transitively through a local composite it itself calls — none of
+    # the current three chain to another local composite). Pure static
+    # shape check: PyYAML tree-walk (collect_uses-style, per the
+    # architectural precedent tests/npm-package-ci/shape-validate.py set —
+    # NOT tests/dual-pin/lint.py's lexical regex approach, since this is a
+    # structural tree-reachability question), no registry credentials
+    # needed. See tests/shape-lints/no-nested-reusable-workflow.py's module
+    # docstring for the full reasoning and CHECK 2's honestly-documented
+    # textual-scan limitations.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - name: Verify python3 + pyyaml availability
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -c 'import yaml; print("pyyaml " + yaml.__version__)'
+      - name: Run composite-shape invariant lint
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tests/shape-lints/no-nested-reusable-workflow.py
+
+  composite-shape-invariant-lint-self-test:
+    name: composite-shape-invariant-lint-self-test
+    # Regression lock for the lint's negative-test fixtures (acceptance
+    # criterion, phase 5 iteration 5.1): proves CHECK 1 fails closed on a
+    # same-repo nested reusable-workflow uses: (fixtures/
+    # nested-reusable-workflow-same-repo.yml) and a cross-repo one
+    # (fixtures/nested-reusable-workflow-cross-repo.yml), and CHECK 2 fails
+    # closed on a package.json stamp (fixtures/cd-side-stamp-package-json.yml)
+    # and a .nuspec stamp (fixtures/cd-side-stamp-nuspec.yml) — each for its
+    # own distinct, correctly-attributed reason (no conflation between the
+    # two check kinds) — and that all three real CD composites stay clean
+    # under both checks (the lint's actual happy-path target).
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - name: Verify python3 + pyyaml availability
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -c 'import yaml; print("pyyaml " + yaml.__version__)'
+      - name: Run composite-shape invariant lint --self-test
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tests/shape-lints/no-nested-reusable-workflow.py --self-test
