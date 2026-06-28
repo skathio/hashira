@@ -1134,3 +1134,52 @@ jobs:
         run: |
           set -euo pipefail
           python3 tests/static-webapp/docs-cross-ref.py
+
+  dual-pin-lint:
+    name: dual-pin-lint
+    # Phase 4 iteration 4.1 (decisions.md D9; security.md AP8). Asserts the
+    # dual-pin invariant (same repository AND same commit between a
+    # caller's outer `uses:` pin and the `library_ref` input passed to the
+    # SAME reusable-workflow call) against tests/dual-pin/caller-fixture.yml
+    # — the canonical, lint-owned example of a correctly dual-pinned caller.
+    # Pure static/textual check: GitHub Actions resolves a `uses:` ref's
+    # `@<ref>` at workflow-parse time, before any job runs, so there is no
+    # runtime introspection API this could instead be implemented against
+    # (see tests/dual-pin/lint.py's module docstring for the full reasoning).
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - name: Run dual-pin lint against the canonical fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tests/dual-pin/lint.py
+
+  dual-pin-lint-self-test:
+    name: dual-pin-lint-self-test
+    # Regression lock for the lint's negative-test fixtures (acceptance
+    # criterion, phase 4 iteration 4.1; extended passes 2-3 of review):
+    # proves the lint fails closed on a same-repository mismatch
+    # (fixtures/same-repo-mismatch.yml), a same-repository-different-commit
+    # mismatch (fixtures/same-repo-different-sha.yml — the actual AP8 attack
+    # path), and an asymmetric real-SHA-vs-not mismatch in EITHER direction
+    # (fixtures/non-pinned-library-ref*.yml for `main`/non-`main` branches;
+    # the mirror unpinned-`uses:` direction is covered in-memory by
+    # lint.py --self-test) — and that the canonical fixture stays clean.
+    # These fixtures deliberately retain `hashira-ops` / mismatched-commit /
+    # non-SHA content; excluded by construction from iteration 4.4's
+    # repo-wide naming-cleanup sweep.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - name: Run dual-pin lint --self-test
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tests/dual-pin/lint.py --self-test

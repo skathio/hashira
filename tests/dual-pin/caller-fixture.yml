@@ -1,0 +1,43 @@
+# Canonical "correctly dual-pinned caller" fixture (phase 4 iteration 4.1).
+#
+# This is NOT a real consumer workflow and is never invoked by `_self-ci.yml`
+# or anything else — it exists solely as a concrete, mechanically-checkable
+# target for `tests/dual-pin/lint.py`. This repo's own doc-facing caller
+# templates use a literal `<40-char-sha>` placeholder string on both sides,
+# which cannot itself prove a same-repo/same-SHA *mismatch* — there's nothing
+# real to mutate. This file gives the lint (and its negative tests) a real
+# pair of 40-char hex SHAs to compare, while still reading as a normal
+# consumer caller workflow so the lint's parsing logic generalizes to the
+# real thing.
+#
+# The two fixtures below mirror the dual-pin invariant (decisions.md D9):
+# the outer `uses:` SHA pin and the `library_ref` input passed to the SAME
+# `workflow_call` MUST resolve to the same repository AND the same commit.
+#
+# `tests/dual-pin/lint.py` parses this file with two regexes — one for the
+# `uses: <repo>/.github/workflows/<file>@<sha>` job-level call, one for the
+# `library_ref:` value in that job's `with:` block — and asserts both halves
+# of the invariant per occurrence found (count-independent: it iterates
+# however many `uses:`/`library_ref:` pairs are present, never a hardcoded
+# number).
+
+name: dual-pin-fixture-ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  # Fixture A: correctly dual-pinned — same repository, same commit. This is
+  # the happy-path target; `lint.py`'s positive test asserts this job passes.
+  ci:
+    uses: skathio/hashira/.github/workflows/npm-package-ci.yml@4c1f3a8b2e6d9057a1c4f8e3b6d2a9c7e5f01234
+    permissions:
+      contents: read
+      pull-requests: write
+      security-events: write
+    with:
+      library_ref: '4c1f3a8b2e6d9057a1c4f8e3b6d2a9c7e5f01234'

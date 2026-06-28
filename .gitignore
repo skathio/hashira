@@ -1,2 +1,4 @@
 .somi
 .claude
+__pycache__/
+*.pyc

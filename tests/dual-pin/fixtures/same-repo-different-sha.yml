@@ -1,0 +1,35 @@
+# Negative-test fixture for `tests/dual-pin/lint.py` (phase 4 iteration
+# 4.1, acceptance criterion 2 — the actual AP8 attack path,
+# `.somi/rd/hashira-v2/security.md` "Attack paths explicitly closed" #8).
+# Not hand-numbered against its siblings (see same-repo-mismatch.yml).
+#
+# Both `uses:` and `library_ref` correctly name the canonical
+# `skathio/hashira` — a same-repository check ALONE (fixture 1's check)
+# would pass this fixture — but they resolve to DIFFERENT commits. This is
+# the scenario where a pinned-looking caller actually runs unknown code at a
+# different commit in the SAME repository: the outer `uses:` pin is what a
+# reviewer reads and trusts ("pinned to 4c1f3a8b..."), while `library_ref`
+# silently determines which commit's composite actions actually execute
+# inside the call (`...e5f01234` vs `...e5fdeadb` below) — a one-character
+# divergence a human reviewer could easily miss, which is exactly why this
+# needs a mechanical check rather than relying on review.
+name: dual-pin-fixture-same-repo-different-sha
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  ci:
+    uses: skathio/hashira/.github/workflows/npm-package-ci.yml@4c1f3a8b2e6d9057a1c4f8e3b6d2a9c7e5f01234
+    permissions:
+      contents: read
+      pull-requests: write
+      security-events: write
+    with:
+      # Same repository (skathio/hashira) as the `uses:` pin above, but a
+      # DIFFERENT commit SHA — the AP8 scenario this fixture isolates.
+      library_ref: '4c1f3a8b2e6d9057a1c4f8e3b6d2a9c7e5fdeadb'
