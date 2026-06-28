@@ -457,8 +457,8 @@ jobs:
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
         with:
           node-version: ${{ inputs.node_version }}
-      # Library self-checkout per D14: ./.hashira/ holds hashira-ops at library_ref.
-      - name: Checkout hashira-ops library (D14)
+      # Library self-checkout per D14: ./.hashira/ holds hashira at library_ref.
+      - name: Checkout hashira library (D14)
         # actions/checkout v4.2.2
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
@@ -492,7 +492,7 @@ jobs:
         with:
           node-version: ${{ inputs.node_version }}
       # Library self-checkout per D14.
-      - name: Checkout hashira-ops library (D14)
+      - name: Checkout hashira library (D14)
         # actions/checkout v4.2.2
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
@@ -520,7 +520,7 @@ jobs:
         with:
           node-version: ${{ inputs.node_version }}
       # Library self-checkout per D14.
-      - name: Checkout hashira-ops library (D14)
+      - name: Checkout hashira library (D14)
         # actions/checkout v4.2.2
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:

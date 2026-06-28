@@ -106,7 +106,7 @@ def validate_uses_ref(ref):
     `.github/actions/`; third-party refs must be pinned to a 40-char SHA."""
     if ref.startswith(HASHIRA_PREFIX):
         # D14 library-self-checkout shape. The .hashira/ path is the
-        # runtime checkout location of skathio/hashira-ops at library_ref.
+        # runtime checkout location of skathio/hashira at library_ref.
         # We validate the LIBRARY's own copy of the action exists.
         relative = ref[len(HASHIRA_PREFIX):]  # e.g. "run-tests-js"
         candidate_dir = os.path.join(REPO_ROOT, ".github", "actions", relative)

@@ -5,7 +5,7 @@
     <IsPackable>true</IsPackable>
     <PackageId>HashiraTestMinVer</PackageId>
     <Description>Synthetic fixture for dotnet-pack-version self-CI smoke. Not for publication.</Description>
-    <Authors>hashira-ops self-CI</Authors>
+    <Authors>hashira self-CI</Authors>
   </PropertyGroup>
 
   <ItemGroup>

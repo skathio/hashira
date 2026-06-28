@@ -8,5 +8,5 @@ namespace HashiraTestMinVer;
 /// </summary>
 public static class Class1
 {
-    public static string Greet() => "hello from hashira-ops self-CI fixture";
+    public static string Greet() => "hello from hashira self-CI fixture";
 }
