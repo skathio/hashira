@@ -1251,3 +1251,67 @@ jobs:
         run: |
           set -euo pipefail
           python3 tests/shape-lints/no-nested-reusable-workflow.py --self-test
+
+  gate-lints:
+    name: gate-lints
+    # Phase 5 iteration 5.2 (decisions.md D12; security.md B8; FR-15). Two
+    # small, unrelated checks bundled in one shim:
+    #   CHECK A — every gated publish/deploy job in docs/flows/*.md's main
+    #     caller-workflow example declares an `environment:` key (D12's
+    #     only mechanizable defense-in-depth half — the library cannot
+    #     verify a reviewer is actually configured on that Environment,
+    #     admin-tier scope the workflow token lacks, but CAN verify the
+    #     maintainer didn't forget the gate keyword itself).
+    #   CHECK B — no `.github/workflows/*.yml` file's `on:` block declares
+    #     `pull_request_target` as a trigger (B8 — a hard prohibition, not
+    #     advisory). YAML-scoped (parses the `on:` block only), not a bare
+    #     substring grep — static-webapp-ci.yml's own comment documenting
+    #     this prohibition contains the literal string `pull_request_target`
+    #     five times, which a naive grep would false-positive on. See
+    #     tests/shape-lints/gate-lints.py's module docstring for the full
+    #     reasoning on both checks.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - name: Verify python3 + pyyaml availability
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -c 'import yaml; print("pyyaml " + yaml.__version__)'
+      - name: Run gate-lints (environment-gate presence + pull_request_target prohibition)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tests/shape-lints/gate-lints.py
+
+  gate-lints-self-test:
+    name: gate-lints-self-test
+    # Regression lock for the lint's negative-test fixtures (acceptance
+    # criterion, phase 5 iteration 5.2): proves CHECK A fails closed on a
+    # gated job missing environment: (fixtures/gated-job-missing-
+    # environment.yml) and CHECK B fails closed on a workflow using
+    # pull_request_target (fixtures/pull-request-target-workflow.yml) —
+    # each for its own distinct, correctly-attributed reason — and that all
+    # three real flow docs and all real workflow files (including
+    # static-webapp-ci.yml's own prohibition-documenting comment, the
+    # concrete false-positive control for CHECK B's YAML-scoped design)
+    # stay clean.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - name: Verify python3 + pyyaml availability
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -c 'import yaml; print("pyyaml " + yaml.__version__)'
+      - name: Run gate-lints --self-test
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tests/shape-lints/gate-lints.py --self-test
