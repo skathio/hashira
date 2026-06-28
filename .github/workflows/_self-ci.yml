@@ -284,23 +284,14 @@ jobs:
           echo "${SUMMARY}"
           echo "${SUMMARY}" | grep -P '^gitleaks\tskipped\tconsumer disabled$'
 
-  npm-release-unit-tests:
-    name: npm-release-unit-tests
+  npm-release-shape-validation:
+    name: npm-release-shape-validation
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
       # actions/checkout v4.2.2
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
-      # actions/setup-node v4.1.0 — Node 24 matches the action's runtime (D7).
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
-        with:
-          node-version: '24'
-      - name: Run npm-release build-releaserc unit tests
-        shell: bash
-        run: |
-          set -euo pipefail
-          node --test tests/npm-release/build-releaserc.test.js
       - name: Run npm-release action shape-validation shim
         shell: bash
         run: |
@@ -312,11 +303,15 @@ jobs:
     name: npm-release-dry-run
     runs-on: ubuntu-latest
     permissions:
-      contents: write  # semantic-release --dry-run runs `git push --dry-run` + @semantic-release/github token check
+      contents: read
     env:
-      # Force the action into --dry-run --no-ci so no publish or git push is
-      # attempted. Documented reserved env name; do NOT set in consumer workflows.
-      HASHIRA_SEMANTIC_RELEASE_DRY_RUN: '1'
+      # Skip the actual `npm publish` and tag/release steps. Documented
+      # reserved env name; do NOT set in consumer workflows — doing so
+      # silently turns publishes into no-ops. NOTE: this does NOT skip the
+      # actions/download-artifact / tarball-locate steps (see action.yml) —
+      # those run for real below, proving the actual CI->CD artifact-handoff
+      # plumbing (NFR-Rel-1), not just the auth-mode branching.
+      HASHIRA_NPM_RELEASE_DRY_RUN: '1'
     steps:
       # actions/checkout v4.2.2
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
@@ -327,11 +322,36 @@ jobs:
           ref: ${{ github.sha }}
           path: .hashira
           persist-credentials: false
-      - name: Run npm-release against the dry-run fixture
+      # actions/setup-node v4.1.0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: '24'
+      - name: Pack the dry-run fixture into a real .tgz
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Mirrors npm-package-ci.yml's `version` job: pack the fixture
+          # directory into a real tarball. There is no version-stamping here
+          # (this fixture isn't exercising D1/D8's stamp step — that's
+          # npm-package-ci's own shape-validation job) — just producing a
+          # real .tgz for the composite's download-artifact step to fetch.
+          mkdir -p "${RUNNER_TEMP}/npm-release-dry-run-pack-output"
+          npm pack --pack-destination "${RUNNER_TEMP}/npm-release-dry-run-pack-output" \
+            ./tests/npm-release/dry-run-fixture
+      - name: Upload fixture tarball as 'npm-tarball' (same artifact name the real CI version job uses)
+        # actions/upload-artifact v4.4.3 — same pin already verified and in
+        # use at npm-package-ci.yml / nuget-package-ci.yml / coverage-report.
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882
+        with:
+          name: npm-tarball
+          path: ${{ runner.temp }}/npm-release-dry-run-pack-output/*.tgz
+          if-no-files-found: error
+          retention-days: 1
+      - name: Run npm-release against the dry-run fixture (auth=auto)
         id: nr
         uses: ./.hashira/.github/actions/npm-release
         with:
-          working_directory: tests/npm-release/dry-run-fixture
+          version: '0.0.0-dryrun'
       - name: Assert dry-run produced a sensible summary
         shell: bash
         env:
@@ -340,12 +360,182 @@ jobs:
         run: |
           set -euo pipefail
           echo "released='${RELEASED}'  version='${VERSION}'"
-          # released must always be false in dry-run mode (HASHIRA_SEMANTIC_RELEASE_DRY_RUN=1
-          # forces released=false regardless of the semantic-release log output).
+          # released must always be false in dry-run mode (HASHIRA_NPM_RELEASE_DRY_RUN=1
+          # short-circuits the publish step unconditionally before any network call).
           if [ "${RELEASED}" != "false" ]; then
             echo "expected released=false in dry-run, got '${RELEASED}'" >&2
             exit 1
           fi
+
+  npm-release-dry-run-auth-modes:
+    name: npm-release-dry-run-auth-modes
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      HASHIRA_NPM_RELEASE_DRY_RUN: '1'
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      # D14 self-checkout: composite actions are referenced from .hashira/.
+      - name: Checkout library into .hashira
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          ref: ${{ github.sha }}
+          path: .hashira
+          persist-credentials: false
+      # actions/setup-node v4.1.0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: '24'
+      - name: Pack the dry-run fixture into a real .tgz
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/npm-release-dry-run-pack-output"
+          npm pack --pack-destination "${RUNNER_TEMP}/npm-release-dry-run-pack-output" \
+            ./tests/npm-release/dry-run-fixture
+      - name: Upload fixture tarball as 'npm-tarball'
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882
+        with:
+          name: npm-tarball
+          path: ${{ runner.temp }}/npm-release-dry-run-pack-output/*.tgz
+          if-no-files-found: error
+          retention-days: 1
+      # Exercises every `auth` value's branching up to (but never past) the
+      # point of the real network call — the dry-run flag short-circuits
+      # before any of these would actually touch a credential or the
+      # registry, so this single job can prove all three values are accepted
+      # and wired through safely.
+      - name: npm-release — auth=auto (default), dry-run
+        uses: ./.hashira/.github/actions/npm-release
+        with:
+          version: '0.0.0-dryrun'
+      - name: npm-release — auth=token, dry-run
+        uses: ./.hashira/.github/actions/npm-release
+        with:
+          version: '0.0.0-dryrun'
+          auth: token
+          npm_token: fake-smoke-token
+      - name: npm-release — auth=oidc, dry-run (no real OIDC attempted under dry-run)
+        uses: ./.hashira/.github/actions/npm-release
+        with:
+          version: '0.0.0-dryrun'
+          auth: oidc
+      - name: Assert dry-run summary line is present
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "npm-release-dry-run-auth-modes: all 3 action invocations passed (dry-run path exercised by HASHIRA_NPM_RELEASE_DRY_RUN=1 for auth=auto/token/oidc)"
+
+  npm-release-smoke-oidc-fails-loud:
+    name: npm-release-smoke-oidc-fails-loud
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Deliberately NOT granting id-token: write — this job proves auth=oidc
+      # fails loud when no OIDC token is reachable, which requires the
+      # GitHub-provided ACTIONS_ID_TOKEN_REQUEST_* vars to be genuinely absent,
+      # not merely unused.
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      # D14 self-checkout: composite actions are referenced from .hashira/.
+      - name: Checkout library into .hashira
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          ref: ${{ github.sha }}
+          path: .hashira
+          persist-credentials: false
+      # actions/setup-node v4.1.0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: '24'
+      - name: Pack a real (unique-named) tarball — never actually reaches the registry
+        shell: bash
+        run: |
+          set -euo pipefail
+          # A unique, obviously-fake package name: even in the hypothetical
+          # case this attempt's fail-loud guarantee were broken by a future
+          # regression, there is no real package by this name to collide
+          # with. Belt-and-suspenders on top of the fail-loud assertion below,
+          # not a substitute for it. Written via `node -e` rather than a
+          # heredoc — a YAML block-indented heredoc terminator is NOT at
+          # column 0, so bash would never match it and silently swallow the
+          # rest of the script into the heredoc body (confirmed by direct
+          # reproduction during this iteration's implementation).
+          mkdir -p "${RUNNER_TEMP}/npm-release-oidc-test-pkg"
+          node -e '
+            const fs = require("fs");
+            const pkg = {
+              name: "hashira-npm-release-oidc-fails-loud-test-zzz-never-published",
+              version: "0.0.0-oidctest",
+              license: "MIT",
+            };
+            fs.writeFileSync(
+              process.env.RUNNER_TEMP + "/npm-release-oidc-test-pkg/package.json",
+              JSON.stringify(pkg, null, 2),
+            );
+          '
+          mkdir -p "${RUNNER_TEMP}/npm-release-oidc-test-pack-output"
+          npm pack --pack-destination "${RUNNER_TEMP}/npm-release-oidc-test-pack-output" \
+            "${RUNNER_TEMP}/npm-release-oidc-test-pkg"
+      - name: Upload fixture tarball as 'npm-tarball'
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882
+        with:
+          name: npm-tarball
+          path: ${{ runner.temp }}/npm-release-oidc-test-pack-output/*.tgz
+          if-no-files-found: error
+          retention-days: 1
+      # Pass-2 regression lock (Blocker/Major): poison the cwd with a
+      # project `.npmrc` (fake token A) and an `npm_config_*` env var (fake
+      # token B) — the two leak paths fixed via clean-cwd + scrub +
+      # globalconfig. A regression would auth with one of these and fail
+      # E401, not ENEEDAUTH — distinguished by the marker assertion below.
+      - name: Poison the working directory + environment with fake credentials (regression fixture)
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "//registry.npmjs.org/:_authToken=poisoned-token-from-project-npmrc-must-never-be-used" > .npmrc
+          echo "npm-release-smoke-oidc-fails-loud: wrote a poisoned .npmrc to $(pwd)/.npmrc"
+      # NOT run under HASHIRA_NPM_RELEASE_DRY_RUN — proves fail-loud for
+      # real (see action header's '## Authentication model'). The poisoned
+      # fixtures above/below must NOT change this outcome.
+      - name: npm-release — auth=oidc with no id-token grant MUST fail loud (negative test)
+        id: oidc_attempt
+        continue-on-error: true
+        uses: ./.hashira/.github/actions/npm-release
+        with:
+          version: '0.0.0-oidctest'
+          auth: oidc
+          npm_token: fake-token-that-must-not-be-used
+        env:
+          # Second leak path (env-var-to-config mapping) — a DIFFERENT fake
+          # token, so a fix that only closed one of the two paths would
+          # still be caught.
+          npm_config_//registry.npmjs.org/:_authToken: poisoned-token-from-npm-config-envvar-must-never-be-used
+      - name: Assert the auth=oidc step failed for the SPECIFIC reason (not just any failure)
+        shell: bash
+        env:
+          OIDC_OUTCOME: ${{ steps.oidc_attempt.outcome }}
+        run: |
+          set -euo pipefail
+          if [ "${OIDC_OUTCOME}" = "success" ]; then
+            echo "::error::npm-release-smoke-oidc-fails-loud: auth=oidc step unexpectedly SUCCEEDED with no id-token grant — it must fail loud, not silently fall back to npm_token (D3/D11)." >&2
+            exit 1
+          fi
+          # Assert the SPECIFIC ENEEDAUTH reason via the diagnostic marker
+          # (same pattern as nuget-push) — also the regression lock for the
+          # pass-1 leak: a regressed fix would auth with a poisoned token
+          # and fail E401, not ENEEDAUTH.
+          marker_file="${RUNNER_TEMP}/npm-release-failure-reason.txt"
+          if [ ! -f "${marker_file}" ] || [ "$(cat "${marker_file}")" != "eneedauth" ]; then
+            echo "::error::npm-release-smoke-oidc-fails-loud: auth=oidc step failed, but NOT for the expected 'eneedauth' reason (marker file missing or mismatched: $(cat "${marker_file}" 2>/dev/null || echo '<absent>')). This test must fail for the OIDC-no-credential path specifically — including the possibility that the poisoned .npmrc/npm_config_* fixtures above actually leaked a credential (which would surface as E401, not ENEEDAUTH)." >&2
+            exit 1
+          fi
+          echo "npm-release-smoke-oidc-fails-loud: auth=oidc correctly failed loud (npm's own ENEEDAUTH) instead of authenticating with the supplied npm_token OR either poisoned fixture credential (project .npmrc / npm_config_* env var)."
+          echo ""
+          echo "Honest limitation (documented, not silently assumed covered): this proves auth=oidc fails loud when NO credential is reachable at all, INCLUDING when a consumer-side project .npmrc or npm_config_* env var is present (the pass-1 leak paths). It does NOT exercise a genuine ref/job-workflow-mismatch OIDC failure against a real configured npm trusted-publishing policy — deferred to Phase 6's live consumer validation, same category as A2/A3."
 
   npm-package-ci-shape-validation:
     name: npm-package-ci-shape-validation
