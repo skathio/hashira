@@ -1,20 +1,52 @@
 # NuGet package flow — adoption walk-through
 
-> **Audience**: a consumer adopting `hashira-ops` for a NuGet package repo.
+> **Audience**: a consumer adopting `skathio/hashira` for a NuGet package repo.
 > **Scope**: copy-paste-ready CI + Publish caller workflow templates, MinVer
-> PackageReference snippet, input/secret tables, OIDC federated-token
-> onboarding (or API-key fallback), `production` Environment setup, release
-> walk-through, common failure modes.
-> **Status**: derived from the workflow YAML + D4 release walk-through + spec
-> §8 permissions matrix. The library has no live-publish evidence yet (rev-7
-> defers real adoption to user post-v1); every OIDC/onboarding inference is
-> marked "inferred — confirm with first real adoption".
+> PackageReference snippet, input/secret/permission tables, OIDC
+> trusted-publishing onboarding (or API-key fallback), `production`
+> Environment setup, release walk-through, common failure modes.
+> **Status**: derived directly from `.github/workflows/nuget-package-ci.yml`
+> and `.github/actions/nuget-push/action.yml` (v2 shape — the
+> `nuget-package-publish.yml` reusable workflow this flow used in v1 is
+> deleted; `nuget-push` is invoked directly from the consumer's own job).
+> rogue is this flow's live consumer; its actual migration to v2 is Phase 6
+> of this work item and has not yet happened — every OIDC/onboarding
+> mechanism below is otherwise unchanged from the design `nuget-push`
+> already implements (A2's nuget.org-OIDC-on-dotnet-10 verification is
+> research-based PASS, not yet confirmed by a live publish — see
+> `progress.md`).
 
 For cross-cutting concepts (pin policy, gate model, secret-passing model,
-permissions baseline, OIDC trust onboarding narrative), see
-[`../usage.md`](../usage.md).
+permissions baseline, OIDC trust onboarding narrative, the versioning model
+end-to-end), see [`../usage.md`](../usage.md).
 
 ---
+
+## What changed from v1
+
+v1's Publish half was a separate **reusable workflow**,
+`nuget-package-publish.yml`, called via its own `uses:` line with its own
+`inputs:`/`secrets:` block. **That file is deleted.** Its logic — pack via
+MinVer, push, tag + Release — moved into the `nuget-push` **composite
+action**, invoked directly from a job in the consumer's own caller file
+(D2's architectural spine: OIDC trusted publishing requires the publish to
+run with no `workflow_call` boundary between it and the consumer's
+trusted-publisher-registered workflow file — see
+[`../usage.md`](../usage.md#why-a-composite-action-not-a-reusable-workflow-for-cd)).
+
+The version is also no longer MinVer's tag-inference acting as the de facto
+release trigger. v2 resolves the version once, in CI, via the
+`version-resolver` composite action (D1/D8) and passes it into
+`dotnet-pack-version`'s `version_override` input, which sets MinVer's own
+`MinVerVersionOverride` MSBuild property — MinVer is **kept** as the packing
+mechanism, but explicit (the resolver's output) always wins over inferred
+(MinVer's git-tag walk) when `version_override` is non-empty. See
+[`../usage.md`](../usage.md#versioning-model) for the full versioning
+narrative, including D14's seed-plus-bump-on-top semantics.
+
+The auth model also changed: v1 distinguished OIDC vs. API-key implicitly
+("API key empty means OIDC"); v2 has an explicit `auth: oidc|token|auto`
+enum (D3/D11) with no silent downgrade from the secure path — see §7 below.
 
 ## 1. CI caller workflow template
 
@@ -27,16 +59,26 @@ on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Set to cut a release: patch | minor | major. Leave empty for a routine CI run."
+        type: choice
+        options: ['', patch, minor, major]
+        default: ''
+      seed_version:
+        description: "Bare semver baseline (e.g. '0.0.0'). Only needed for the first release / no prior stable tag."
+        type: string
+        default: ''
 
 # Deny-all default; each job grants what it needs.
 permissions: {}
 
 jobs:
   ci:
-    # MUST pin to a SHA — using `main` exposes you to library-repo
-    # compromise (not just non-reproducible builds). See §11 for the
-    # library-repo trust model.
-    uses: skathio/hashira-ops/.github/workflows/nuget-package-ci.yml@<40-char-sha>
+    # Pin to a SHA for reproducible builds (recommended), or @v2 for the
+    # rolling tag. NEVER pin to @main — see docs/usage.md "Pin policy".
+    uses: skathio/hashira/.github/workflows/nuget-package-ci.yml@<40-char-sha>
     # Per-job grants MUST mirror the matrix below — reusable workflows
     # can only narrow the caller's grants, not broaden them.
     permissions:
@@ -51,59 +93,93 @@ jobs:
       # coverage_path: 'coverage/cobertura.xml'
       # scan_disable: 'codeql,actionlint'
       library_ref: '<40-char-sha>'  # MUST be the SAME SHA as @<…> above.
+      bump: ${{ inputs.bump }}
+      seed_version: ${{ inputs.seed_version }}
 ```
+
+`bump`/`seed_version` are passed straight through to the CI workflow's
+`version` job, which only runs when `bump` is non-empty (every routine
+PR/push run leaves it empty and is unaffected). The maintainer triggers a
+release via `gh workflow run ci.yml -f bump=minor` (or the Actions UI's "Run
+workflow" form).
 
 ## 2. Publish caller workflow template
 
-Copy this into `.github/workflows/publish.yml`:
+The publish step is a **composite action (`nuget-push`) called from a job
+in your own `ci.yml`** — NOT a reusable workflow (the v1
+`nuget-package-publish.yml` reusable workflow this used to be is deleted).
+This is required for the same reason as every other flow's CD half: a job
+running inside a `workflow_call`-invoked reusable workflow carries the
+*reusable workflow's own* path as its OIDC `job_workflow_ref` claim, which
+can never match nuget.org's trusted-publisher policy for *your* workflow
+file. A composite action runs inline in *your* job's context, so the claim
+matches (D2 — see [`../usage.md`](../usage.md#gate-model)).
+
+Because the gated `publish` job lives in the **same caller file** as `ci`
+(linked via `needs:`), the CD job reads the resolved version straight off
+the CI job's output — `needs.<job-id>.outputs.resolved_version` — there is
+nothing to recompute. Append this job to the same `ci.yml` file from §1:
 
 ```yaml
-# .github/workflows/publish.yml
-name: publish
-on:
-  push:
-    branches: [main]
-  # Optional: workflow_dispatch lets you trigger a publish manually.
-  workflow_dispatch:
-
-# Deny-all default.
-permissions: {}
-
-jobs:
+# .github/workflows/ci.yml (continued — same file as §1)
   publish:
-    # MUST pin to a SHA — see §11.
-    uses: skathio/hashira-ops/.github/workflows/nuget-package-publish.yml@<40-char-sha>
+    needs: ci
+    if: ${{ inputs.bump != '' }}
+    runs-on: ubuntu-latest
+    environment: production   # single gate; configure >=1 required reviewer (see §8)
     permissions:
-      id-token: write     # required for OIDC trusted publishing (NuGet/login)
-      contents: write     # gh release create tags + creates the GitHub Release
-      pull-requests: write # gh release create --generate-notes may post on linked PRs
-    with:
-      project_path: 'src/MyLib/MyLib.csproj'
-      target: 'https://api.nuget.org/v3/index.json'
-      environment_name: 'production'    # MUST have >=1 required reviewer (see §8)
-      # dotnet_version: '8.0.x'
-      # prerelease_identifier: 'alpha'
-      # version_increment: 'minor'   # one of: minor, major, '' (patch — default)
-      library_ref: '<40-char-sha>'  # MUST be the SAME SHA as @<…> above.
-      # OIDC trusted publishing (recommended): set nuget_user to your
-      # nuget.org username and DO NOT pass the NUGET_API_KEY secret below.
-      nuget_user: 'your-nuget-username'
-    secrets:
-      # Pick ONE auth path:
-      #  - OIDC trusted publishing (above): omit this secret entirely.
-      #  - API key: pass it here and leave `nuget_user` unset.
-      NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+      id-token: write       # NuGet/login OIDC token exchange (auth: oidc/auto)
+      contents: write        # gh release create tags the commit
+      pull-requests: read    # --generate-notes reads merged-PR metadata (read-only)
+    steps:
+      - uses: actions/checkout@<sha>  # v4.2.2
+        with:
+          persist-credentials: true  # REQUIRED: gh release create needs git
+                                      # credentials on this job. checkout's default,
+                                      # but set it explicitly — a consumer who
+                                      # hardens with persist-credentials:false gets
+                                      # a SILENT tag/release failure AFTER push.
+      - uses: actions/setup-dotnet@<sha>
+        with:
+          dotnet-version: '8.0.x'
+      # Download the same-run, byte-identical .nupkg that CI's `version` job
+      # packed and uploaded (NFR-Rel-1) — never re-pack here.
+      - uses: actions/download-artifact@<sha>
+        with:
+          name: nuget-package
+          path: ${{ runner.temp }}/nuget-download
+      - uses: skathio/hashira/.github/actions/nuget-push@<40-char-sha-or-v2>
+        with:
+          nupkg_path: ${{ runner.temp }}/nuget-download/*.nupkg
+          version: ${{ needs.ci.outputs.resolved_version }}  # D8 — consumed, not recomputed
+          # auth defaults to 'auto'. Use 'oidc' once trusted publishing is
+          # confirmed working (no silent downgrade); 'token' to opt out of
+          # OIDC entirely.
+          # auth: oidc
+          # Required when auth=oidc; used as the auto-attempt user when
+          # auth=auto. Your nuget.org username that owns the trusted-
+          # publishing policy.
+          nuget_user: 'your-nuget-username'
+          # Pick ONE auth path:
+          #  - OIDC trusted publishing (above): omit this input entirely.
+          #  - API key (auth: token, or as the auto fallback): pass it here.
+          # This is a declared composite-action INPUT (with:), not a
+          # secrets: map — composite actions have no secrets: syntax on
+          # their uses: line. nuget-push never reads secrets.* directly,
+          # only inputs.api_key.
+          api_key: ${{ secrets.NUGET_API_KEY }}
 ```
 
-The two-workflow shape (CI in one file, Publish in another) is the
-canonical shape per D8. CI runs on every PR/push; Publish runs on the
-consumer's chosen trigger and is gated by the `production` GitHub
-Environment.
+The `ci` job (§1) is the gate: `publish` only runs after it passes, and only
+when `bump` was set on the dispatch. One `production` approval per release.
 
 ## 3. MinVer PackageReference snippet
 
-The NuGet flow uses **MinVer** (per D4) for tag-driven version inference.
-The library does NOT install MinVer for you — it's an MSBuild-integrated
+The NuGet flow uses **MinVer** for tag-driven version inference at the
+foundation, but v2's release path always overrides it with the resolver's
+explicit version (`version_override`, set by `dotnet-pack-version` whenever
+the CI `version` job runs — see "What changed from v1" above). The library
+does NOT install MinVer for you — it's an MSBuild-integrated
 PackageReference your `.csproj` must carry. Add this to the project file
 you pass as `project_path`:
 
@@ -120,81 +196,107 @@ you pass as `project_path`:
 ```
 
 If you omit the MinVer PackageReference, `dotnet-pack-version` emits a
-`::warning::` and MSBuild falls back to whatever `<Version>` the project
-declares (often `1.0.0` or `0.0.0`) — almost never what you want.
+`::warning::` and falls back to whatever `<Version>` the project declares
+when `version_override` is also empty — this only matters for routine
+(non-release) `dotnet pack` invocations outside the resolver-driven release
+path, since the release path's `version_override` is always non-empty and
+wins regardless.
 
 ## 4. Input table
 
-Every input across both `nuget-package-ci.yml` and
-`nuget-package-publish.yml`, with type, default, and meaning.
+Every input across both `nuget-package-ci.yml` and the `nuget-push`
+composite action, with type, default, and meaning — verified field-by-field
+against the actual shipped YAML.
 
 ### CI inputs (`nuget-package-ci.yml`)
 
-| Input              | Type   | Default                      | Meaning |
-|--------------------|--------|------------------------------|---------|
-| `dotnet_version`   | string | `"8.0.x"`                    | Dotnet SDK channel installed via `actions/setup-dotnet` before restore/build/test. |
-| `project_path`     | string | _(required)_                 | Path (relative to your repo root) to the `.csproj` or `.sln` to restore/build/test. **Trusted input** — interpolated into `dotnet` CLI argv. |
-| `test_filter`      | string | `""`                         | Optional `dotnet test --filter` expression. Empty string runs all tests. **Trusted input**. |
-| `coverage_path`    | string | `"coverage/cobertura.xml"`   | Path where `dotnet test --collect:"XPlat Code Coverage"` writes the cobertura file. Consumed by `coverage-report`. |
-| `scan_disable`     | string | `"codeql,actionlint"`        | Comma-separated list of scans to skip (per D10c). Pass `""` to enable everything. Values: `codeql`, `osv`, `gitleaks`, `dependency-review`, `actionlint`. |
-| `library_ref`      | string | `"main"`                     | SHA, tag, or branch of `skathio/hashira-ops` checked out into `.hashira/` for in-repo composite actions (D14). **PIN TO A SHA** for reproducible builds. |
+| Input | Type | Default | Meaning |
+|-------|------|---------|---------|
+| `dotnet_version` | string | `"8.0.x"` | Dotnet SDK channel installed via `actions/setup-dotnet` before restore/build/test. |
+| `project_path` | string | _(required)_ | Path to the `.csproj` or `.sln` to restore/build/test/pack. **Trusted input** — interpolated into `dotnet` CLI argv. |
+| `test_filter` | string | `""` | Optional `dotnet test --filter` expression. Empty string runs all tests. **Trusted input**. |
+| `coverage_path` | string | `"coverage/cobertura.xml"` | Path where `dotnet test --collect:"XPlat Code Coverage"` writes the cobertura file. Consumed by `coverage-report`, which runs inside the `test` job. |
+| `scan_disable` | string | `"codeql,actionlint"` | Comma-separated list of scans to skip (D10c). Pass `""` to enable everything. Values: `codeql`, `osv`, `gitleaks`, `dependency-review`, `actionlint`. |
+| `library_ref` | string | _(required, no default)_ | SHA, tag, or branch of `skathio/hashira` checked out into `.hashira/` for in-repo composite actions (D9/D14). **Required** — every caller must pin it explicitly. PIN TO A SHA for reproducible builds; see the dual-pin invariant in [`../usage.md`](../usage.md#the-library_ref-dual-pin-invariant). |
+| `bump` | string | `""` | One of `patch`\|`minor`\|`major`. Optional — leave empty for routine PR/push CI runs that aren't cutting a release. When set, the `version` job resolves the next version, surfaces it in the run summary, and packs it via `dotnet-pack-version`'s `version_override` (D1/D8). |
+| `seed_version` | string | `""` | Bare semver baseline (e.g. `"0.0.0"`) for a major/initial release with no prior stable tag (FR-3). Passed through to `version-resolver` unchanged; ignored when a stable tag already exists or `bump` is empty. D14: the chosen `bump` still applies arithmetic **on top of** the seed — it is not published literally. |
 
-### Publish inputs (`nuget-package-publish.yml`)
+### CI output (`nuget-package-ci.yml`)
 
-| Input                  | Type   | Default                                  | Meaning |
-|------------------------|--------|------------------------------------------|---------|
-| `dotnet_version`       | string | `"8.0.x"`                                | Dotnet SDK channel installed via `actions/setup-dotnet` before pack/push. **Trusted input**. |
-| `project_path`         | string | _(required)_                             | Path to the `.csproj` or `.sln` to pack. **Trusted input**. |
-| `target`               | string | `"https://api.nuget.org/v3/index.json"`  | Feed URL to publish to (D10b unified target). **Trusted input**. |
-| `prerelease_identifier`| string | `""`                                     | MinVer prerelease identifier (e.g. `alpha`, `beta`). Empty = MinVer default. **Trusted input**. |
-| `version_increment`    | string | `""`                                     | MinVer auto-increment hint. One of `minor`, `major`, or empty (patch — MinVer default). **Trusted input**. |
-| `environment_name`     | string | `"production"`                           | Name of the GitHub Environment to gate the pack-and-push job on (D13). Must have >=1 required reviewer for the gate to be effective. **Trusted input**. |
-| `library_ref`          | string | `"main"`                                 | SHA, tag, or branch of `skathio/hashira-ops` checked out into `.hashira/` (D14). **PIN TO A SHA** for reproducible builds. |
-| `nuget_user`           | string | `""`                                     | nuget.org username that owns the trusted-publishing policy. Set this (and leave `NUGET_API_KEY` unset) to publish via OIDC trusted publishing — `nuget-push` runs `NuGet/login` to mint a short-lived key. Empty = API-key path. **Trusted input**. See §7. |
+| Output | Meaning |
+|--------|---------|
+| `resolved_version` | The resolved, validated bare semver string (e.g. `"1.3.0"`, no `v` prefix). Empty when `bump` was not provided. The workflow's **only** output (D8) — there is no second output for the `v`-prefixed tag form (derive it yourself: `v${{ needs.ci.outputs.resolved_version }}`) or for the bump kind (already your own dispatch input). |
+
+### Publish inputs (`nuget-push` composite action)
+
+| Input | Type | Default | Meaning |
+|-------|------|---------|---------|
+| `nupkg_path` | string | _(required)_ | Path to the `.nupkg` file (or glob) to push. Point this at the same-run artifact downloaded via `actions/download-artifact` (see §2) — never a freshly re-packed file (NFR-Rel-1). **Trusted input**. |
+| `target` | string | `"https://api.nuget.org/v3/index.json"` | Feed URL to push to. **Trusted input**. |
+| `auth` | string | `"auto"` | `oidc` \| `token` \| `auto` (D3/D11). See "Auth model" in §7. Trusted input. |
+| `api_key` | string | `""` | NuGet API key. Pass via a **`with:` input** sourced from `secrets:` in the caller — **not** a `secrets:` map (composite actions have no `secrets:` map syntax on their `uses:` line); `nuget-push` never reads `secrets.*` directly, only `inputs.api_key`. Required (and used directly) when `auth=token`; usable as the `auto` fallback; ignored when `auth=oidc`. Trusted input (secret). |
+| `nuget_user` | string | `""` | nuget.org username that owns the trusted-publishing policy. Required when `auth=oidc`; used as the auto-attempt user when `auth=auto`. Used as the `NuGet/login` action's `user` input. Trusted input. |
+| `version` | string | _(required)_ | The resolved, validated bare semver string (e.g. `"1.3.0"`) to tag-and-release. Consumed as-is from the CI workflow's `resolved_version` output (D8) — this action does not compute or re-derive a version. Re-validated against strict semver here as the action's own checkpoint-2 (B7). |
+| `skip_duplicate` | string | `"true"` | If `"true"`, adds `--skip-duplicate` to `dotnet nuget push` — makes a retry after a partial publish safe (FR-8). Trusted input. |
+| `working_directory` | string | `"."` | Directory to run `dotnet nuget push`/`gh release create` from (must be the consumer's checked-out repo). Trusted input. |
+
+### Publish outputs (`nuget-push`)
+
+`nuget-push` declares no `outputs:` block — there is nothing to surface
+beyond the run summary lines it writes (push result, tag/Release creation).
 
 ## 5. Secret table
 
-| Secret          | Required                                | Workflow                    | Purpose | OIDC obviates? |
-|-----------------|-----------------------------------------|-----------------------------|---------|----------------|
-| `NUGET_API_KEY` | only on the API-key path — omit it to use OIDC (see §7) | `nuget-package-publish.yml` | API key for `dotnet nuget push`. | Yes. Set the `nuget_user` input and leave this secret unset: `nuget-push` runs `NuGet/login` to mint a short-lived key from the job's OIDC token (see §7). |
+| Secret | Required | Where | Purpose | OIDC obviates? |
+|--------|----------|-------|---------|-----------------|
+| `NUGET_API_KEY` (your name; passed as the `api_key` `with:` input) | optional — omit to use OIDC (see §7) | consumer's `publish` job, passed via `with: api_key: ${{ secrets.NUGET_API_KEY }}` | NuGet API key for `dotnet nuget push` (fallback / `auth: token`). | Yes under `auth: oidc`/`auto` — `nuget-push` runs the official `NuGet/login` action, which exchanges the job's GitHub OIDC token for a short-lived nuget.org key. Pass `api_key` only for `auth: token` or as the `auto` fallback. |
 
-CI half has no required secrets (the workflow inherits the caller's
-`GITHUB_TOKEN` only).
+`nuget-push` sources the GitHub token for `gh release create` from
+`${{ github.token }}` itself via an `env: GITHUB_TOKEN: ...` block
+(composite actions have no `secrets:` context to read from directly) — you
+do not pass it. The CI half needs no secrets at all.
 
 ## 6. Permissions table
 
-Per-job grants the consumer's caller workflow MUST set. The reusable
-workflow declares these at the job level internally, but reusable workflows
-can only NARROW the caller's grants, so the consumer must grant them at
-the job level too. Cross-reference: NF6 deny-all baseline at the workflow
-level + per-job grants.
+Per-job grants the consumer's workflows MUST set, verified field-by-field
+against the actual `permissions:` blocks in `nuget-package-ci.yml` and the
+caller-job contract documented in `nuget-push/action.yml`'s header.
+Reusable workflows (the CI half) can only NARROW the caller's grants, so the
+consumer mirrors them at the caller job; the `nuget-push` composite action
+cannot declare its own `permissions:` at all (no GitHub Actions primitive
+for that on a composite action) — the grant lives entirely on the
+**consumer's own job** that invokes it.
 
 ### CI permissions
 
-| Caller job calls               | `contents` | `pull-requests` | `security-events` | Why |
-|--------------------------------|------------|-----------------|-------------------|-----|
-| `nuget-package-ci.yml`         | `read`     | `write`         | `write`           | `pull-requests:write` for coverage-report's sticky PR comment. `security-events:write` for CodeQL when enabled via `scan_disable`. `contents:read` for checkout. The `scan-suite` job carries `security-events:write` even when CodeQL is in the default skip list so consumers who enable it (`scan_disable: ''`) don't hit a permissions error — see iter-3.2 review Minor #3 cross-reference. |
+| Caller job calls | `contents` | `pull-requests` | `security-events` | Why |
+|-------------------|------------|------------------|---------------------|-----|
+| `nuget-package-ci.yml` | `read` | `write` | `write` | `pull-requests:write` for the `coverage-report` sticky comment (runs inside the `test` job). `security-events:write` for CodeQL when enabled via `scan_disable`. `contents:read` for checkout. The `version` job (when `bump` is set) needs only `contents: read` — it never writes to the working tree (D1 stamp-only). |
 
 ### Publish permissions
 
-| Caller job calls               | `contents` | `pull-requests` | `id-token` | Why |
-|--------------------------------|------------|-----------------|------------|-----|
-| `nuget-package-publish.yml`    | `write`    | `write`         | `write`    | `id-token:write` for OIDC scenarios the consumer wires externally. `contents:write` for `gh release create` (tag + GitHub Release). `pull-requests:write` because `--generate-notes` may post on linked PRs. |
+Set these on the consumer's `publish` job (the one that calls
+`nuget-push`):
+
+| Job | `contents` | `pull-requests` | `id-token` | Why |
+|-----|------------|------------------|------------|-----|
+| `publish` (calls `nuget-push`) | `write` | `read` | `write` | `id-token:write` for `NuGet/login`'s OIDC token exchange (`auth: oidc`/`auto`). `contents:write` for `gh release create`'s tag + Release creation. `pull-requests:read` because `--generate-notes` (D13) only **reads** merged-PR metadata to compose notes — it does not write to or comment on PRs. v1's deleted `nuget-package-publish.yml` over-granted `pull-requests: write` here; v2 corrects this to `read` (least-privilege). |
 
 The consumer's workflow-level `permissions: {}` (deny-all) is recommended;
-the per-job grants above are the minimum required for the reusable
-workflows to function. Granting more at workflow level inflates the
-`GITHUB_TOKEN`'s blast radius across every job in the caller file.
+the per-job grants above are the minimum required. Granting more at
+workflow level inflates the `GITHUB_TOKEN`'s blast radius across every job
+in the file.
 
-## 7. NuGet federated-token onboarding walk-through
-
-> **Inferred from NuGet documentation — confirm with first real adoption.**
+## 7. NuGet trusted-publishing onboarding walk-through
 
 Trusted publishing eliminates long-lived `NUGET_API_KEY` secrets by trading
 a short-lived GitHub OIDC token for a nuget.org credential. `dotnet nuget
-push` does not exchange the OIDC token itself, so the `nuget-push` action
-runs the official `NuGet/login` action to mint the short-lived key — you do
-NOT need a caller-side exchange step (see §7.2).
+push` does not exchange the OIDC token itself, so `nuget-push` runs the
+official `NuGet/login` action as a **separate, observable step** before
+ever invoking `dotnet nuget push` — `nuget-push` branches on that step's
+`outcome` to decide which credential to use (unlike the npm flow, where
+the equivalent decision has no separate step to observe — see
+[`../usage.md`](../usage.md#auth-model--auth-oidc--token--auto)).
 
 ### 7.1 nuget.org trusted-publisher setup (one-time)
 
@@ -205,36 +307,52 @@ NOT need a caller-side exchange step (see §7.2).
 4. Add a GitHub Actions trusted publisher with these values:
    - **Repository owner**: `<your-github-org-or-user>`
    - **Repository name**: `<your-nuget-package-repo-name>`
-   - **Workflow file**: `publish.yml` (matches the file you created in §2)
-   - **Environment** (optional but recommended): `production` (matches
-     the `environment_name` input from §2)
+   - **Workflow file**: `ci.yml` (matches the file you created in §1/§2 —
+     CI and the gated `publish` job live in the same caller file)
+   - **Environment** (optional but recommended): `production` (matches the
+     `environment:` on your `publish` job)
 5. Save the trusted-publisher configuration. `NuGet/login` matches the
    policy automatically by repository / workflow / environment — there is
    no publisher ID to copy into the workflow.
 
-### 7.2 Built-in OIDC trusted publishing (recommended)
+### 7.2 Auth model — `auth: oidc | token | auto`
 
-`nuget-package-publish.yml` has first-class OIDC support — **no caller-side
-exchange step**. The `nuget-push` action runs the official `NuGet/login`
-action, which trades the job's GitHub OIDC token for a short-lived nuget.org
-API key scoped to the policy from §7.1, then hands it to `dotnet nuget push`.
+There is no silent downgrade from the secure path (D3/D11):
 
-In your `publish.yml` caller (§2):
+- **`auth: oidc`** — always attempt `NuGet/login` (OIDC trusted publishing).
+  Requires `nuget_user` non-empty. On failure (no key minted), **fails
+  loud** — never falls back to `api_key`, even if one is set. The secure,
+  recommended setting once trusted publishing is confirmed working.
+- **`auth: token`** — always use `api_key` directly. Requires `api_key`
+  non-empty. Never attempts `NuGet/login`/OIDC. An explicit opt-out.
+- **`auth: auto`** *(default)* — attempt OIDC if `nuget_user` is set; if
+  OIDC fails and `api_key` is present, fall back to it with an
+  `::warning::` annotation. If OIDC fails and no `api_key` is present,
+  fails loud, same as `auth: oidc`.
 
-1. Grant the `publish` job `id-token: write` (already in the §2 template).
+In your `ci.yml`'s `publish` job (§2):
+
+1. Grant `id-token: write` (already in the §2 template).
 2. Pass `nuget_user: '<your-nuget.org-username>'` in `with:`.
-3. Do **not** pass the `NUGET_API_KEY` secret.
-4. Keep `environment_name: 'production'` matching the Environment in your
+3. Omit the `api_key` secret entirely (or pass it anyway as the `auto`
+   fallback — but see the precedence note below).
+4. Keep `environment: production` matching the Environment in your
    trusted-publishing policy (§7.1).
 
 Every release mints a fresh key from OIDC — there is no long-lived secret to
-store or rotate. (If `NUGET_API_KEY` is set it takes precedence and the OIDC
-path is skipped, so set exactly one.)
+store or rotate.
+
+**Precedence under `auth: auto`**: `NuGet/login` always runs first (gated
+on `nuget_user` being set); `api_key` is only consulted if that step's
+outcome is not `success` or it minted no key. Recommended: do NOT pass
+`api_key` once OIDC is working — leaving it set can mask a misconfigured
+trusted-publisher during onboarding; move to `auth: oidc` once confirmed
+rather than leaving `auto` as a permanent steady state.
 
 ### 7.3 API-key alternative
 
 If you prefer a long-lived key, or your nuget.org tenant can't use trusted
-publishing yet, skip §7.2 and use an API key instead:
+publishing yet, set `auth: token` and skip §7.1/§7.2:
 
 1. Sign in to <https://www.nuget.org>.
 2. Open **Account** → **API Keys** → **Create**.
@@ -244,163 +362,166 @@ publishing yet, skip §7.2 and use an API key instead:
    once.
 5. In your package repo, open **Settings** → **Environments** →
    **production** → **Secrets** → **Add secret**. Name it
-   `NUGET_API_KEY`; paste the value. Leave `nuget_user` unset.
+   `NUGET_API_KEY`; paste the value. Leave `nuget_user` unset (or leave
+   `auth` at `auto` if you want OIDC tried first anyway).
 6. Rotate the key on schedule (Dependabot does not rotate NuGet API
    keys; this is on your calendar).
 
-The library's contract is identical either way.
+The library's contract is identical either way — only the `auth` input and
+which credential ends up populated change.
 
 ## 8. `production` Environment setup checklist
 
-> **Inferred — confirm with first real adoption.**
-
-The publish workflow gates the `pack-and-push` job on a GitHub Environment
-named `production` (or whatever `environment_name` you pass). Configure
-it BEFORE the first publish run, otherwise the release proceeds without
-pausing (per D13 the library does NOT runtime-verify Environment
-configuration).
+The `publish` job in your caller workflow declares `environment: production`.
+That key IS the gate — configure the Environment BEFORE the first publish
+run, otherwise the job proceeds without pausing.
 
 1. In your package repo, open **Settings** → **Environments** → **New
    environment**.
-2. Name it `production` (or match the `environment_name` you set in §2).
+2. Name it `production` (match the `environment:` on your `publish` job and
+   the nuget.org trusted-publisher's "Environment" field, if you set one).
 3. Under **Deployment protection rules**, enable **Required reviewers**
    and add at least one reviewer (yourself, or your team).
-4. Optionally restrict the **Deployment branches** to `main` (and any
-   `prerelease_identifier` branches you actually use).
-5. Under **Environment secrets**, add `NUGET_API_KEY` (per §7.3) so the
-   secret is scoped to this Environment and is not accessible from the CI
-   workflow's jobs.
+4. Optionally restrict the **Deployment branches** to `main`.
+5. Under **Environment secrets**, add `NUGET_API_KEY` (per §7.3, if using
+   the API-key path) so the secret is scoped to this Environment and is
+   not accessible from the CI workflow's jobs.
 6. Save.
 
-**Verification**: trigger a publish via `gh workflow run publish.yml`.
-The pack-and-push job should pause with "Waiting for review" — click
-**Review deployments** → **Approve and deploy**. If the job proceeds
-without pausing, the Environment is misconfigured (no required reviewers).
+**Verification**: trigger a release (`gh workflow run ci.yml -f bump=patch`).
+The `publish` job should pause with "Waiting for review" — click **Review
+deployments** → **Approve and deploy**.
 
-## 9. Release walk-through reference
+### One-time `gh api` setup: require a reviewer (D12)
 
-See
-[`../../.somi/plans/shared-cicd-workflows/decisions.md#d4--nuget-package-versioning-minver-tag-driven-msbuild-native`](../../.somi/plans/shared-cicd-workflows/decisions.md#d4--nuget-package-versioning-minver-tag-driven-msbuild-native)
-for the full end-to-end walk-through.
+The library **cannot** runtime-verify that your `production` Environment has
+a required reviewer configured — the `gh api environments` endpoint needs
+admin-tier scope the workflow's `GITHUB_TOKEN` doesn't carry. Run this once,
+with your own admin-scoped credentials, instead of (or in addition to) the
+manual UI steps above:
 
-Summary: the **release creates the tag** (D4). Inside the gated
-`pack-and-push` job:
+```bash
+# Require at least one reviewer on the `production` Environment before the
+# first publish run. Replace OWNER/REPO and the numeric reviewer id (look it
+# up via `gh api users/<username>`).
+gh api --method PUT \
+  repos/OWNER/REPO/environments/production \
+  -f wait_timer=0 \
+  -F "reviewers[][type]=User" \
+  -F "reviewers[][id]=<numeric-user-id>" \
+  -F deployment_branch_policy='{"protected_branches":true,"custom_branch_policies":false}'
+```
 
-1. `dotnet-pack-version` runs `dotnet pack` with MinVer in scope. MinVer
-   reads the last reachable git tag (e.g. `v1.2.3`) + commit height and
-   computes the next version (e.g. `v1.2.4` or `v1.3.0-alpha.0.2`
-   depending on `prerelease_identifier` / `version_increment` inputs).
-2. `nuget-push` runs `dotnet nuget push <nupkg> --source <target>
-   --skip-duplicate`. `--skip-duplicate` makes retries safe — a partial
-   push followed by re-trigger exits 0 instead of crashing.
-3. **Only after push succeeds**, the tag step runs:
-   ```bash
-   gh release view "v${VERSION}" --json id 2>/dev/null \
-     || gh release create "v${VERSION}" --generate-notes --target "${GITHUB_SHA}"
-   ```
-   Idempotent: if a parallel run already created the release, this step
-   exits 0 without creating a duplicate.
+A misconfigured Environment (zero reviewers) runs the gated job immediately
+without pausing, and this is silent and indistinguishable from working until
+something bad publishes — see [`../usage.md`](../usage.md#environment-reviewer-gate--what-the-library-can-and-cannot-verify)
+for the full defense-in-depth story (this snippet + a self-CI lint asserting
+the gated job declares `environment:`).
 
-**Atomicity**: the tag is created AFTER successful push, so the failure
-mode "tag exists but no published package" cannot occur. The reverse
-("push succeeded, tag failed") is recoverable on retry: `--skip-duplicate`
-absorbs the push, and the idempotent `gh release view || create` handles
-the tag.
+## 9. Release walk-through
+
+The whole release happens in **one workflow run**, across two jobs in the
+same caller file (`ci` → `publish`, linked via `needs:`):
+
+1. A maintainer dispatches `ci.yml` with `bump` set (e.g. `minor`).
+2. The `version` job (inside `nuget-package-ci.yml`) resolves the next
+   version from tag history, surfaces it in the run summary, packs the
+   project via `dotnet-pack-version` with `version_override` set to the
+   resolved version (MinVer reads it verbatim instead of inferring from git
+   tags), and uploads the `.nupkg` as the `nuget-package` artifact (D1/D8 —
+   see [`../usage.md`](../usage.md#versioning-model)).
+3. Once `ci` succeeds and the `production` Environment is approved, the
+   `publish` job downloads that exact `.nupkg` (never re-packed), pushes it
+   via `dotnet nuget push --skip-duplicate` under the chosen `auth` mode,
+   then — only after a successful push — creates the `v<version>` tag and
+   GitHub Release (`--generate-notes`).
+
+**Atomicity — tag/Release creation happens only after a successful
+push**: the `dotnet nuget push` step is attempted first; on failure, the
+composite halts and **no tag or Release is created** (FR-8's safe-re-run
+requirement — see [`../usage.md`](../usage.md#atomicity--tagrelease-creation-happens-only-after-a-successful-publish)).
+Only after a successful push does the tag/Release step run, and it is
+idempotent (`gh release view` first) — re-running the gated job after a
+partial earlier failure does not fail on an already-existing tag/Release.
+`--skip-duplicate` (default `true`) makes the push side of a retry safe
+too: a re-push of an already-published version exits 0 instead of
+crashing.
 
 **Point of no return**: `dotnet nuget push`. Once a version exists on the
 feed, nuget.org's unlist/delete policies apply (unlist is the standard
 recourse; delete is restricted). Recovery is "publish a higher version
-with the fix".
+with the fix."
+
+### Release notes (D13)
+
+`nuget-push`'s tag/Release step passes `--generate-notes` to
+`gh release create` — GitHub's own server-side PR/commit-range heuristic
+populates the Release body. See [`../usage.md`](../usage.md#release-notes)
+for the cross-cutting framing; this is shared mechanism with the npm flow.
 
 ## 10. Common failure modes
 
-> **Inferred — confirm with first real adoption.**
-
-- **Missing MinVer PackageReference → version stuck at 0.0.0 (or 1.0.0)**.
-  `dotnet-pack-version` emits a `::warning::` (per iter-3.1) but does not
-  fail the build. The packed `.nupkg` carries whatever `<Version>` the
-  `.csproj` declares (often `0.0.1` or `1.0.0`), and your next publish
-  attempt either re-pushes the same version (caught by `--skip-duplicate`
-  with a "package already exists" message) or pushes a wrong version
-  forever. Fix: add the MinVer PackageReference per §3.
+- **Missing MinVer PackageReference → routine (non-release) packs land at
+  `0.0.0`/`1.0.0`**. `dotnet-pack-version` emits a `::warning::` but does
+  not fail the build. The release path is unaffected (`version_override`
+  always wins when `bump` triggers a release), but a `dotnet pack` run
+  outside the release path with no MinVer reference and no override will
+  carry whatever `<Version>` the `.csproj` declares. Fix: add the MinVer
+  PackageReference per §3.
 
 - **`--skip-duplicate` swallows real errors → check workflow log**.
   `dotnet nuget push --skip-duplicate` exits 0 both for fresh pushes and
-  for "already exists" cases. `nuget-push` (iter 3.1) parses the log and
-  surfaces the distinction in the step summary (`nuget-push: pushed …`
-  vs `nuget-push: skipped (duplicate)`). For any other failure mode (401
+  for "already exists" cases. `nuget-push` parses the log and surfaces the
+  distinction in the step summary (`nuget-push: pushed …` vs
+  `nuget-push: skipped (duplicate)`). For any other failure mode (401
   auth, 5xx feed error) `dotnet nuget push` exits non-zero and the job
   fails — but always read the log on a green run to confirm you actually
   pushed.
 
 - **`gh release create` racing with a parallel run → idempotent guard
-  explained**. Two simultaneous publish runs (e.g. consumer manually
-  triggers a `workflow_dispatch` while a `push: branches: [main]` run is
-  in flight) would both attempt `gh release create v<X.Y.Z>`. The
-  workflow uses `gh release view "v${VERSION}" --json id 2>/dev/null ||
-  gh release create …` so the second arrival sees the existing release
-  and exits 0. Net effect: no orphan tags, no duplicate releases.
+  explained**. Two simultaneous publish runs would both attempt
+  `gh release create v<X.Y.Z>`. `nuget-push` runs `gh release view
+  "v${VERSION}" --json id` first and only creates the release if that
+  lookup fails, so the second arrival sees the existing release and exits
+  0. Net effect: no orphan tags, no duplicate releases.
 
-- **`NUGET_API_KEY` set but malformed → 401 at push step**. nuget.org
-  rejects the push with HTTP 401. `--skip-duplicate` does NOT swallow
-  401 (only the duplicate-version status). The job fails with the
-  underlying error in the log. Fix: rotate the key per §7.3.
+- **`api_key` set but malformed → 401 at push step**. nuget.org rejects
+  the push with HTTP 401. `--skip-duplicate` does NOT swallow 401 (only
+  the duplicate-version status). The job fails with the underlying error
+  in the log. Fix: rotate the key per §7.3.
 
-- **`dotnet nuget push` does NOT auto-exchange OIDC tokens →
-  federation requires external wiring**. The most common adoption
-  surprise. Even with `id-token: write` granted and a nuget.org
-  trusted-publisher configured, the dotnet CLI on 8.0.x does NOT pick
-  up the GitHub OIDC token. Either wire an exchange step (§7.2) or use
-  the API-key fallback (§7.3). The `nuget-push` action emits a
-  `::notice::` when `api_key` is empty explaining this.
+- **`auth: oidc` failed — `NuGet/login` did not mint a key**. Common
+  causes: a ref/job-workflow mismatch with the configured nuget.org
+  trusted-publishing policy, missing `id-token: write` on the calling job,
+  or no matching policy at all. `auth: oidc` never falls back to `api_key`,
+  even if one is set. Re-check §7.1's fields against your actual caller
+  workflow filename + `environment:`.
 
 - **Missing required reviewer on `production` Environment → ungated
-  publish**. The pack-and-push job proceeds immediately if no reviewer
-  is configured on the Environment. Library does NOT runtime-verify
-  this (per D13). Fix: configure the Environment per §8 BEFORE first
-  run.
+  publish**. The `publish` job proceeds immediately if no reviewer is
+  configured on the Environment. The library does NOT runtime-verify this
+  (D12) — see §8's `gh api` snippet. Fix: configure the Environment per §8
+  BEFORE the first run.
 
-- **`library_ref: 'main'` in consumer → non-reproducible builds AND
-  supply-chain exposure**. Every publish uses the latest `main` of
-  `hashira-ops`, which is mutable. Pin `library_ref` to a SHA (or `@v1`
-  after phase 4.4 cuts it). See §11.
+- **`library_ref` not pinned to a SHA → non-reproducible builds AND
+  supply-chain exposure**. Every CI run checks out `skathio/hashira` at
+  whatever `library_ref` resolves to at runtime. Pin `library_ref` to a SHA
+  (or `@v2` for the rolling tag) and keep it identical to the outer
+  `uses:` pin — see [`../usage.md`](../usage.md#the-library_ref-dual-pin-invariant)
+  for the dual-pin invariant this protects.
 
 - **"Build twice" cost in CI (~30-60s per run)**. The `test` job in
-  `nuget-package-ci.yml` re-runs `dotnet restore` + `dotnet build`
-  rather than consuming a build artifact from `restore-build`. Cross-job
+  `nuget-package-ci.yml` re-runs `dotnet restore` + `dotnet build` rather
+  than consuming a build artifact from `restore-build`. Cross-job
   build-artifact passing would require a new third-party SHA pin
   (`actions/upload-artifact` / `actions/download-artifact`) outside the
-  set we verified in iter 1.2. Trade-off intentional for v1; revisit if
+  set already verified for this purpose. Trade-off intentional; revisit if
   your CI minute budget becomes a concern. The `restore-build → test`
   ordering still serves as a fail-fast compile gate.
 
-## 11. Library-repo trust model
-
-`hashira-ops` is part of your supply chain. Two pins control the integrity
-boundary:
-
-1. The reusable-workflow `uses:` ref:
-   `skathio/hashira-ops/.github/workflows/<flow>.yml@<sha>`.
-2. The `library_ref` input, which the workflow uses to check out
-   `skathio/hashira-ops` into `.hashira/` (D14) so its composite actions
-   are available at the literal path `./.hashira/.github/actions/<name>`.
-
-**MUST**: pin BOTH to the SAME SHA. If you pin only the `uses:` ref but
-leave `library_ref: 'main'`, the workflow loads a known-good orchestrator
-but pulls in unknown composite-action code at runtime — defeating the
-pin. A reviewer should be able to verify the entire bundle by hash from
-a single SHA.
-
-Using `main` for either pin exposes you to **library-repo compromise**
-(not just non-reproducible builds): a malicious commit to `hashira-ops/main`
-would land on your next publish without review.
-
-After phase 4.4 cuts the rolling `v1` tag, you can pin both to `@v1` for
-convenience — `v1` is force-moved by hashira-ops maintainers as v1.x
-patches ship. SHA pinning remains the security-tighter alternative.
-
-## 12. Pointer to `docs/usage.md`
+## 11. Pointer to `docs/usage.md`
 
 For cross-cutting concepts (pin policy, gate model, secret-passing model,
-permissions baseline, OIDC trust onboarding narrative), see
+permissions baseline, OIDC trust onboarding narrative, the full versioning
+model, the `library_ref` dual-pin invariant), see
 [`../usage.md`](../usage.md).
