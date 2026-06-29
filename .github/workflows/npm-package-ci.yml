@@ -375,39 +375,67 @@ jobs:
           # `bash --noprofile --norc -e -o pipefail {0}` — `-e` is ALREADY
           # active before this script's first line ever runs. Writing only
           # `set -uo pipefail` (no `+e`) does NOT turn it back off; that was
-          # the actual bug here (hashira-v2 iteration 6.5, found via rogue's
-          # live migration — the first real `workflow_call` invocation of
-          # this workflow ever exercised this step against real commits,
-          # which immediately tripped it: any PR range containing a single
-          # non-Conventional-Commit message made `npx commitlint` exit
-          # non-zero, which — because `-e` was still active — aborted the
-          # step immediately, before `status=$?` ever ran, defeating D11's
-          # "warns, does not block" guarantee the comment below already
-          # described as the intent). The step is non-blocking by D11; we
-          # want commitlint's non-zero exit code to be CAPTURED
-          # (status=$?) rather than abort the script — hence the explicit
-          # `+e`. The empty-report check below distinguishes "non-CC
-          # commits found" from "install failed" so a misleading sticky
-          # comment can't be posted on an install failure.
+          # a real bug here (hashira-v2 iteration 6.5, found via rogue's live
+          # migration — the first real `workflow_call` invocation of this
+          # workflow ever exercised this step against real commits, which
+          # immediately tripped it). The step is non-blocking by D11; we want
+          # commitlint's non-zero exit code to be CAPTURED (status=$?) rather
+          # than abort the script — hence the explicit `+e`.
           set -uo pipefail +e
-          # Pin commitlint CLI + config-conventional inside the npx
-          # invocation. npm has no SHA-pin equivalent; see the npm
-          # supply-chain trust model paragraph in
-          # `.github/actions/npm-release/action.yml`.
+          # Install commitlint + config-conventional to a FIXED prefix
+          # directory, and write the config file into that SAME directory
+          # (hashira-v2 iteration 6.5 follow-up fix, found via somi's live
+          # PR — the first real PR range with a non-Conventional-Commit
+          # message anyone actually opened against a real consumer after the
+          # `-e` fix above shipped). The previous approach
+          # (`npx --yes -p ... -- commitlint --config <(printf ...)`) had
+          # two compounding bugs:
+          #   1. `--config <(...)` is a process-substitution path
+          #      (`/dev/fd/N`) with no file extension. cosmiconfig (commitlint's
+          #      config loader) picks a parser by extension; with none, it
+          #      fell back to YAML, which then choked on the literal
+          #      `module.exports = {...}` JS syntax — every PR range hit
+          #      this, not just ones with real non-CC commits, and the
+          #      resulting stack trace landed in the sticky PR comment
+          #      mislabeled as "non-CC commits found".
+          #   2. Even with a correctly-recognized `.cjs` config, commitlint's
+          #      `extends: ['@commitlint/config-conventional']` resolves
+          #      that package name relative to the CONFIG FILE's directory
+          #      (Node module resolution) — not relative to npx's own
+          #      (ephemeral, unlabeled) install cache. A bare npx invocation
+          #      has no directory where both the config and the resolved
+          #      package coexist.
+          # Installing both packages into one fixed, named directory and
+          # writing the config there too gives Node's resolution a real
+          # `node_modules/@commitlint/config-conventional` to find,
+          # sibling to the config file — exactly the shape `extends:`
+          # expects. npm has no SHA-pin equivalent; see the npm supply-chain
+          # trust model paragraph in `.github/actions/npm-release/action.yml`.
+          install_dir="${RUNNER_TEMP}/commitlint-install"
+          rm -rf "${install_dir}"
+          mkdir -p "${install_dir}"
+          npm install --no-save --silent --prefix "${install_dir}" \
+            @commitlint/cli@19.5.0 @commitlint/config-conventional@19.5.0
+          printf "module.exports = { extends: ['@commitlint/config-conventional'] };\n" \
+            > "${install_dir}/commitlint.config.cjs"
+          # Capture stdout and stderr SEPARATELY, not merged. commitlint's
+          # actual findings (the `✖ found N problems` summary) are written
+          # entirely to stdout; any install/runtime crash (an uncaught JS
+          # exception, `throw err`) is written to stderr. Merging them (the
+          # previous `2>&1`) is what let a stderr-only crash trace get
+          # treated as if it were a stdout findings report.
           report="${RUNNER_TEMP}/commitlint-report.txt"
-          : > "${report}"
-          npx --yes \
-            -p @commitlint/cli@19.5.0 \
-            -p @commitlint/config-conventional@19.5.0 \
-            -- commitlint \
-              --config <(printf "module.exports = { extends: ['@commitlint/config-conventional'] };\n") \
-              --from "${BASE_SHA}" --to "${HEAD_SHA}" \
-              > "${report}" 2>&1
+          err="${RUNNER_TEMP}/commitlint-stderr.txt"
+          "${install_dir}/node_modules/.bin/commitlint" \
+            --config "${install_dir}/commitlint.config.cjs" \
+            --from "${BASE_SHA}" --to "${HEAD_SHA}" \
+            > "${report}" 2> "${err}"
           status=$?
-          # Detect "install failure or runtime crash that produced no output":
-          # the report file is empty AND status is non-zero. This is NOT a
-          # commitlint finding — treat as inconclusive (iter-2.2 review
-          # Major #1).
+          # Inconclusive ("install failure or runtime crash", not a real
+          # commitlint finding — iter-2.2 review Major #1): non-zero status
+          # AND no real findings on stdout. A crash's stack trace lands on
+          # stderr, never stdout, so an empty stdout report is the correct
+          # signal regardless of what (if anything) stderr captured.
           inconclusive="false"
           if [ "${status}" -ne 0 ] && [ ! -s "${report}" ]; then
             inconclusive="true"
@@ -420,7 +448,14 @@ jobs:
           if [ "${status}" -eq 0 ]; then
             echo "commitlint: clean (no non-CC commits in range)" >> "${GITHUB_STEP_SUMMARY}"
           elif [ "${inconclusive}" = "true" ]; then
-            echo "commitlint: npx did not produce output; treating as inconclusive (likely install/runtime failure). Step is non-blocking; sticky comment skipped." >> "${GITHUB_STEP_SUMMARY}"
+            {
+              echo "commitlint: produced no findings on stdout; treating as inconclusive (likely install/runtime failure). Step is non-blocking; sticky comment skipped.";
+              if [ -s "${err}" ]; then
+                echo '```';
+                cat "${err}";
+                echo '```';
+              fi
+            } >> "${GITHUB_STEP_SUMMARY}"
           else
             {
               echo "commitlint: non-CC commits found in range (non-blocking warning)";
