@@ -1,0 +1,35 @@
+# Negative-test fixture for `tests/dual-pin/lint.py` (phase 4 iteration
+# 4.1 pass 2 — review-feedback fix; the asymmetric pin mismatch, the single
+# most acute instance of AP8, `.somi/rd/hashira-v2/security.md` "Attack
+# paths explicitly closed" #8). Not hand-numbered (see same-repo-mismatch.yml).
+#
+# The outer `uses:` pin is a real 40-char hex SHA naming the canonical
+# `skathio/hashira` repository — it LOOKS fully pinned. But `library_ref` is
+# `main`, a moving branch ref, not a fixed commit: the in-repo composite
+# actions this call actually executes are whatever `main` resolves to at
+# call time. NOT a same-repo-different-SHA mismatch (that fixture) — there
+# is no second real SHA to compare against — its own distinct violation
+# kind. Pass 1 review found this silently SKIPPED; pass 2 fixed it only for
+# the literal `main` value via a regex allowlist (still a silent-skip for
+# other branch names) — see non-pinned-library-ref-branch.yml (pass 3).
+name: dual-pin-fixture-non-pinned-library-ref
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  ci:
+    uses: skathio/hashira/.github/workflows/npm-package-ci.yml@4c1f3a8b2e6d9057a1c4f8e3b6d2a9c7e5f01234
+    permissions:
+      contents: read
+      pull-requests: write
+      security-events: write
+    with:
+      # A moving branch ref, not a fixed commit — the asymmetric mismatch
+      # this fixture isolates. The outer `uses:` SHA above is real and
+      # correctly shaped; library_ref is not pinned at all.
+      library_ref: 'main'

@@ -1,0 +1,29 @@
+# Negative-test fixture (phase 5 iteration 5.2, CHECK A).
+#
+# A gated `publish` job (has a `needs:` edge onto a CI job, mirroring the
+# documented npm/NuGet/static-webapp caller shape) that is deliberately
+# missing its `environment:` key. D12's entire defense-in-depth story rests
+# on the GitHub Environment's required-reviewer setting being the control
+# that pauses an unreviewed publish/deploy on every push; a maintainer
+# template missing `environment:` silently removes that gate for every
+# consumer who copies it. This fixture exists ONLY to prove
+# tests/shape-lints/gate-lints.py's CHECK A fails closed on this exact
+# defect; it is not a real consumer workflow and is never wired into any
+# real workflow.
+
+publish:
+  needs: ci
+  if: ${{ inputs.bump != '' }}
+  runs-on: ubuntu-latest
+  # Deliberately omitted: environment: production
+  permissions:
+    id-token: write
+    contents: write
+    pull-requests: read
+  steps:
+    - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      with:
+        persist-credentials: true
+    - uses: skathio/hashira/.github/actions/npm-release@<40-char-sha-or-v2>
+      with:
+        version: ${{ needs.ci.outputs.resolved_version }}

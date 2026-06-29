@@ -6,7 +6,7 @@
     <PackageId>HashiraTestNoMinVer</PackageId>
     <Version>0.0.1</Version>
     <Description>Synthetic fixture WITHOUT MinVer; used to assert the dotnet-pack-version warning fires.</Description>
-    <Authors>hashira-ops self-CI</Authors>
+    <Authors>hashira self-CI</Authors>
   </PropertyGroup>
 
   <!-- Intentionally no PackageReference Include="MinVer". The smoke job

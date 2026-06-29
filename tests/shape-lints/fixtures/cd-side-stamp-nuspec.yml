@@ -1,0 +1,33 @@
+# Negative-test fixture (phase 5 iteration 5.1, CHECK 2).
+#
+# A deliberately introduced `.nuspec`-write step inside an otherwise-
+# ordinary CD composite action — the NuGet-side equivalent of the
+# package.json-stamp fixture. Phase 3.4 established that a CD composite
+# (nuget-push) must NEVER re-derive/override version metadata on the CD
+# side — it consumes the CI-stamped, already-validated `version` input as
+# the resolver's output, never re-packing. This fixture exists ONLY to
+# prove the no-CD-stamp check fails closed on this exact pattern (a shell
+# redirect into a .nuspec file). Not a real composite action; never wired
+# into any real workflow.
+name: fixture-cd-side-stamp-nuspec
+description: Negative-test fixture for tests/shape-lints/no-nested-reusable-workflow.py CHECK 2 (.nuspec stamp).
+
+inputs:
+  version:
+    description: "Placeholder input, mirrors the real CD composites' shape."
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Innocuous setup step
+      shell: bash
+      run: |
+        echo "setting up"
+    - name: Deliberately prohibited CD-side .nuspec re-stamp
+      shell: bash
+      env:
+        FX_VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        echo "<version>${FX_VERSION}</version>" > Package.nuspec

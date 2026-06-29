@@ -284,23 +284,14 @@ jobs:
           echo "${SUMMARY}"
           echo "${SUMMARY}" | grep -P '^gitleaks\tskipped\tconsumer disabled$'
 
-  npm-release-unit-tests:
-    name: npm-release-unit-tests
+  npm-release-shape-validation:
+    name: npm-release-shape-validation
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
       # actions/checkout v4.2.2
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
-      # actions/setup-node v4.1.0 — Node 24 matches the action's runtime (D7).
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
-        with:
-          node-version: '24'
-      - name: Run npm-release build-releaserc unit tests
-        shell: bash
-        run: |
-          set -euo pipefail
-          node --test tests/npm-release/build-releaserc.test.js
       - name: Run npm-release action shape-validation shim
         shell: bash
         run: |
@@ -312,11 +303,15 @@ jobs:
     name: npm-release-dry-run
     runs-on: ubuntu-latest
     permissions:
-      contents: write  # semantic-release --dry-run runs `git push --dry-run` + @semantic-release/github token check
+      contents: read
     env:
-      # Force the action into --dry-run --no-ci so no publish or git push is
-      # attempted. Documented reserved env name; do NOT set in consumer workflows.
-      HASHIRA_SEMANTIC_RELEASE_DRY_RUN: '1'
+      # Skip the actual `npm publish` and tag/release steps. Documented
+      # reserved env name; do NOT set in consumer workflows — doing so
+      # silently turns publishes into no-ops. NOTE: this does NOT skip the
+      # actions/download-artifact / tarball-locate steps (see action.yml) —
+      # those run for real below, proving the actual CI->CD artifact-handoff
+      # plumbing (NFR-Rel-1), not just the auth-mode branching.
+      HASHIRA_NPM_RELEASE_DRY_RUN: '1'
     steps:
       # actions/checkout v4.2.2
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
@@ -327,11 +322,36 @@ jobs:
           ref: ${{ github.sha }}
           path: .hashira
           persist-credentials: false
-      - name: Run npm-release against the dry-run fixture
+      # actions/setup-node v4.1.0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: '24'
+      - name: Pack the dry-run fixture into a real .tgz
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Mirrors npm-package-ci.yml's `version` job: pack the fixture
+          # directory into a real tarball. There is no version-stamping here
+          # (this fixture isn't exercising D1/D8's stamp step — that's
+          # npm-package-ci's own shape-validation job) — just producing a
+          # real .tgz for the composite's download-artifact step to fetch.
+          mkdir -p "${RUNNER_TEMP}/npm-release-dry-run-pack-output"
+          npm pack --pack-destination "${RUNNER_TEMP}/npm-release-dry-run-pack-output" \
+            ./tests/npm-release/dry-run-fixture
+      - name: Upload fixture tarball as 'npm-tarball' (same artifact name the real CI version job uses)
+        # actions/upload-artifact v4.4.3 — same pin already verified and in
+        # use at npm-package-ci.yml / nuget-package-ci.yml / coverage-report.
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882
+        with:
+          name: npm-tarball
+          path: ${{ runner.temp }}/npm-release-dry-run-pack-output/*.tgz
+          if-no-files-found: error
+          retention-days: 1
+      - name: Run npm-release against the dry-run fixture (auth=auto)
         id: nr
         uses: ./.hashira/.github/actions/npm-release
         with:
-          working_directory: tests/npm-release/dry-run-fixture
+          version: '0.0.0-dryrun'
       - name: Assert dry-run produced a sensible summary
         shell: bash
         env:
@@ -340,12 +360,182 @@ jobs:
         run: |
           set -euo pipefail
           echo "released='${RELEASED}'  version='${VERSION}'"
-          # released must always be false in dry-run mode (HASHIRA_SEMANTIC_RELEASE_DRY_RUN=1
-          # forces released=false regardless of the semantic-release log output).
+          # released must always be false in dry-run mode (HASHIRA_NPM_RELEASE_DRY_RUN=1
+          # short-circuits the publish step unconditionally before any network call).
           if [ "${RELEASED}" != "false" ]; then
             echo "expected released=false in dry-run, got '${RELEASED}'" >&2
             exit 1
           fi
+
+  npm-release-dry-run-auth-modes:
+    name: npm-release-dry-run-auth-modes
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      HASHIRA_NPM_RELEASE_DRY_RUN: '1'
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      # D14 self-checkout: composite actions are referenced from .hashira/.
+      - name: Checkout library into .hashira
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          ref: ${{ github.sha }}
+          path: .hashira
+          persist-credentials: false
+      # actions/setup-node v4.1.0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: '24'
+      - name: Pack the dry-run fixture into a real .tgz
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/npm-release-dry-run-pack-output"
+          npm pack --pack-destination "${RUNNER_TEMP}/npm-release-dry-run-pack-output" \
+            ./tests/npm-release/dry-run-fixture
+      - name: Upload fixture tarball as 'npm-tarball'
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882
+        with:
+          name: npm-tarball
+          path: ${{ runner.temp }}/npm-release-dry-run-pack-output/*.tgz
+          if-no-files-found: error
+          retention-days: 1
+      # Exercises every `auth` value's branching up to (but never past) the
+      # point of the real network call — the dry-run flag short-circuits
+      # before any of these would actually touch a credential or the
+      # registry, so this single job can prove all three values are accepted
+      # and wired through safely.
+      - name: npm-release — auth=auto (default), dry-run
+        uses: ./.hashira/.github/actions/npm-release
+        with:
+          version: '0.0.0-dryrun'
+      - name: npm-release — auth=token, dry-run
+        uses: ./.hashira/.github/actions/npm-release
+        with:
+          version: '0.0.0-dryrun'
+          auth: token
+          npm_token: fake-smoke-token
+      - name: npm-release — auth=oidc, dry-run (no real OIDC attempted under dry-run)
+        uses: ./.hashira/.github/actions/npm-release
+        with:
+          version: '0.0.0-dryrun'
+          auth: oidc
+      - name: Assert dry-run summary line is present
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "npm-release-dry-run-auth-modes: all 3 action invocations passed (dry-run path exercised by HASHIRA_NPM_RELEASE_DRY_RUN=1 for auth=auto/token/oidc)"
+
+  npm-release-smoke-oidc-fails-loud:
+    name: npm-release-smoke-oidc-fails-loud
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Deliberately NOT granting id-token: write — this job proves auth=oidc
+      # fails loud when no OIDC token is reachable, which requires the
+      # GitHub-provided ACTIONS_ID_TOKEN_REQUEST_* vars to be genuinely absent,
+      # not merely unused.
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      # D14 self-checkout: composite actions are referenced from .hashira/.
+      - name: Checkout library into .hashira
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          ref: ${{ github.sha }}
+          path: .hashira
+          persist-credentials: false
+      # actions/setup-node v4.1.0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: '24'
+      - name: Pack a real (unique-named) tarball — never actually reaches the registry
+        shell: bash
+        run: |
+          set -euo pipefail
+          # A unique, obviously-fake package name: even in the hypothetical
+          # case this attempt's fail-loud guarantee were broken by a future
+          # regression, there is no real package by this name to collide
+          # with. Belt-and-suspenders on top of the fail-loud assertion below,
+          # not a substitute for it. Written via `node -e` rather than a
+          # heredoc — a YAML block-indented heredoc terminator is NOT at
+          # column 0, so bash would never match it and silently swallow the
+          # rest of the script into the heredoc body (confirmed by direct
+          # reproduction during this iteration's implementation).
+          mkdir -p "${RUNNER_TEMP}/npm-release-oidc-test-pkg"
+          node -e '
+            const fs = require("fs");
+            const pkg = {
+              name: "hashira-npm-release-oidc-fails-loud-test-zzz-never-published",
+              version: "0.0.0-oidctest",
+              license: "MIT",
+            };
+            fs.writeFileSync(
+              process.env.RUNNER_TEMP + "/npm-release-oidc-test-pkg/package.json",
+              JSON.stringify(pkg, null, 2),
+            );
+          '
+          mkdir -p "${RUNNER_TEMP}/npm-release-oidc-test-pack-output"
+          npm pack --pack-destination "${RUNNER_TEMP}/npm-release-oidc-test-pack-output" \
+            "${RUNNER_TEMP}/npm-release-oidc-test-pkg"
+      - name: Upload fixture tarball as 'npm-tarball'
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882
+        with:
+          name: npm-tarball
+          path: ${{ runner.temp }}/npm-release-oidc-test-pack-output/*.tgz
+          if-no-files-found: error
+          retention-days: 1
+      # Pass-2 regression lock (Blocker/Major): poison the cwd with a
+      # project `.npmrc` (fake token A) and an `npm_config_*` env var (fake
+      # token B) — the two leak paths fixed via clean-cwd + scrub +
+      # globalconfig. A regression would auth with one of these and fail
+      # E401, not ENEEDAUTH — distinguished by the marker assertion below.
+      - name: Poison the working directory + environment with fake credentials (regression fixture)
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "//registry.npmjs.org/:_authToken=poisoned-token-from-project-npmrc-must-never-be-used" > .npmrc
+          echo "npm-release-smoke-oidc-fails-loud: wrote a poisoned .npmrc to $(pwd)/.npmrc"
+      # NOT run under HASHIRA_NPM_RELEASE_DRY_RUN — proves fail-loud for
+      # real (see action header's '## Authentication model'). The poisoned
+      # fixtures above/below must NOT change this outcome.
+      - name: npm-release — auth=oidc with no id-token grant MUST fail loud (negative test)
+        id: oidc_attempt
+        continue-on-error: true
+        uses: ./.hashira/.github/actions/npm-release
+        with:
+          version: '0.0.0-oidctest'
+          auth: oidc
+          npm_token: fake-token-that-must-not-be-used
+        env:
+          # Second leak path (env-var-to-config mapping) — a DIFFERENT fake
+          # token, so a fix that only closed one of the two paths would
+          # still be caught.
+          npm_config_//registry.npmjs.org/:_authToken: poisoned-token-from-npm-config-envvar-must-never-be-used
+      - name: Assert the auth=oidc step failed for the SPECIFIC reason (not just any failure)
+        shell: bash
+        env:
+          OIDC_OUTCOME: ${{ steps.oidc_attempt.outcome }}
+        run: |
+          set -euo pipefail
+          if [ "${OIDC_OUTCOME}" = "success" ]; then
+            echo "::error::npm-release-smoke-oidc-fails-loud: auth=oidc step unexpectedly SUCCEEDED with no id-token grant — it must fail loud, not silently fall back to npm_token (D3/D11)." >&2
+            exit 1
+          fi
+          # Assert the SPECIFIC ENEEDAUTH reason via the diagnostic marker
+          # (same pattern as nuget-push) — also the regression lock for the
+          # pass-1 leak: a regressed fix would auth with a poisoned token
+          # and fail E401, not ENEEDAUTH.
+          marker_file="${RUNNER_TEMP}/npm-release-failure-reason.txt"
+          if [ ! -f "${marker_file}" ] || [ "$(cat "${marker_file}")" != "eneedauth" ]; then
+            echo "::error::npm-release-smoke-oidc-fails-loud: auth=oidc step failed, but NOT for the expected 'eneedauth' reason (marker file missing or mismatched: $(cat "${marker_file}" 2>/dev/null || echo '<absent>')). This test must fail for the OIDC-no-credential path specifically — including the possibility that the poisoned .npmrc/npm_config_* fixtures above actually leaked a credential (which would surface as E401, not ENEEDAUTH)." >&2
+            exit 1
+          fi
+          echo "npm-release-smoke-oidc-fails-loud: auth=oidc correctly failed loud (npm's own ENEEDAUTH) instead of authenticating with the supplied npm_token OR either poisoned fixture credential (project .npmrc / npm_config_* env var)."
+          echo ""
+          echo "Honest limitation (documented, not silently assumed covered): this proves auth=oidc fails loud when NO credential is reachable at all, INCLUDING when a consumer-side project .npmrc or npm_config_* env var is present (the pass-1 leak paths). It does NOT exercise a genuine ref/job-workflow-mismatch OIDC failure against a real configured npm trusted-publishing policy — deferred to Phase 6's live consumer validation, same category as A2/A3."
 
   npm-package-ci-shape-validation:
     name: npm-package-ci-shape-validation
@@ -528,9 +718,13 @@ jobs:
     permissions:
       contents: read
     env:
-      # Force the action into dry-run; no real push attempt, no need for
-      # a real .nupkg on disk. Documented reserved env name; do NOT set
-      # in consumer workflows.
+      # Force the action into dry-run; no real push attempt (and no tag/release
+      # attempt either — both are skipped under dry-run), no need for a real
+      # .nupkg on disk. Documented reserved env name; do NOT set in consumer
+      # workflows. Dry-run short-circuits inside each `run:` step (push, and
+      # tag/release via its `if:`) AFTER the auth-mode validation/branching
+      # logic already ran, so this single job can exercise the auth-mode
+      # branching for every `auth` value safely, with no real OIDC/network call.
       HASHIRA_NUGET_PUSH_DRY_RUN: '1'
     steps:
       # actions/checkout v4.2.2
@@ -542,56 +736,87 @@ jobs:
           ref: ${{ github.sha }}
           path: .hashira
           persist-credentials: false
-      - name: nuget-push — dry-run against a fake path
+      - name: nuget-push — auth=auto (default), dry-run against a fake path
         uses: ./.hashira/.github/actions/nuget-push
         with:
           # Path does not need to exist in dry-run mode; the action exits
           # before touching the filesystem.
           nupkg_path: ./packages/Fake.0.0.0.nupkg
-          api_key: ''
+          version: '0.0.0-smoke'
+      - name: nuget-push — auth=token, dry-run
+        uses: ./.hashira/.github/actions/nuget-push
+        with:
+          nupkg_path: ./packages/Fake.0.0.0.nupkg
+          version: '0.0.0-smoke'
+          auth: token
+          api_key: fake-smoke-key
+      - name: nuget-push — auth=oidc, dry-run (no real OIDC attempted under dry-run)
+        uses: ./.hashira/.github/actions/nuget-push
+        with:
+          nupkg_path: ./packages/Fake.0.0.0.nupkg
+          version: '0.0.0-smoke'
+          auth: oidc
+          nuget_user: fake-smoke-user
       - name: Assert dry-run summary line is present
         shell: bash
         run: |
           set -euo pipefail
-          echo "nuget-push-smoke: action step passed (dry-run path exercised by HASHIRA_NUGET_PUSH_DRY_RUN=1)"
+          echo "nuget-push-smoke: all 3 action invocations passed (dry-run path exercised by HASHIRA_NUGET_PUSH_DRY_RUN=1 for auth=auto/token/oidc)"
 
-  nuget-package-publish-shape-validation:
-    name: nuget-package-publish-shape-validation
+  nuget-push-smoke-oidc-fails-loud:
+    name: nuget-push-smoke-oidc-fails-loud
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
       # actions/checkout v4.2.2
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
-      - name: Verify python3 + pyyaml availability
+      # D14 self-checkout: composite actions reference library from .hashira/
+      - name: Checkout library into .hashira
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          ref: ${{ github.sha }}
+          path: .hashira
+          persist-credentials: false
+      # Not run under HASHIRA_NUGET_PUSH_DRY_RUN: this job deliberately proves
+      # auth=oidc's fail-loud behavior outside dry-run, since the OIDC-attempt
+      # branch (and its failure path) is exactly what dry-run mode skips
+      # (NuGet/login never runs there). No `id-token: write` is granted here,
+      # so NuGet/login fails to mint a key — `auth=oidc` MUST fail the job, not
+      # silently fall back to api_key (D3/D11's central invariant), even though
+      # an api_key IS supplied below.
+      - name: nuget-push — auth=oidc with no id-token grant MUST fail loud (negative test)
+        id: oidc_attempt
+        continue-on-error: true
+        uses: ./.hashira/.github/actions/nuget-push
+        with:
+          nupkg_path: ./packages/Fake.0.0.0.nupkg
+          version: '0.0.0-smoke'
+          auth: oidc
+          nuget_user: fake-smoke-user
+          api_key: fake-smoke-key-that-must-not-be-used
+      - name: Assert the auth=oidc step failed for the SPECIFIC reason (not just any failure)
         shell: bash
+        env:
+          OIDC_OUTCOME: ${{ steps.oidc_attempt.outcome }}
         run: |
           set -euo pipefail
-          python3 -c 'import yaml; print("pyyaml " + yaml.__version__)'
-      - name: Run nuget-package-publish shape-validation shim
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 tests/nuget-package-publish/shape-validate.py
-
-  nuget-publish-docs-cross-reference:
-    name: nuget-publish-docs-cross-reference
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      # actions/checkout v4.2.2
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
-      - name: Verify python3 + pyyaml availability
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 -c 'import yaml; print("pyyaml " + yaml.__version__)'
-      - name: Run nuget docs-vs-YAML cross-reference check
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 tests/nuget-package-publish/docs-cross-ref.py
+          if [ "${OIDC_OUTCOME}" = "success" ]; then
+            echo "::error::nuget-push-smoke-oidc-fails-loud: auth=oidc step unexpectedly SUCCEEDED with no id-token grant — it must fail loud, not silently fall back to api_key (D3/D11)." >&2
+            exit 1
+          fi
+          # Not just "it failed" — assert it failed for the OIDC-key-not-minted
+          # reason specifically, via the diagnostic marker nuget-push writes on
+          # that exact path (pass-1 review iter 3.2, Minor: a future change adding
+          # an earlier-failing check, e.g. version-format validation, could make
+          # this test stay green while no longer exercising the OIDC fail-loud
+          # branch at all — this assertion closes that regression-test gap).
+          marker_file="${RUNNER_TEMP}/nuget-push-failure-reason.txt"
+          if [ ! -f "${marker_file}" ] || [ "$(cat "${marker_file}")" != "oidc_no_key" ]; then
+            echo "::error::nuget-push-smoke-oidc-fails-loud: auth=oidc step failed, but NOT for the expected 'oidc_no_key' reason (marker file missing or mismatched: $(cat "${marker_file}" 2>/dev/null || echo '<absent>')). This test must fail for the OIDC-key-not-minted path specifically, or it could silently stop covering D3/D11's invariant." >&2
+            exit 1
+          fi
+          echo "nuget-push-smoke-oidc-fails-loud: auth=oidc correctly failed loud for the expected reason (oidc_no_key) instead of falling back to the supplied api_key."
 
   pages-upload-shape-smoke:
     name: pages-upload-shape-smoke
@@ -743,6 +968,135 @@ jobs:
           set -euo pipefail
           python3 tests/pages-deploy/shape-validate.py
 
+  pages-deploy-smoke-pull-request-guard:
+    name: pages-deploy-smoke-pull-request-guard
+    # iter 3.3 (B8): proves the fork-PR guard folded into pages-deploy's
+    # first step actually fails the composite when the REAL triggering
+    # event is pull_request. Only runnable for real on a self-CI run
+    # that is itself a pull_request event — `_self-ci.yml`'s own
+    # `on: pull_request` trigger (top of file) makes `github.event_name`
+    # genuinely 'pull_request' on every PR run, so this job needs no
+    # faked/overridden event context. On a push-triggered self-CI run
+    # this job is correctly skipped (not faked green) — see
+    # `pages-deploy-smoke-non-pull-request-dry-run` below for the
+    # complementary pass-through path, which runs on every event INCLUDING
+    # pull_request (so the guard's negative path always gets covered by
+    # at least one of these two jobs on any given self-CI run; only the
+    # push-triggered side of the positive path is uncovered on a PR run,
+    # which is the documented gap below).
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      # D14 self-checkout: composite actions reference library from .hashira/
+      - name: Checkout library into .hashira
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          ref: ${{ github.sha }}
+          path: .hashira
+          persist-credentials: false
+      # No id-token/pages grants on this job — irrelevant, since the
+      # guard must reject the call before reaching deploy-pages at all.
+      - name: pages-deploy — real pull_request event MUST fail loud (negative test)
+        id: guard_attempt
+        continue-on-error: true
+        uses: ./.hashira/.github/actions/pages-deploy
+      - name: Assert the composite failed because of the pull_request guard
+        shell: bash
+        env:
+          GUARD_OUTCOME: ${{ steps.guard_attempt.outcome }}
+          GH_EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          if [ "${GUARD_OUTCOME}" = "success" ]; then
+            echo "::error::pages-deploy-smoke-pull-request-guard: pages-deploy unexpectedly SUCCEEDED on a real pull_request event — the B8 fork-PR guard must fail loud, not silently proceed to deploy-pages." >&2
+            exit 1
+          fi
+          echo "pages-deploy-smoke-pull-request-guard: pages-deploy correctly failed on a real pull_request event (github.event_name='${GH_EVENT}')."
+          # No id-token/pages permissions were granted to this job, so even
+          # if the guard somehow did not fire, the subsequent deploy-pages
+          # step would also fail (for a different reason) — but we don't
+          # rely on that: the guard's own ::error::pages-deploy: line in the
+          # composite's first-step log is the actual evidence this test
+          # targets. A future regression-test hardening (same class as the
+          # nuget-push-smoke-oidc-fails-loud marker-file pattern) could add a
+          # diagnostic marker file if a more specific assertion is ever
+          # needed; not added here since outcome=failure on a job with no
+          # deploy-pages permissions, on a real pull_request event, is
+          # already unambiguous.
+
+  pages-deploy-smoke-non-pull-request-dry-run:
+    name: pages-deploy-smoke-non-pull-request-dry-run
+    # Complementary pass-through path: proves the guard does NOT block a
+    # non-pull_request event. Runs on every self-CI trigger (push AND
+    # pull_request — `_self-ci.yml`'s self-CI run is itself usually a
+    # pull_request when this job executes during this iteration's own
+    # review, which would make `github.event_name` 'pull_request' and
+    # WRONGLY fail this job too if it asserted success unconditionally).
+    # This job is deliberately NOT gated on event_name: composite actions
+    # read `github.event_name` from the real workflow context (no env-var
+    # override is possible — investigated per the phase brief), so the
+    # only way to exercise the "passes through on a non-pull_request
+    # event" path for real is to actually run this job during a real
+    # push-triggered self-CI run. On a pull_request-triggered self-CI run
+    # this job's pages-deploy invocation will ALSO see
+    # github.event_name='pull_request' and correctly fail the guard,
+    # which is indistinguishable here from the
+    # pages-deploy-smoke-pull-request-guard job above — so this job only
+    # actually proves the pass-through path on a push run. This is the
+    # honest test-pyramid gap for this job: it cannot independently prove
+    # "does not block on push" from inside a pull_request-triggered self-CI
+    # run, only on a genuine push-triggered one. The HASHIRA_PAGES_DEPLOY_DRY_RUN
+    # hook (mirroring pages-upload's identical precedent) lets it complete
+    # without a real Pages-enabled target either way.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      HASHIRA_PAGES_DEPLOY_DRY_RUN: '1'
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      # D14 self-checkout: composite actions reference library from .hashira/
+      - name: Checkout library into .hashira
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          ref: ${{ github.sha }}
+          path: .hashira
+          persist-credentials: false
+      - name: pages-deploy — dry-run invocation
+        id: deploy_attempt
+        continue-on-error: true
+        uses: ./.hashira/.github/actions/pages-deploy
+      - name: Assert outcome matches the current event (honest, not overclaimed)
+        shell: bash
+        env:
+          DEPLOY_OUTCOME: ${{ steps.deploy_attempt.outcome }}
+          GH_EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          if [ "${GH_EVENT}" = "pull_request" ]; then
+            # Same event this job runs under right now happens to be a PR —
+            # the guard correctly fires here too; this branch exists so the
+            # job doesn't report a false failure during a PR-triggered
+            # self-CI run (see the job-level comment above for why this
+            # case can't independently prove the pass-through path).
+            if [ "${DEPLOY_OUTCOME}" = "success" ]; then
+              echo "::error::pages-deploy-smoke-non-pull-request-dry-run: pages-deploy unexpectedly SUCCEEDED on a real pull_request event — the B8 guard must fail loud here too." >&2
+              exit 1
+            fi
+            echo "pages-deploy-smoke-non-pull-request-dry-run: this self-CI run is itself a pull_request event, so the guard correctly fired (outcome=${DEPLOY_OUTCOME}). The pass-through path is not exercised by this run — see pages-deploy-smoke-pull-request-guard for the negative path, and the job-level comment for why a push-triggered run is required to prove pass-through."
+          else
+            if [ "${DEPLOY_OUTCOME}" != "success" ]; then
+              echo "::error::pages-deploy-smoke-non-pull-request-dry-run: pages-deploy unexpectedly FAILED on a non-pull_request event (github.event_name='${GH_EVENT}') under HASHIRA_PAGES_DEPLOY_DRY_RUN=1 — the B8 guard must NOT block a legitimate push/dispatch deploy." >&2
+              exit 1
+            fi
+            echo "pages-deploy-smoke-non-pull-request-dry-run: pages-deploy correctly passed the guard and completed (dry-run) on a non-pull_request event (github.event_name='${GH_EVENT}')."
+          fi
+
   static-webapp-ci-shape-validation:
     name: static-webapp-ci-shape-validation
     runs-on: ubuntu-latest
@@ -762,25 +1116,6 @@ jobs:
           set -euo pipefail
           python3 tests/static-webapp-ci/shape-validate.py
 
-  static-webapp-deploy-shape-validation:
-    name: static-webapp-deploy-shape-validation
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      # actions/checkout v4.2.2
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
-      - name: Verify python3 + pyyaml availability
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 -c 'import yaml; print("pyyaml " + yaml.__version__)'
-      - name: Run static-webapp-deploy shape-validation shim
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 tests/static-webapp-deploy/shape-validate.py
-
   static-webapp-docs-cross-reference:
     name: static-webapp docs cross-reference
     runs-on: ubuntu-latest
@@ -799,3 +1134,184 @@ jobs:
         run: |
           set -euo pipefail
           python3 tests/static-webapp/docs-cross-ref.py
+
+  dual-pin-lint:
+    name: dual-pin-lint
+    # Phase 4 iteration 4.1 (decisions.md D9; security.md AP8). Asserts the
+    # dual-pin invariant (same repository AND same commit between a
+    # caller's outer `uses:` pin and the `library_ref` input passed to the
+    # SAME reusable-workflow call) against tests/dual-pin/caller-fixture.yml
+    # — the canonical, lint-owned example of a correctly dual-pinned caller.
+    # Pure static/textual check: GitHub Actions resolves a `uses:` ref's
+    # `@<ref>` at workflow-parse time, before any job runs, so there is no
+    # runtime introspection API this could instead be implemented against
+    # (see tests/dual-pin/lint.py's module docstring for the full reasoning).
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - name: Run dual-pin lint against the canonical fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tests/dual-pin/lint.py
+
+  dual-pin-lint-self-test:
+    name: dual-pin-lint-self-test
+    # Regression lock for the lint's negative-test fixtures (acceptance
+    # criterion, phase 4 iteration 4.1; extended passes 2-3 of review):
+    # proves the lint fails closed on a same-repository mismatch
+    # (fixtures/same-repo-mismatch.yml), a same-repository-different-commit
+    # mismatch (fixtures/same-repo-different-sha.yml — the actual AP8 attack
+    # path), and an asymmetric real-SHA-vs-not mismatch in EITHER direction
+    # (fixtures/non-pinned-library-ref*.yml for `main`/non-`main` branches;
+    # the mirror unpinned-`uses:` direction is covered in-memory by
+    # lint.py --self-test) — and that the canonical fixture stays clean.
+    # These fixtures deliberately retain `hashira-ops` / mismatched-commit /
+    # non-SHA content; excluded by construction from iteration 4.4's
+    # repo-wide naming-cleanup sweep.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - name: Run dual-pin lint --self-test
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tests/dual-pin/lint.py --self-test
+
+  composite-shape-invariant-lint:
+    name: composite-shape-invariant-lint
+    # Phase 5 iteration 5.1 (security.md B3/§2 corollary (1); NFR-Sec-1;
+    # decisions.md; FR-15). Two structural checks against the three CD
+    # composite actions (nuget-push, npm-release, pages-deploy):
+    #   1. no `uses:` step resolving to a `.github/workflows/*.yml` path
+    #      (same-repo or cross-repo) — re-introducing a `workflow_call`
+    #      boundary inside a CD composite would break the OIDC token's
+    #      `job_workflow_ref` claim match (AP1).
+    #   2. no CD-side stamp — no step writing to package.json/.nuspec/
+    #      assembly-version metadata (Phase 3.4's "consume the CI-stamped
+    #      artifact byte-identical" invariant, NFR-Rel-1, mechanized).
+    # Single-hop by design (inspects each composite's own action.yml only,
+    # not transitively through a local composite it itself calls — none of
+    # the current three chain to another local composite). Pure static
+    # shape check: PyYAML tree-walk (collect_uses-style, per the
+    # architectural precedent tests/npm-package-ci/shape-validate.py set —
+    # NOT tests/dual-pin/lint.py's lexical regex approach, since this is a
+    # structural tree-reachability question), no registry credentials
+    # needed. See tests/shape-lints/no-nested-reusable-workflow.py's module
+    # docstring for the full reasoning and CHECK 2's honestly-documented
+    # textual-scan limitations.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - name: Verify python3 + pyyaml availability
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -c 'import yaml; print("pyyaml " + yaml.__version__)'
+      - name: Run composite-shape invariant lint
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tests/shape-lints/no-nested-reusable-workflow.py
+
+  composite-shape-invariant-lint-self-test:
+    name: composite-shape-invariant-lint-self-test
+    # Regression lock for the lint's negative-test fixtures (acceptance
+    # criterion, phase 5 iteration 5.1): proves CHECK 1 fails closed on a
+    # same-repo nested reusable-workflow uses: (fixtures/
+    # nested-reusable-workflow-same-repo.yml) and a cross-repo one
+    # (fixtures/nested-reusable-workflow-cross-repo.yml), and CHECK 2 fails
+    # closed on a package.json stamp (fixtures/cd-side-stamp-package-json.yml)
+    # and a .nuspec stamp (fixtures/cd-side-stamp-nuspec.yml) — each for its
+    # own distinct, correctly-attributed reason (no conflation between the
+    # two check kinds) — and that all three real CD composites stay clean
+    # under both checks (the lint's actual happy-path target).
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - name: Verify python3 + pyyaml availability
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -c 'import yaml; print("pyyaml " + yaml.__version__)'
+      - name: Run composite-shape invariant lint --self-test
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tests/shape-lints/no-nested-reusable-workflow.py --self-test
+
+  gate-lints:
+    name: gate-lints
+    # Phase 5 iteration 5.2 (decisions.md D12; security.md B8; FR-15). Two
+    # small, unrelated checks bundled in one shim:
+    #   CHECK A — every gated publish/deploy job in docs/flows/*.md's main
+    #     caller-workflow example declares an `environment:` key (D12's
+    #     only mechanizable defense-in-depth half — the library cannot
+    #     verify a reviewer is actually configured on that Environment,
+    #     admin-tier scope the workflow token lacks, but CAN verify the
+    #     maintainer didn't forget the gate keyword itself).
+    #   CHECK B — no `.github/workflows/*.yml` file's `on:` block declares
+    #     `pull_request_target` as a trigger (B8 — a hard prohibition, not
+    #     advisory). YAML-scoped (parses the `on:` block only), not a bare
+    #     substring grep — static-webapp-ci.yml's own comment documenting
+    #     this prohibition contains the literal string `pull_request_target`
+    #     five times, which a naive grep would false-positive on. See
+    #     tests/shape-lints/gate-lints.py's module docstring for the full
+    #     reasoning on both checks.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - name: Verify python3 + pyyaml availability
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -c 'import yaml; print("pyyaml " + yaml.__version__)'
+      - name: Run gate-lints (environment-gate presence + pull_request_target prohibition)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tests/shape-lints/gate-lints.py
+
+  gate-lints-self-test:
+    name: gate-lints-self-test
+    # Regression lock for the lint's negative-test fixtures (acceptance
+    # criterion, phase 5 iteration 5.2): proves CHECK A fails closed on a
+    # gated job missing environment: (fixtures/gated-job-missing-
+    # environment.yml) and CHECK B fails closed on a workflow using
+    # pull_request_target (fixtures/pull-request-target-workflow.yml) —
+    # each for its own distinct, correctly-attributed reason — and that all
+    # three real flow docs and all real workflow files (including
+    # static-webapp-ci.yml's own prohibition-documenting comment, the
+    # concrete false-positive control for CHECK B's YAML-scoped design)
+    # stay clean.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - name: Verify python3 + pyyaml availability
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -c 'import yaml; print("pyyaml " + yaml.__version__)'
+      - name: Run gate-lints --self-test
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tests/shape-lints/gate-lints.py --self-test

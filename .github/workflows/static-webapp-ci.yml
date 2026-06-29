@@ -82,6 +82,24 @@
 # job is not feasible without a new cross-job artifact handoff (forced
 # by `upload-pages-artifact`'s same-runner locality requirement).
 #
+# ## `pull_request_target` is forbidden (B8, iter 3.3)
+#
+# Consumers calling this reusable workflow MUST trigger it via
+# `pull_request`, and MUST NOT use `pull_request_target`. This is the
+# canonical privilege-escalation pattern (B8/AP7, `security.md` §1/§6):
+# `pull_request_target` runs in the BASE repo's context — with the base
+# repo's secrets and a token scoped to the base repo — even for a
+# fork-originated PR, so a fork PR author's `build_command`/
+# `test_command` (both raw-shell sinks per D10d above) would execute
+# with that elevated context instead of the fork's own restricted
+# token. This workflow's `build-and-upload` job already holds
+# `id-token: write` (see the permissions baseline above); combining that
+# grant with `pull_request_target`'s base-repo context on every fork PR
+# is exactly the escalation B8 exists to prevent. Use `pull_request`
+# (read-only fork token, no secrets) for PR-triggered CI; never switch
+# to `pull_request_target` to work around the read-only token's
+# limitations — that "fix" is the footgun, not a solution.
+#
 # See `docs/usage.md` for the full trust model.
 #
 # ## SHA pins (NF2)
@@ -95,7 +113,7 @@
 # Same constraint and resolution as the other reusable workflows in this
 # library: GitHub's `uses:` keyword does NOT permit expressions in the
 # `@<ref>` portion (workflow-load-time parse). Every job that consumes
-# an in-repo composite action first checks out `skathio/hashira-ops` at
+# an in-repo composite action first checks out `skathio/hashira` at
 # `${{ inputs.library_ref }}` into the reserved subdirectory `.hashira/`
 # with `persist-credentials: false` (iter-2.3 security review m4). The
 # composite-action `uses:` refs are then literal local paths
@@ -103,8 +121,13 @@
 # the load-time parser). The `library_ref` is substituted at runtime
 # through `actions/checkout`'s `ref:` input.
 #
-# Consumers pin `library_ref` to a SHA for reproducibility. Default is
-# `main` for convenience; production consumers SHOULD pin to a SHA.
+# `library_ref` is a REQUIRED input (no default) as of v2 phase 1
+# iteration 1.1 — see decisions.md D9 / phases/01-naming-unification.md.
+# v1's default ('v1', with a stale comment claiming 'main') was a
+# consumer-visible contract mismatch; rather than pick a new default to
+# defend, every caller must now pin explicitly. This is a
+# breaking-contract change for any v1 caller relying on the implicit
+# default; callers MUST pass `library_ref` explicitly going forward.
 
 name: static-webapp-ci
 
@@ -142,10 +165,9 @@ on:
         type: string
         default: "codeql,actionlint"
       library_ref:
-        description: "SHA, tag, or branch of skathio/hashira-ops to check out for in-repo composite actions (D14). Default 'v1'. PIN TO A SHA for reproducible consumer builds."
-        required: false
+        description: "SHA, tag, or branch of skathio/hashira to check out for in-repo composite actions (D14). REQUIRED — no default (v2 phase 1 iteration 1.1). PIN TO A SHA for reproducible consumer builds."
+        required: true
         type: string
-        default: "v1"
 
 # Deny-all baseline; jobs grant the minimum.
 permissions: {}
@@ -210,11 +232,11 @@ jobs:
         with:
           node-version: ${{ inputs.node_version }}
       # Library self-checkout per D14 (persist-credentials:false per iter-2.3 m4).
-      - name: Checkout hashira-ops library (D14)
+      - name: Checkout hashira library (D14)
         # actions/checkout v4.2.2
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
-          repository: skathio/hashira-ops
+          repository: skathio/hashira
           ref: ${{ inputs.library_ref }}
           path: .hashira
           persist-credentials: false
@@ -260,11 +282,11 @@ jobs:
         with:
           node-version: ${{ inputs.node_version }}
       # Library self-checkout per D14.
-      - name: Checkout hashira-ops library (D14)
+      - name: Checkout hashira library (D14)
         # actions/checkout v4.2.2
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
-          repository: skathio/hashira-ops
+          repository: skathio/hashira
           ref: ${{ inputs.library_ref }}
           path: .hashira
           persist-credentials: false
@@ -299,11 +321,11 @@ jobs:
         with:
           node-version: ${{ inputs.node_version }}
       # Library self-checkout per D14.
-      - name: Checkout hashira-ops library (D14)
+      - name: Checkout hashira library (D14)
         # actions/checkout v4.2.2
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
-          repository: skathio/hashira-ops
+          repository: skathio/hashira
           ref: ${{ inputs.library_ref }}
           path: .hashira
           persist-credentials: false
@@ -332,11 +354,11 @@ jobs:
         with:
           node-version: ${{ inputs.node_version }}
       # Library self-checkout per D14.
-      - name: Checkout hashira-ops library (D14)
+      - name: Checkout hashira library (D14)
         # actions/checkout v4.2.2
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
-          repository: skathio/hashira-ops
+          repository: skathio/hashira
           ref: ${{ inputs.library_ref }}
           path: .hashira
           persist-credentials: false

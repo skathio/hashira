@@ -1,0 +1,94 @@
+# Composite action: version-resolver
+#
+# Pure version-computation building block for the explicit dispatch-driven
+# release model (D1/D8). Given the repo's tag list and a maintainer-chosen
+# `bump`, computes the next release version and emits it as the action's
+# single declared output. Runs inside the CI reusable workflow (D8) — never
+# writes to the working tree, never commits back.
+#
+# Per NFR-Maint-1 the action.yml stays orchestration-only; the bump
+# arithmetic + two-checkpoint semver validation (security.md B7) live in
+# `lib/resolve-version.js`, unit-tested independently of any GitHub Actions
+# runtime (same precedent as `dotnet-pack-version` / `coverage-report`). No
+# CLI is shelled out to here — plain Node, no `jq`/`gh` — satisfying
+# NFR-Sec-4's resolver-tooling-pinning extension by having nothing to pin.
+# The caller collects `inputs.tags` (e.g. `git tag --list` in a prior step);
+# this action does not read git state itself, keeping it a pure function of
+# its declared inputs (testable without a real repo).
+#
+# ## Output contract (D8 — exactly one scalar, no exceptions)
+#
+# Declares exactly one output: `version`, the bare validated semver string
+# (e.g. `1.3.0`, no `v` prefix). No second output for the `v`-prefixed tag
+# form or the bump kind — the CD composite derives the `v`-prefix itself via
+# string concatenation (`v${{ ... }}`), and the bump kind is already a
+# separate dispatch input the caller already has. Do not add a second output
+# here; this exact mistake has been flagged across three review passes.
+#
+# ## Trust boundary
+#
+# `tags` is repo-controlled data (security.md B7); passed via `env:` and read
+# from `process.env` inside the Node shim, never interpolated into a shell
+# `run:` string. The shim validates every candidate baseline tag (and the
+# computed output) against a strict semver regex before either is used
+# arithmetically or returned — see `lib/resolve-version.js`'s two
+# checkpoints. `seed_version` follows the same checkpoint treatment.
+name: version-resolver
+description: Compute the next release version from tag history + an explicit bump kind. Outputs exactly one scalar (the bare semver string).
+
+inputs:
+  tags:
+    description: "Newline-separated list of git tags to consider (e.g. `git tag --list` output). Trusted-but-validated input — see `## Trust boundary`."
+    required: false
+    default: ""
+  bump:
+    description: "One of `patch` | `minor` | `major`."
+    required: true
+  seed_version:
+    description: "Bare semver baseline (e.g. `0.0.0`) to use when no prior stable tag exists. Required for the first release; ignored if a stable tag is found."
+    required: false
+    default: ""
+
+outputs:
+  version:
+    description: "The resolved, validated bare semver string (e.g. `1.3.0`, no `v` prefix). The action's only output (D8)."
+    value: ${{ steps.resolve.outputs.version }}
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve next version
+      id: resolve
+      shell: bash
+      env:
+        VR_TAGS: ${{ inputs.tags }}
+        VR_BUMP: ${{ inputs.bump }}
+        VR_SEED_VERSION: ${{ inputs.seed_version }}
+      run: |
+        set -euo pipefail
+        node -e '
+          const { resolveVersion } = require(process.env.GITHUB_ACTION_PATH + "/lib/resolve-version");
+          const tags = (process.env.VR_TAGS || "")
+            .split("\n")
+            .map((t) => t.trim())
+            .filter(Boolean);
+          const version = resolveVersion({
+            tags,
+            bump: process.env.VR_BUMP,
+            seedVersion: process.env.VR_SEED_VERSION || undefined,
+          });
+          process.stdout.write(version);
+        ' > "${RUNNER_TEMP}/version-resolver.out"
+        version="$(cat "${RUNNER_TEMP}/version-resolver.out")"
+        echo "version=${version}" >> "${GITHUB_OUTPUT}"
+        # Defense-in-depth: re-validate VR_BUMP locally, immediately before
+        # it is interpolated into the step-summary echo below. This line is
+        # safe today only because `resolveVersion` already throws upstream
+        # on an invalid bump, several stack frames away inside the Node
+        # shim — that's an implicit, borrowed guarantee. Make the
+        # constraint self-evident at the sink itself, not borrowed.
+        case "$VR_BUMP" in
+          patch|minor|major) ;;
+          *) exit 1 ;;
+        esac
+        echo "version-resolver: resolved ${version} (bump=${VR_BUMP})" >> "${GITHUB_STEP_SUMMARY}"

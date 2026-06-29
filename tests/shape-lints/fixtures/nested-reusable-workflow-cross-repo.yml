@@ -1,0 +1,28 @@
+# Negative-test fixture (phase 5 iteration 5.1, CHECK 1).
+#
+# A deliberately introduced `uses: owner/repo/.github/workflows/foo.yml@ref`
+# step — the CROSS-REPO form of the prohibited reusable-workflow `uses:`
+# shape (NFR-Sec-1 corollary (1)). The risk pointer in
+# phases/05-self-ci-shape-lints.md explicitly calls out that a lint covering
+# only the same-repo form (`./.github/workflows/*`) would give false
+# confidence; this fixture proves the cross-repo form is independently
+# caught. Not a real composite action; never wired into any real workflow.
+name: fixture-nested-reusable-workflow-cross-repo
+description: Negative-test fixture for tests/shape-lints/no-nested-reusable-workflow.py CHECK 1 (cross-repo form).
+
+inputs:
+  version:
+    description: "Placeholder input, mirrors the real CD composites' shape."
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Innocuous setup step
+      shell: bash
+      run: |
+        echo "setting up"
+    - name: Deliberately prohibited cross-repo nested reusable-workflow call
+      uses: octo-org/other-repo/.github/workflows/foo.yml@4c1f3a8b2e6d9057a1c4f8e3b6d2a9c7e5f01234
+      with:
+        version: ${{ inputs.version }}

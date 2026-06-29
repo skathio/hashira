@@ -78,6 +78,40 @@
 # (missing `pages: write` / `id-token: write` job permissions, missing
 # `needs: ci` edge, Pages not enabled in repo settings) and points at
 # the deploy-pages step log for detail.
+#
+# ## Fork-PR guard (B8, iter 3.3)
+#
+# This action's first step refuses to run when `github.event_name ==
+# 'pull_request'`, regardless of whether the caller already guards
+# against it. This is folded in from the now-deleted
+# `static-webapp-deploy.yml` reusable workflow's `preflight` job, which
+# carried the identical check — the one safety mechanism worth
+# preserving across the reusable-workflow -> composite conversion (D2
+# refinement B). Rationale: deploying on a `pull_request` event would run
+# this action (and its `pages: write` + `id-token: write` grants) inside
+# a job that may be triggered by a fork PR, exposing those scopes to
+# PR-author-influenced code. Same "don't trust the caller already
+# validated it" reasoning as B7's two-checkpoint pattern (re-validate at
+# the privileged sink itself, not just at the resolver/preflight that
+# fed it) — applied here to B8 instead of B7. The recommended caller
+# shape (see `docs/flows/static-webapp.md` §1/§2) is a separate
+# `push: branches: [main]`-only deploy job and a `pull_request`-triggered
+# CI-only job that never calls this action.
+#
+# ## Reserved env names (iter 3.3)
+#
+# `HASHIRA_PAGES_DEPLOY_DRY_RUN` is reserved by this library as a
+# test-only override, mirroring `pages-upload`'s identical
+# `HASHIRA_PAGES_UPLOAD_DRY_RUN` hook. When set to `1`, the action SKIPS
+# only the third-party `actions/deploy-pages` invocation — it does NOT
+# skip the fork-PR guard step above, which always runs unconditionally
+# regardless of dry-run. This lets library self-CI exercise both the
+# guard's failure path (on a real `pull_request` self-CI run) and its
+# pass-through path (on a real `push`/other self-CI run) without
+# requiring Pages to be enabled on the library repo (it isn't — see
+# `tests/pages-deploy/shape-validate.py`'s docstring). Consumers MUST
+# NOT set this in production — doing so silently turns deploys into
+# no-ops.
 name: pages-deploy
 description: Deploy the same-run `github-pages` artifact to GitHub Pages; emits the deployed URL to the run summary.
 
@@ -95,12 +129,44 @@ outputs:
 runs:
   using: composite
   steps:
+    - name: Verify caller event is not a pull_request (B8)
+      # Folded in from the now-retired static-webapp-deploy.yml reusable
+      # workflow's `preflight` job (iter 3.3) — see `## Fork-PR guard`
+      # above. Runs unconditionally as this action's first step so the
+      # composite refuses to deploy on a pull_request event even if the
+      # caller forgot to guard against it.
+      shell: bash
+      env:
+        PD_GH_EVENT: ${{ github.event_name }}
+      run: |
+        set -euo pipefail
+        if [ "${PD_GH_EVENT}" = "pull_request" ]; then
+          echo "::error::pages-deploy: this action must not run on pull_request events (deploying would expose pages:write + id-token:write to PR-author-influenced code, including fork PRs — B8). Use a separate deploy job triggered only by push: branches: [main] (or similar), and keep pull_request-triggered jobs CI-only (no call to pages-deploy). See docs/flows/static-webapp.md for the recommended caller shape." >&2
+          exit 1
+        fi
+
     - name: Deploy to GitHub Pages
       id: deploy
+      # Dry-run hook (reserved test-only override; see `## Reserved env
+      # names` above). When set, skip only this third-party step — the
+      # fork-PR guard above is NEVER gated by dry-run, since the whole
+      # point is to exercise the guard for real. iter-4.1 review Minor #2
+      # precedent (pages-upload): the job's `env:` block is in scope for
+      # a step-level `if:`, since composite actions inherit their calling
+      # job's env context.
+      if: ${{ env.HASHIRA_PAGES_DEPLOY_DRY_RUN != '1' }}
       # actions/deploy-pages v4.0.5
       uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e
       with:
         artifact_name: ${{ inputs.artifact_name }}
+
+    - name: Note dry-run skip (if applicable)
+      if: ${{ env.HASHIRA_PAGES_DEPLOY_DRY_RUN == '1' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        echo "pages-deploy: HASHIRA_PAGES_DEPLOY_DRY_RUN=1 -> deploy-pages step skipped (test-only override); fork-PR guard above still ran for real."
+        echo "pages-deploy: dry-run; no deploy performed" >> "${GITHUB_STEP_SUMMARY}"
 
     - name: Emit deployed URL to summary
       # iter-4.1 review Minor #1: `if: always()` so the summary fires on
@@ -108,6 +174,17 @@ runs:
       # common failure modes (missing permissions, missing needs: edge,
       # Pages not enabled) leave nothing in the run summary by default;
       # this step replaces that gap with an actionable failure line.
+      #
+      # iter 3.3: because `if: always()` also fires when the new
+      # fork-PR-guard step (above) fails BEFORE the deploy step ever
+      # runs, `steps.deploy.outcome` is empty in that case — without the
+      # explicit empty-outcome branch below this would have misreported
+      # an empty-outcome guard failure as "Deploy FAILED (outcome: )",
+      # which is not what happened and would misdirect triage away from
+      # the actual cause (the B8 guard, already surfaced via its own
+      # `::error::` line). Similarly, `steps.deploy.outcome` is
+      # `skipped` (not empty) under the dry-run hook — a third distinct
+      # case from "guard failed" and "deploy-pages ran."
       if: always()
       shell: bash
       env:
@@ -125,10 +202,16 @@ runs:
           echo ""
           echo "### pages-deploy"
           echo ""
-          if [ "${PD_DEPLOY_OUTCOME}" = "success" ] && [ -n "${PD_PAGE_URL}" ]; then
+          if [ -z "${PD_DEPLOY_OUTCOME}" ]; then
+            echo "pages-deploy: deploy-pages did not run — an earlier step failed first (see the fork-PR guard step's log above for the likely cause)."
+          elif [ "${PD_DEPLOY_OUTCOME}" = "skipped" ]; then
+            echo "pages-deploy: deploy-pages step skipped (HASHIRA_PAGES_DEPLOY_DRY_RUN=1, test-only override; see the dry-run-skip step above)."
+          elif [ "${PD_DEPLOY_OUTCOME}" = "success" ] && [ -n "${PD_PAGE_URL}" ]; then
             echo "Deployed: <${PD_PAGE_URL}>"
           elif [ "${PD_DEPLOY_OUTCOME}" = "success" ]; then
             echo "pages-deploy: deploy step completed but page_url output is empty (unexpected — inspect the deploy-pages step log)."
+          elif [ "${PD_DEPLOY_OUTCOME}" = "cancelled" ]; then
+            echo "pages-deploy: deploy-pages was cancelled (outcome: cancelled) — the run was stopped externally (e.g. a superseding run or a manual cancellation), not a deploy-pages error. No triage needed below."
           else
             echo "pages-deploy: Deploy FAILED (outcome: ${PD_DEPLOY_OUTCOME})."
             echo ""

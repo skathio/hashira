@@ -1,0 +1,42 @@
+# Negative-test fixture for `tests/dual-pin/lint.py` (phase 4 iteration
+# 4.1, acceptance criterion 1). Not hand-numbered against its siblings —
+# the lint itself is count-independent by design (decisions.md#d9), so the
+# fixture set shouldn't carry a brittle ordinal either.
+#
+# Deliberately reintroduces `skathio/hashira-ops` on the dual-pin invariant's
+# REPOSITORY half: the outer `uses:` ref targets the pre-rename repo name
+# instead of the canonical `skathio/hashira`. Post-Phase-1, every kept CI
+# reusable workflow's in-repo composite-action self-checkout (D14) is
+# hardcoded to `repository: skathio/hashira` — it is NOT parameterized by
+# the consumer, so the "same repository" half of the invariant is checkable
+# purely from the caller's own `uses:` text: the repo segment of `uses:`
+# MUST equal the canonical `skathio/hashira` the library's self-checkout
+# actually targets. A caller pinned to any other repository name (a stale
+# fork, the old `hashira-ops` name, a typo) runs a DIFFERENT copy of the
+# reusable workflow than the one whose internal wiring this lint can vouch
+# for — even if the commit SHA on both `uses:` and `library_ref` agree
+# (it does here: both 4c1f3a8b...).
+#
+# Excluded by design from the repo-wide `hashira-ops` naming-cleanup sweep
+# (phase 4 iteration 4.4) — this `hashira-ops` reference is the lint's own
+# planted violation, not a missed rename.
+name: dual-pin-fixture-same-repo-mismatch
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  ci:
+    uses: skathio/hashira-ops/.github/workflows/npm-package-ci.yml@4c1f3a8b2e6d9057a1c4f8e3b6d2a9c7e5f01234
+    permissions:
+      contents: read
+      pull-requests: write
+      security-events: write
+    with:
+      # Same commit as the `uses:` pin above — this fixture isolates the
+      # repository-name half of the invariant; the SHA half is correct here.
+      library_ref: '4c1f3a8b2e6d9057a1c4f8e3b6d2a9c7e5f01234'

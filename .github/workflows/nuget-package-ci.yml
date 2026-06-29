@@ -5,14 +5,58 @@
 # cobertura file run-tests-dotnet standardizes only exists in the test
 # job's workspace, and a previous separate `coverage-report` job ran on a
 # fresh runner with no artifact handoff, so it always failed "file not
-# found". No pack or push. The Publish half lives in
-# `nuget-package-publish.yml` (iteration 3.3).
+# found". The Publish half lives in `nuget-package-publish.yml` (iteration
+# 3.3).
+#
+# ## Version resolution + stamp (D1/D8, iteration 2.3)
+#
+# A `version` job, gated at the JOB level on `inputs.bump != ''`, resolves
+# the next release version via `.github/actions/version-resolver` and packs
+# it via `.github/actions/dotnet-pack-version` with the resolved version
+# passed as `version_override` — never into the checked-out working tree
+# (D1's stamp-only, no-commit-back invariant; verified by a `git status`
+# assertion step, same shape as `npm-package-ci.yml` iteration 2.2). When
+# `bump` is empty (every routine PR/push CI run that isn't cutting a
+# release) the `version` job is skipped entirely and every other job runs
+# exactly as before this iteration — `version` neither gates nor is gated
+# by `setup`/`restore-build`/`test`/`scan-suite`/`coverage-report`.
+#
+# MinVer-stamping decision (phase 2 exit criteria, iteration 2.3): MinVer is
+# RETAINED, not replaced. `dotnet-pack-version`'s new `version_override`
+# input sets MinVer's own `MinVerVersionOverride` MSBuild property, which
+# MinVer reads verbatim instead of inferring from git tag history when
+# non-empty. Packing still goes through ordinary `dotnet pack` + MinVer;
+# explicit (the resolver's output) always wins over inferred (MinVer's tag
+# walk). Verified directly against a fixture repo: with `version_override`
+# set, the produced `.nuspec`'s `<version>` and the assembly's
+# informational version both reflect the override, not the tag-inferred
+# guess — proving the override genuinely wins, not just happens to match.
+#
+# CI->CD output-boundary contract (D8, phase 2 exit criteria "Major 3 fix"):
+# this workflow declares exactly ONE workflow-level output, `resolved_version`
+# — the resolver's single scalar, mapped straight through
+# (`jobs.version.outputs.resolved_version` <- `steps.resolve.outputs.version`).
+# No second output for the `v`-prefixed tag form or the bump kind. A
+# consumer's CD job reads it via
+# `needs.<this-job-id>.outputs.resolved_version` and derives the `v`-prefix
+# itself (`v${{ needs.ci.outputs.resolved_version }}`).
+#
+# ## Same-run artifact handoff (mirrors npm-package-ci.yml iteration 2.2)
+#
+# The packed `.nupkg` (`${RUNNER_TEMP}/hashira-pack-output/*.nupkg`) is
+# uploaded via `actions/upload-artifact` under the stable name
+# `nuget-package`, `retention-days: 5`. Phase 3's CD job downloads this
+# exact artifact by name (`actions/download-artifact`) to publish — it MUST
+# NOT re-pack from a fresh checkout, which would silently break the
+# byte-identical guarantee NFR-Rel-1 requires.
 #
 # ## Permissions baseline (NF6)
 #
 # Workflow-level `permissions: {}` (deny-all). Each job grants the
 # minimum it needs:
 #   - setup          : contents:read
+#   - version        : contents:read (resolver + pack/stamp; no
+#                      working-tree write)
 #   - restore-build  : contents:read
 #   - test           : contents:read, pull-requests:write (coverage runs
 #                      here now and posts the sticky comment — see below)
@@ -49,16 +93,16 @@
 # ## Runtime contract: library-self-checkout via `library_ref` (D14)
 #
 # In-repo composite actions live at `.github/actions/<name>` in the
-# `skathio/hashira-ops` repo. When this workflow is invoked from a
+# `skathio/hashira` repo. When this workflow is invoked from a
 # consumer repo, the consumer's `$GITHUB_WORKSPACE` contains the
 # consumer's files, not the library's. GitHub's `uses:` keyword does
 # NOT permit expressions in the `@<ref>` portion (workflow-load-time
 # parse, before expression evaluation), so the originally-proposed
-# shape `uses: skathio/hashira-ops/.github/actions/<name>@${{
+# shape `uses: skathio/hashira/.github/actions/<name>@${{
 # inputs.library_ref }}` is rejected by the runtime.
 #
 # Resolution (D14): every job that consumes an in-repo composite
-# action first checks out `skathio/hashira-ops` at
+# action first checks out `skathio/hashira` at
 # `${{ inputs.library_ref }}` into the reserved subdirectory
 # `.hashira/` with `persist-credentials: false` (iter-2.3 security
 # review m4). The composite-action `uses:` refs are then literal local
@@ -68,8 +112,13 @@
 # expressions ARE permitted because it's a step input, not the
 # `uses:` keyword itself).
 #
-# Consumers pin `library_ref` to a SHA for reproducibility. Default is
-# `main` for convenience; production consumers SHOULD pin to a SHA.
+# `library_ref` is a REQUIRED input (no default) as of v2 phase 1
+# iteration 1.1 — see decisions.md D9 / phases/01-naming-unification.md.
+# v1's default ('v1', with a stale comment claiming 'main') was a
+# consumer-visible contract mismatch; rather than pick a new default to
+# defend, every caller must now pin explicitly. This is a
+# breaking-contract change for any v1 caller relying on the implicit
+# default; callers MUST pass `library_ref` explicitly going forward.
 #
 # Trade-off: ~1–2s overhead per job for the library checkout.
 # Acceptable at v1; documented as the cost of the literal-`uses:`
@@ -92,6 +141,8 @@
 #   - coverage_path
 #   - scan_disable
 #   - library_ref
+#   - bump            (gates the `version` job; resolver input, see above)
+#   - seed_version     (resolver input, see above)
 # See `docs/usage.md` for the full trust model.
 
 name: nuget-package-ci
@@ -124,10 +175,31 @@ on:
         type: string
         default: "codeql,actionlint"
       library_ref:
-        description: "SHA, tag, or branch of skathio/hashira-ops to check out for in-repo composite actions (D14). Default 'v1'. PIN TO A SHA for reproducible consumer builds."
+        description: "SHA, tag, or branch of skathio/hashira to check out for in-repo composite actions (D14). REQUIRED — no default (v2 phase 1 iteration 1.1). PIN TO A SHA for reproducible consumer builds."
+        required: true
+        type: string
+      bump:
+        description: "One of 'patch' | 'minor' | 'major'. OPTIONAL — leave empty/unset for routine PR/push CI runs that aren't cutting a release. When set, the version job resolves the next version, surfaces it in the run summary, and packs it via dotnet-pack-version's `version_override` (MinVer's tag-inference is overridden, never the working tree) (D1/D8). Empty by default so every non-release CI run is unaffected."
         required: false
         type: string
-        default: "v1"
+        default: ""
+      seed_version:
+        description: "Bare semver baseline (e.g. '0.0.0') for a major/initial release with no prior stable tag (FR-3). Passed through to the version-resolver action unchanged; ignored when a stable tag already exists or when 'bump' is empty."
+        required: false
+        type: string
+        default: ""
+    outputs:
+      # CI->CD output-boundary contract (D8 / phases/02-version-resolver.md
+      # exit criteria, "Major 3 fix"): exactly ONE workflow-level output,
+      # mapped straight through from the version job's single scalar. No
+      # second output for the `v`-prefixed tag form or the bump kind — the
+      # consumer's CD job derives those locally
+      # (`v${{ needs.<ci-job-id>.outputs.resolved_version }}`, and `bump` is
+      # already its own dispatch input). Empty when `bump` was not provided
+      # (the `version` job did not run).
+      resolved_version:
+        description: "The resolved, validated bare semver string (e.g. '1.3.0', no 'v' prefix). Empty when 'bump' was not provided. The workflow's only output (D8)."
+        value: ${{ jobs.version.outputs.resolved_version }}
 
 # Deny-all baseline; jobs grant the minimum.
 permissions: {}
@@ -153,6 +225,199 @@ jobs:
           # documented here for symmetry with the Publish half which
           # validates NUGET_API_KEY presence + shape per spec §8.
           echo "nuget-package-ci: secret preflight (no secrets required for CI)"
+
+  # Resolves + stamps the release version (D1/D8). Gated at the JOB level on
+  # `inputs.bump != ''` so a routine PR/push CI run (bump unset) skips this
+  # job entirely — no resolver invocation, no checkout-with-full-tags, no
+  # pack/stamp work — and shows as "skipped" rather than running pointless
+  # steps behind a step-level `if:`. Deliberately independent of `setup`/
+  # `restore-build`/`test`/`scan-suite`/`coverage-report`: nothing here gates
+  # them and nothing here is gated by them, so existing CI behavior for
+  # non-release runs is provably unaffected by this job's presence. Mirrors
+  # `npm-package-ci.yml` iteration 2.2's `version` job shape exactly.
+  version:
+    name: version
+    if: ${{ inputs.bump != '' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      resolved_version: ${{ steps.resolve.outputs.version }}
+    steps:
+      # actions/checkout v4.2.2 — consumer's tree. Full history + tags
+      # (fetch-depth: 0, fetch-tags: true) so the resolver can see the real
+      # tag list via `git tag --list` below; the other jobs' shallow
+      # checkout is intentionally left as-is (they don't need tag history).
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      # Library self-checkout per D14: ./.hashira/ holds hashira at library_ref.
+      - name: Checkout hashira library (D14)
+        # actions/checkout v4.2.2
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          repository: skathio/hashira
+          ref: ${{ inputs.library_ref }}
+          path: .hashira
+          persist-credentials: false
+      # actions/setup-dotnet v4.1.0 — needed for `dotnet pack` below.
+      - uses: actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2
+        with:
+          dotnet-version: ${{ inputs.dotnet_version }}
+      # actions/setup-node v4.1.0 — version-resolver's shim shells out to
+      # `node` (D8's resolver action; same precedent as npm-package-ci.yml).
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: '20'
+      - name: Gather tag list
+        id: tags
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Newline-separated tag list, the shape version-resolver expects
+          # (security.md B7: passed via env below, never interpolated into
+          # a `run:` string by the resolver itself).
+          tag_list="$(git tag --list)"
+          {
+            echo "tags<<HASHIRA_TAGS_EOF"
+            echo "${tag_list}"
+            echo "HASHIRA_TAGS_EOF"
+          } >> "${GITHUB_OUTPUT}"
+      - name: Resolve next version
+        id: resolve
+        uses: ./.hashira/.github/actions/version-resolver
+        with:
+          tags: ${{ steps.tags.outputs.tags }}
+          bump: ${{ inputs.bump }}
+          seed_version: ${{ inputs.seed_version }}
+      - name: Surface resolved version in run summary (NFR-DX-3)
+        shell: bash
+        env:
+          RESOLVED_VERSION: ${{ steps.resolve.outputs.version }}
+          BUMP: ${{ inputs.bump }}
+        run: |
+          set -euo pipefail
+          echo "nuget-package-ci: resolved version ${RESOLVED_VERSION} (bump=${BUMP})" >> "${GITHUB_STEP_SUMMARY}"
+      - name: Snapshot working tree into isolated pack staging dir (D1 — stamp-only, no commit-back)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Pack from an ISOLATED COPY of the working tree, never the
+          # checked-out tree itself. This is the mechanism that makes the
+          # "no commit-back" invariant (D1) true by construction rather than
+          # by discipline: the consumer's project file in $GITHUB_WORKSPACE
+          # is never opened for writing — MinVerVersionOverride below tells
+          # MinVer what version to stamp; nothing rewrites the .csproj.
+          #
+          # `.hashira` is the D14 library self-checkout for THIS job, not
+          # part of the consumer's package — excluded so the hashira library
+          # source can never end up inside the packed .nupkg (mirrors
+          # npm-package-ci.yml iteration 2.2 pass-1 review Major #2; `dotnet
+          # pack`'s default file selection is "everything under the project
+          # directory the SDK considers part of the project," which is a
+          # different rule than npm's `.npmignore`/`files` allowlist, so the
+          # exclude has to happen here, before pack ever runs, not be left to
+          # dotnet's own file-selection rules).
+          #
+          # IMPORTANT: `.git` is excluded too, which means MinVer has ZERO
+          # git tag history available inside this staged copy — its
+          # tag-inference fallback is structurally unreachable here, not
+          # just "overridden by preference." `version_override` (below) is
+          # therefore the ONLY viable version source on this path; an empty
+          # override would not fall back to a real tag-inferred guess, it
+          # would fall back to MinVer's own no-history default (0.0.0-*).
+          # This job only ever runs with a non-empty override (gated on
+          # `bump != ''`, which always resolves a version first), so this is
+          # not a live risk today — but a future caller of
+          # `dotnet-pack-version` from a similarly `.git`-less tree (e.g. a
+          # consumer composing it directly per D10) must pass an explicit
+          # `version_override`; it cannot rely on tag-inference as a
+          # fallback (pass-1 review, iteration 2.3, Major — verification
+          # rigor; see diary).
+          pack_dir="${RUNNER_TEMP}/hashira-pack"
+          rm -rf "${pack_dir}"
+          mkdir -p "${pack_dir}"
+          rsync -a --exclude='.git' --exclude='.hashira' --exclude="${pack_dir}" ./ "${pack_dir}/"
+      - name: Pack with stamped version via dotnet-pack-version (D1 — stamp-only, no commit-back)
+        id: pack
+        uses: ./.hashira/.github/actions/dotnet-pack-version
+        with:
+          working_directory: ${{ runner.temp }}/hashira-pack
+          project_path: ${{ inputs.project_path }}
+          output_directory: ${{ runner.temp }}/hashira-pack-output
+          # The resolver's two-checkpoint-validated scalar wins over MinVer's
+          # tag inference (phase 2.3's MinVer-stamping decision). MinVer is
+          # RETAINED — packing still goes through ordinary `dotnet pack`;
+          # only the version source changes from "infer from tags" to
+          # "explicit, dispatch-resolved."
+          version_override: ${{ steps.resolve.outputs.version }}
+      - name: Assert packed version matches the resolved version
+        shell: bash
+        env:
+          RESOLVED_VERSION: ${{ steps.resolve.outputs.version }}
+          PACKED_VERSION: ${{ steps.pack.outputs.version }}
+        run: |
+          set -euo pipefail
+          # dotnet-pack-version's own `version` output is parsed straight
+          # from the produced .nupkg's filename (mechanical, not MinVer's
+          # log output) — comparing it to the resolver's output is an
+          # end-to-end proof that `version_override` actually reached the
+          # packed artifact, not just that the input was passed.
+          if [ "${PACKED_VERSION}" != "${RESOLVED_VERSION}" ]; then
+            echo "::error::nuget-package-ci: packed .nupkg version '${PACKED_VERSION}' does not match resolved version '${RESOLVED_VERSION}' — MinVerVersionOverride did not win over tag inference" >&2
+            exit 1
+          fi
+          echo "nuget-package-ci: packed .nupkg version ${PACKED_VERSION} matches resolved version" >> "${GITHUB_STEP_SUMMARY}"
+      - name: Upload packed .nupkg (same-run CI->CD artifact handoff)
+        # actions/upload-artifact v4.4.3 — same pin already verified and in
+        # use at .github/actions/coverage-report/action.yml and
+        # npm-package-ci.yml's iter-2.2 `version` job; reused here rather
+        # than introducing a new pin to the verified-pin set.
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882
+        with:
+          # Stable, documented name: Phase 3's CD job downloads this exact
+          # name to publish "the same-run artifact" (sdd.md §8's open item).
+          # Re-packing in the CD job instead of downloading this artifact is
+          # explicitly forbidden by phases/03-cd-composite-normalization.md
+          # — it would silently break the byte-identical guarantee
+          # NFR-Rel-1 requires.
+          name: nuget-package
+          path: ${{ runner.temp }}/hashira-pack-output/*.nupkg
+          if-no-files-found: error
+          # Same 5-day rationale as npm-package-ci.yml iteration 2.2: covers
+          # the gap between "CI cuts a release" and "a maintainer
+          # triggers/approves the CD publish job" (FR-8) without keeping
+          # stale release artifacts around indefinitely.
+          retention-days: 5
+      - name: Assert stamp did not touch the checked-out working tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          # D1's stamp-only / no-commit-back invariant: every write above
+          # landed only inside $RUNNER_TEMP (outside $GITHUB_WORKSPACE).
+          # This assertion proves it rather than just asserting it by
+          # convention.
+          #
+          # `--untracked-files=no` is deliberate (npm-package-ci.yml
+          # iteration 2.2 pass-1 review, Blocker): the D14 library
+          # self-checkout above lands `.hashira/` as UNTRACKED content in
+          # $GITHUB_WORKSPACE, and nothing gitignores it. Bare `git status
+          # --porcelain` reports untracked files too, so without this flag
+          # the assertion would fire on every real release, not just one
+          # where the working tree was actually modified. The iteration's
+          # own acceptance criterion is "no TRACKED-file diff outside the
+          # artifact output path" (phases/02-version-resolver.md) — scoping
+          # to tracked content is what D1 actually requires; it still
+          # catches any modification to a tracked file (the real
+          # invariant), it just stops flagging the expected, harmless
+          # `.hashira/` self-checkout dir as a violation.
+          if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+            echo "::error::nuget-package-ci: working tree changed during version/pack steps — stamp must only touch the packed output, never the checked-out tree" >&2
+            git status --porcelain --untracked-files=no >&2
+            exit 1
+          fi
+          echo "nuget-package-ci: git status (tracked files) clean after stamp — no commit-back occurred" >> "${GITHUB_STEP_SUMMARY}"
 
   restore-build:
     name: restore-build
@@ -204,11 +469,11 @@ jobs:
         with:
           dotnet-version: ${{ inputs.dotnet_version }}
       # Library self-checkout per D14 (persist-credentials:false per iter-2.3 m4).
-      - name: Checkout hashira-ops library (D14)
+      - name: Checkout hashira library (D14)
         # actions/checkout v4.2.2
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
-          repository: skathio/hashira-ops
+          repository: skathio/hashira
           ref: ${{ inputs.library_ref }}
           path: .hashira
           persist-credentials: false
@@ -263,11 +528,11 @@ jobs:
       # actions/checkout v4.2.2 — consumer's tree.
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
       # Library self-checkout per D14.
-      - name: Checkout hashira-ops library (D14)
+      - name: Checkout hashira library (D14)
         # actions/checkout v4.2.2
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
-          repository: skathio/hashira-ops
+          repository: skathio/hashira
           ref: ${{ inputs.library_ref }}
           path: .hashira
           persist-credentials: false
@@ -287,11 +552,11 @@ jobs:
       # actions/checkout v4.2.2 — consumer's tree.
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
       # Library self-checkout per D14.
-      - name: Checkout hashira-ops library (D14)
+      - name: Checkout hashira library (D14)
         # actions/checkout v4.2.2
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
-          repository: skathio/hashira-ops
+          repository: skathio/hashira
           ref: ${{ inputs.library_ref }}
           path: .hashira
           persist-credentials: false

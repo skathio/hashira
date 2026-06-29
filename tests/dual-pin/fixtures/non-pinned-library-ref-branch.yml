@@ -1,0 +1,28 @@
+# Negative-test fixture for `tests/dual-pin/lint.py` (phase 4 iteration 4.1
+# pass 3 — regression lock for the gap pass 2's fix left open). Not
+# hand-numbered (see same-repo-mismatch.yml).
+#
+# Same shape as non-pinned-library-ref.yml, but `develop` instead of
+# `main`. Pass 2 fixed the `main` case via a regex ALLOWLIST, so any OTHER
+# non-SHA value still failed to match at all and silently passed. Pass 3
+# replaced the allowlist with a generic ref-token capture; this fixture
+# locks that in.
+name: dual-pin-fixture-non-pinned-library-ref-branch
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  ci:
+    uses: skathio/hashira/.github/workflows/npm-package-ci.yml@4c1f3a8b2e6d9057a1c4f8e3b6d2a9c7e5f01234
+    permissions:
+      contents: read
+      pull-requests: write
+      security-events: write
+    with:
+      # A moving branch ref that is NOT `main` — the gap pass 2 left open.
+      library_ref: 'develop'

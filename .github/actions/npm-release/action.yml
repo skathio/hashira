@@ -1,171 +1,348 @@
 # Composite action: npm-release
 #
-# Runs semantic-release end-to-end (analyze → version → tag → npm publish →
-# GitHub Release) in ONE process, inside the CONSUMER'S OWN job. This is the
-# whole point of the redesign (work item npm-publish-redesign, D1): npm OIDC
-# trusted publishing validates the OIDC token's `workflow_ref` against the
-# trusted-publisher "Workflow filename". A composite action runs in the
-# caller's job context, so `workflow_ref` = the consumer's own workflow file
-# (e.g. publish.yml) — which a reusable workflow could never achieve. The
-# actual publish is therefore performed here, natively, by @semantic-release/npm.
+# Publishes the SAME-RUN, byte-identical `.tgz` produced by `npm-package-ci.yml`'s
+# `version` job (D8/NFR-Rel-1) — downloaded via `actions/download-artifact`, never
+# re-packed/re-stamped — then (after a successful publish) creates the git tag +
+# GitHub Release for the resolved version (D4 atomicity, D13 `--generate-notes`).
+# Runs in the CONSUMER'S OWN job (no `workflow_call` boundary — D2/NFR-Sec-1), which
+# is what makes npm OIDC trusted publishing's `workflow_ref` claim match the
+# consumer's own registered "Workflow filename."
+#
+# ## What changed from v1 (full rewrite — phase 3.4)
+#
+# v1 ran `semantic-release` end-to-end inside this composite: it computed its own
+# version from commit history, then published via `@semantic-release/npm` and
+# tagged/released via `@semantic-release/github`. v2 (D1/D8) computes the version
+# ONCE, in CI, before this composite ever runs — `semantic-release` and all four
+# plugins (`@semantic-release/commit-analyzer`, `/release-notes-generator`, `/npm`,
+# `/github`) are removed entirely, along with the `.releaserc` builder
+# (`lib/build-releaserc.js`, deleted) and the `HASHIRA_SEMANTIC_RELEASE_DRY_RUN`
+# hook tied to semantic-release's own `--dry-run --no-ci` flags.
+#
+# The OIDC TRUST MODEL is unchanged: the npm CLI on PATH performs the token
+# exchange natively (no `_authToken` line is ever written for the OIDC path; no
+# `registry-url` is passed to setup-node — NF4, unchanged). What changes is the
+# PUBLISHER: v1 called `@semantic-release/npm`'s plugin function; v2 calls
+# `npm publish <tarball>` directly. This is exactly why the npm-floor check below
+# is kept — the PATH npm is still what performs the OIDC exchange, regardless of
+# which code invokes it.
 #
 # Adoption (the entire consumer surface — NF1):
 #
 #   jobs:
 #     publish:
 #       runs-on: ubuntu-latest
-#       environment: production            # single gate, single approval
+#       needs: ci                            # the npm-package-ci.yml caller job id
+#       environment: production              # single gate, single approval
 #       permissions:
-#         id-token: write                  # npm OIDC token exchange
-#         contents: write                  # semantic-release pushes the version tag
-#         issues: write                    # @semantic-release/github
-#         pull-requests: write             # @semantic-release/github release-note comment
+#         id-token: write                     # npm OIDC token exchange (auth: oidc/auto)
+#         contents: write                     # `gh release create` tags the commit
+#         pull-requests: read                 # --generate-notes reads merged-PR metadata (read-only)
 #       steps:
-#         - uses: actions/checkout@<sha>
+#         - uses: actions/checkout@<sha>      # tag/release step's `gh` needs a checkout
 #           with:
-#             fetch-depth: 0               # semantic-release walks full history
-#             persist-credentials: true    # REQUIRED: semantic-release core pushes the
-#                                          # version tag via these git credentials (with
-#                                          # @semantic-release/git dropped per D3, nothing
-#                                          # else provides them). This is checkout's
-#                                          # default, but set it explicitly — a consumer
-#                                          # who hardens with persist-credentials:false
-#                                          # gets a SILENT tag-push failure AFTER publish.
-#         - uses: skathio/hashira/.github/actions/npm-release@v1
+#             persist-credentials: true       # REQUIRED: `gh release create` needs git
+#                                              # credentials on this job. checkout's default,
+#                                              # but set it explicitly — a consumer who
+#                                              # hardens with persist-credentials:false gets
+#                                              # a SILENT tag/release failure AFTER publish.
+#         - uses: skathio/hashira/.github/actions/npm-release@v2
 #           with:
-#             node_version: '24'
+#             version: ${{ needs.ci.outputs.resolved_version }}   # D8 — consumed, not recomputed
 #
-# ## Authentication model (D2; verified against @semantic-release/npm@13.1.5 source)
+# ## Authentication model (D3/D11) — explicit `auth: oidc | token | auto` enum
 #
-# On the official registry with `id-token: write` granted, @semantic-release/npm@13
-# performs npm OIDC trusted publishing NATIVELY:
-#   - It requests the GitHub OIDC token with audience `npm:registry.npmjs.org`
-#     and exchanges it at registry.npmjs.org's token-exchange endpoint
-#     (lib/trusted-publishing/*). No NPM_TOKEN is required and NONE is written
-#     to .npmrc (lib/verify-auth.js returns early when OIDC context is
-#     established).
-#   - The publish itself runs `npm publish` via execa with `preferLocal` from
-#     the consumer's working tree (lib/publish.js). It is the **npm CLI on PATH**
-#     that performs the OIDC exchange — so that npm MUST be >= 11.5.1. This is
-#     the load-bearing constraint (plan-review M1): the npm bundled inside the
-#     plugin is NOT the binary that runs. Node 24 (D7) ships npm 11.13.0, which
-#     satisfies it; the floor check below upgrades npm only if it is too old.
+# Unlike `nuget-push` (where `NuGet/login` is a separate, observable step whose
+# `outcome` the composite branches on before ever touching the push command), npm's
+# native OIDC trusted publishing happens INSIDE `npm publish` itself (verified
+# against npm/cli v11.5.1's `lib/utils/oidc.js` + `lib/commands/publish.js` source):
+# there is no separate login step to observe, and npm's own `oidc()` function is
+# DESIGNED TO NEVER THROW on failure — every failure branch (missing
+# `id-token: write`, fetch error, non-2xx, missing token) logs at `verbose`
+# (invisible by default) and falls through unconditionally to whatever credential
+# `getCredentialsByURI` finds via `.npmrc`/env. npm's CLI cannot deliver "OIDC never
+# silently falls back" on its own — this action enforces it via ENVIRONMENT
+# HYGIENE on the publish subprocess, not by observing npm's internal decision:
 #
-# NF4: this action does NOT pass `registry-url` to actions/setup-node and does
-# NOT write any `_authToken` line. Injecting an auth token would shadow/defeat
-# the plugin's native OIDC path.
+#   - `auth: oidc`  — always attempt native OIDC. The publish subprocess's
+#     environment is positively scrubbed of every credential npm could fall back
+#     to (`NPM_TOKEN`/`NODE_AUTH_TOKEN` unset; `--userconfig` points at an empty,
+#     throwaway `.npmrc` — never the consumer's own working-directory `.npmrc`).
+#     With genuinely zero reachable credentials, a real OIDC failure surfaces as
+#     npm's own loud `ENEEDAUTH` ("This command requires you to be logged in...")
+#     — fail-loud BY CONSTRUCTION (there is nothing left to silently fall back
+#     to), not by branching on an observed outcome. Never falls back to a token,
+#     even if one is supplied.
+#   - `auth: token` — true OIDC opt-out. `ACTIONS_ID_TOKEN_REQUEST_URL`,
+#     `ACTIONS_ID_TOKEN_REQUEST_TOKEN`, and `NPM_ID_TOKEN` (the GitHub/GitLab OIDC
+#     env vars `lib/utils/oidc.js` reads) are unset for the publish subprocess —
+#     confirmed by source that without BOTH GitHub vars present, `oidc()` returns
+#     `undefined` before any network call is made, so OIDC is never even
+#     attempted. The token (`npm_token`, via a `secrets:`-sourced job/step `env:`)
+#     is written to the same throwaway `--userconfig` file as an `_authToken` line
+#     scoped to `target`'s host.
+#   - `auth: auto` — (default) attempt once in the clean, OIDC-only environment
+#     (identical to `auth: oidc`'s environment); if that `npm publish` invocation
+#     fails AND a token is present, retry with the token-auth environment and emit
+#     an `::warning::` (the previous behavior, now opt-in only — D3/D11). If OIDC
+#     fails and no token is present, fails loud, same as `auth: oidc`.
 #
-# NF6: For non-OIDC use (custom registry, or OIDC unavailable) the consumer
-# supplies `NPM_TOKEN` as a job/step `env:` — it propagates into this composite
-# action's steps and @semantic-release/npm falls back to token auth. This action
-# does not read `secrets.*` (composite actions have no secrets context).
+# **Verified safe (not merely asserted) that the `auto` retry cannot double-publish:**
+# traced npm/cli v11.5.1's `lib/commands/publish.js` call order AND independently
+# reproduced it locally — `oidc()` (the only OIDC-related network call, to GitHub's
+# token endpoint and, only if a token was minted, npm's OIDC-exchange endpoint) runs
+# BEFORE the `noCreds` check, which runs BEFORE any registry call
+# (`#registryVersions`/`libnpmpublish`). A real `npm publish` against a tarball with
+# no reachable credentials throws `ENEEDAUTH` (confirmed by direct reproduction:
+# `npm publish <tgz>` with an empty `--userconfig` and no OIDC context exits 1 with
+# `ENEEDAUTH` after only packing/printing the tarball notice locally — no
+# publish-endpoint network call occurs). The failed first attempt under `auto` is
+# therefore provably a no-op against the registry, making the token-auth retry safe.
 #
-# ## Versioning model (D3 — tag-driven, no commit-back)
+# ## Tarball type does not change OIDC behavior (resolves the open research question)
 #
-# @semantic-release/git and @semantic-release/changelog are intentionally
-# omitted (see lib/build-releaserc.js). semantic-release core pushes the version
-# TAG (not gated by branch protection) and @semantic-release/github creates the
-# Release; package.json / CHANGELOG are NOT committed back to the branch. No
-# `npm version` hack is needed — @semantic-release/npm's prepare step bumps
-# package.json in the job's working tree before publish.
+# Traced npm/cli v11.5.1's `publish.js`: the OIDC call (`await oidc({ packageName,
+# registry, opts, config })`) depends only on the manifest's name + the target
+# registry + config/opts — none of which differ based on whether `npa(args[0])`
+# resolves to `spec.type === 'directory'` or `'file'` (a `.tgz` path resolves to
+# `'file'`). The `spec.type === 'directory'` branches gate ONLY lifecycle-script
+# execution (`prepublishOnly`/`publish`/`postpublish`) and how the manifest is read
+# (`pkgJson.fix()` for a directory vs. `pacote.manifest()`, which also handles
+# tarball files, otherwise) — neither touches the OIDC/provenance path. Publishing
+# a pre-built tarball has no OIDC/provenance behavioral difference from publishing
+# a directory. This was an open question in the phase brief; resolved here by
+# source-tracing, not left as a residual gap.
+#
+# ## Versioning model (D1/D8 — consumed, not computed; same-run, byte-identical)
+#
+# This action does NOT compute a version and does NOT stamp one. `version` is a
+# required input: the CI `version` job's already-resolved, already-validated bare
+# semver string (e.g. "1.3.0"), consumed as-is. The `.tgz` it publishes is
+# downloaded via `actions/download-artifact` from the named `npm-tarball` artifact
+# `npm-package-ci.yml`'s `version` job uploaded in the SAME run — never re-packed,
+# never re-stamped. There is NO `package.json` write and NO `npm pkg set` anywhere
+# in this file (NFR-Rel-1 — publish-what-you-tested; a CD-side stamp, even a
+# defensive "just in case" one, would pass a naive smoke test that only checks "the
+# right version number shows up" while silently breaking the byte-identical
+# guarantee). `git tag` + `gh release create --generate-notes` consume `version`
+# ONLY for the tag/Release step, never to re-stamp or re-pack the artifact.
 #
 # ## Trust boundary
 #
-# These inputs are interpolated into bash / setup-node inputs. Treat them as
-# TRUSTED — do NOT derive their values from PR titles, issue bodies, branch
-# names, commit messages, fork-author-controlled tag names, or other externally
-# controlled context; quoting cannot defend the YAML-expansion sink:
-#   - node_version, target, prerelease_branches, maintenance_branches,
-#     working_directory, x_releaserc_overrides
+# These inputs are interpolated into bash / npm CLI args. Treat them as TRUSTED —
+# do NOT derive their values from PR titles, issue bodies, branch names, commit
+# messages, fork-author-controlled tag names, or other externally controlled
+# context; quoting cannot defend the YAML-expansion sink:
+#   - node_version, target, working_directory, auth, npm_token
+#   - version (the resolver's already-validated output; D8/B7 — re-validated
+#     against a strict semver regex below as this action's own checkpoint-2, per
+#     B7's framing of the CD composite's tag/Release step as a privileged sink in
+#     its own right, not merely a passthrough of the resolver's checkpoint-1)
 #
-# ## Pinned toolchain (refreshed for native OIDC — D2/R3)
+# ## Caller-job permissions (the composite itself cannot declare `permissions:`)
+#
+# The calling job MUST grant, in addition to whatever `auth` mode requires
+# (`id-token: write` for `auth: oidc`/`auto`):
+#   - `contents: write`     — `gh release create` tags the commit + creates the
+#                             GitHub Release.
+#   - `pull-requests: read` — `--generate-notes` (D13) reads merged-PR metadata to
+#                             compose the notes; it does NOT write to or comment on
+#                             PRs (mirrors `nuget-push`'s corrected grant — `read`,
+#                             not `write`).
+# This composite cannot declare `permissions:` (no GitHub Actions primitive for
+# that on a composite action) — the grant lives in the caller's job. Document this
+# matrix in `docs/flows/npm.md`.
+#
+# ## Runtime contract
+#
+# The caller's job MUST have run (via `needs:`) the `npm-package-ci.yml` reusable
+# workflow's `version` job in the SAME workflow run, so the `npm-tarball` artifact
+# this action downloads actually exists — this action cannot produce it itself. The
+# caller MUST also have `actions/checkout`'d the consumer's repo at the commit
+# being released BEFORE this composite runs (with `persist-credentials: true`) —
+# the tag/Release step's `gh` invocation and its `--target "${GITHUB_SHA}"` resolve
+# against that checkout; this composite has no way to perform or verify the
+# checkout itself (same caveat `nuget-push` documents).
+#
+# ## NF4 (unchanged) — no `registry-url` auth injection
+#
+# This action does NOT pass `registry-url` to actions/setup-node and does NOT
+# write any `_authToken` line to the consumer's own `.npmrc`. Injecting an auth
+# token there would shadow/defeat the native OIDC path. Any credential this action
+# writes lives in a throwaway `--userconfig` file under `${RUNNER_TEMP}`, scoped to
+# this action's own steps only.
+#
+# ## Node/npm floor (re-derived, not carried unexamined — phase 3.4 Minor fix)
+#
+# - **Node >= 22.14** — KEPT, but RE-JUSTIFIED: npm's own official trusted-publishing
+#   docs (docs.npmjs.com) state Node >= 22.14.0 is required by npm's OIDC feature
+#   ITSELF (the `oidc()` exchange logic), not only by semantic-release's now-deleted
+#   dependencies as v1's error message claimed. The floor is unchanged; the
+#   citation is corrected.
+# - **npm >= 11.5.1** — UNCHANGED justification: the PATH npm performs the OIDC
+#   trusted-publishing exchange (verified against `lib/utils/oidc.js` source), so it
+#   must be >= 11.5.1 regardless of what invokes it. Node 24 (default) ships
+#   npm 11.13.0, which satisfies it; the floor check upgrades npm only if older.
+#
+# ## Provenance (`--provenance`) — conditional on the auth path actually
+# ## attempting OIDC, NOT unconditional (corrected design decision, phase 3.4)
+#
+# An earlier draft of this action forced `--provenance` unconditionally,
+# reasoning that under `auth: oidc` it gives a second, independent failure
+# signal if OIDC silently degraded in a way the env-scrubbing didn't
+# anticipate (defense-in-depth, since provenance requires a valid
+# OIDC-derived signing identity). That reasoning holds for the OIDC-only
+# attempt path — but direct reproduction during this iteration's
+# implementation found it does NOT hold for the token-auth path, and shipping
+# it unconditionally would have been a real defect, not a no-op:
+#
+#   npm's own provenance prerequisite check
+#   (`libnpmpublish/lib/publish.js`'s `ensureProvenanceGeneration`) THROWS
+#   `EUSAGE` under `ciInfo.GITHUB_ACTIONS` if `ACTIONS_ID_TOKEN_REQUEST_URL`
+#   is absent — and the token-auth path (`publish_token` below) deliberately
+#   UNSETS exactly that variable, to guarantee OIDC is never even attempted
+#   there (see '## Authentication model'). Forcing `--provenance` on that
+#   path would hard-fail every token-auth publish on a real GitHub Actions
+#   runner with "Automatic provenance generation not supported for provider:
+#   null" — confirmed by direct local reproduction, not assumed. A
+#   token-auth consumer may not have granted `id-token: write` at all, so
+#   this would have broken the documented opt-out entirely.
+#
+# Resolved by making it conditional: `--provenance` is passed on the clean,
+# OIDC-only attempt (`publish_clean`, used by `auth: oidc` always and
+# `auth: auto`'s first attempt) where `ACTIONS_ID_TOKEN_REQUEST_URL` is
+# expected to be present (the caller granted `id-token: write` for OIDC to
+# have any chance of working at all) — giving the defense-in-depth signal the
+# original reasoning wanted. It is OMITTED on the token-auth attempt
+# (`publish_token`, used by `auth: token` always and `auth: auto`'s
+# fallback), where it would otherwise hard-fail. This is the real
+# defense-in-depth shape: strengthen the OIDC path without breaking the
+# explicit-opt-out path.
+#
+# ## Reserved env names
+#
+# `HASHIRA_NPM_RELEASE_DRY_RUN` is reserved by this library as a test-only
+# override (matches `HASHIRA_NUGET_PUSH_DRY_RUN`/`HASHIRA_PAGES_DEPLOY_DRY_RUN`'s
+# naming convention). When set to `1`, the action SKIPS the actual `npm publish`
+# AND the tag/release step, and emits a dry-run summary line. Consumers MUST NOT
+# set this in production — doing so silently turns publishes into no-ops.
+#
+# ## Pinned toolchain
 #
 # Every bump here is intentional; refresh deliberately and re-run the self-CI
-# dry-run smoke (iter 1.3). There is no lockfile (same accepted supply-chain
-# gap as the retired semantic-release-publish action; trust anchor = npm
-# registry integrity hash at install time):
-#   - semantic-release                          25.0.3
-#   - @semantic-release/commit-analyzer         13.0.1
-#   - @semantic-release/release-notes-generator 14.1.1
-#   - @semantic-release/npm                     13.1.5  (native OIDC; bundles npm 11.x)
-#   - @semantic-release/github                  12.0.8
-#   - Node                                      '24' default (LTS; ships npm 11.13.0)
-#   - npm CLI                                   >= 11.5.1 enforced at runtime (M1);
-#                                               pinned upgrade target npm@11.13.0 when below floor
-#
-# Engine note: semantic-release@25, @semantic-release/npm@13, and
-# @semantic-release/github@12 require Node `^22.14.0 || >= 24.10.0`.
-#
-# ## Dry-run hook
-#
-# Set env `HASHIRA_SEMANTIC_RELEASE_DRY_RUN=1` to add `--dry-run --no-ci`. Used
-# by the library's own self-CI (iter 1.3); consumers must not set it in
-# production — it silently turns publishes into no-ops.
+# dry-run smoke:
+#   - Node                '24' default (LTS; ships npm 11.13.0)
+#   - npm CLI              >= 11.5.1 enforced at runtime; pinned upgrade target
+#                          npm@11.13.0 when below floor
+#   - actions/download-artifact  v4.3.0 (latest v4.x release; independent version
+#                          line from actions/upload-artifact — both implement the
+#                          same v4 artifact storage protocol, so any v4.x
+#                          download-artifact is compatible with any v4.x
+#                          upload-artifact)
 name: npm-release
 description: >-
-  Run semantic-release (analyze → version → tag → npm publish via native OIDC →
-  GitHub Release) in the consumer's own job. Tag-driven, provenance on, no
-  long-lived secret on the OIDC path. Call from a job in your own publish.yml.
+  Download the same-run, byte-identical npm tarball CI built, publish it
+  (npm publish, auth: oidc|token|auto) in the consumer's own job, then create the
+  git tag + GitHub Release (--generate-notes). Consumes the version-resolver's
+  output; does not compute or stamp a version.
 
 inputs:
+  version:
+    description: "The resolved, validated bare semver string (e.g. '1.3.0', no 'v' prefix) to publish-tag and release. This is the caller's already-validated output (Phase 2's version-resolver, D8's one-scalar CI->CD boundary contract) — this action does not compute or re-derive a version. Required."
+    required: true
   node_version:
-    description: "Node major to install via actions/setup-node. Default '24' (LTS; ships npm >= 11.5.1 for OIDC). Trusted input."
+    description: "Node major to install via actions/setup-node. Default '24' (LTS; ships npm >= 11.5.1, satisfies npm's own OIDC Node floor). Trusted input."
     required: false
     default: "24"
   target:
-    description: "Registry URL to publish to. Default 'https://registry.npmjs.org'. OIDC trusted publishing engages only for the official registry; other registries fall back to NPM_TOKEN. Trusted input."
+    description: "Registry URL to publish to. Default 'https://registry.npmjs.org'. OIDC trusted publishing engages only for the official registry; other registries fall back to token auth. Trusted input."
     required: false
     default: "https://registry.npmjs.org"
-  prerelease_branches:
-    description: "Comma-separated prerelease branch names (e.g. 'next,beta'). Empty by default. Trusted input."
+  auth:
+    description: "Auth mode: 'oidc' (always attempt native npm OIDC trusted publishing; fails loud on failure, never falls back to npm_token), 'token' (always use npm_token directly, never attempts OIDC), or 'auto' (default; try OIDC, fall back to a present npm_token with a ::warning:: on OIDC failure). See '## Authentication model' above. Trusted input."
     required: false
-    default: ""
-  maintenance_branches:
-    description: "Comma-separated maintenance branch names (e.g. '1.x,2.x'). Empty by default. Trusted input."
+    default: "auto"
+  npm_token: # NF6: not read from `secrets.*` (composite actions have no secrets context).
+    description: "npm registry token. Pass via a `secrets:`-sourced job/step `env:`. Required (and used directly) when auth=token; usable as the auto-fallback when auth=auto; ignored when auth=oidc. Trusted input (secret)."
     required: false
     default: ""
   working_directory:
-    description: "Directory to run semantic-release in. Must contain a package.json. Default '.'. Trusted input."
+    description: "Directory to run `gh release create` from (must be the consumer's checked-out repo). Default '.'. Trusted input."
     required: false
     default: "."
-  x_releaserc_overrides:
-    description: "EXPERIMENTAL (x_-prefixed): JSON string of partial .releaserc deep-merged over the generated base. Arrays REPLACE (do not concat). Trusted input."
-    required: false
-    default: ""
 
 outputs:
   released:
-    description: "'true' if a release was published this run, else 'false'."
-    value: ${{ steps.run.outputs.released }}
+    description: "'true' if a publish was performed this run, else 'false' (dry-run)."
+    value: ${{ steps.publish.outputs.released }}
   version:
-    description: "Released version when released=='true', else empty."
-    value: ${{ steps.run.outputs.version }}
+    description: "The published version (echo of the 'version' input) when released=='true', else empty."
+    value: ${{ steps.publish.outputs.version }}
 
 runs:
   using: composite
   steps:
+    - name: Validate auth input
+      shell: bash
+      env:
+        NR_AUTH: ${{ inputs.auth }}
+      run: |
+        set -euo pipefail
+        case "${NR_AUTH}" in
+          oidc|token|auto) ;;
+          *)
+            echo "::error::npm-release: invalid 'auth' input '${NR_AUTH}'. Must be one of: oidc, token, auto." >&2
+            exit 1
+            ;;
+        esac
+
+    - name: Validate version input (B7 checkpoint 2 — this composite's own sink)
+      shell: bash
+      env:
+        NR_VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        if [ -z "${NR_VERSION}" ]; then
+          echo "::error::npm-release: 'version' input is empty. This action consumes the resolver's already-validated output (D8) — it does not compute one." >&2
+          exit 1
+        fi
+        # B7 names the CD composite's tag/Release step as a privileged sink in its
+        # own right (not merely a passthrough of the resolver's own checkpoint-1) —
+        # this action is independently callable (D4/D10's consumer-composition
+        # contract), so it cannot assume every caller already validated `version`.
+        # Re-validate against the same strict-semver shape the resolver enforces
+        # (bare semver, optional prerelease/build metadata) before it ever reaches
+        # `tag="v${NR_VERSION}"` / `gh release create` / `npm publish`.
+        if ! [[ "${NR_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
+          echo "::error::npm-release: 'version' input '${NR_VERSION}' is not a valid bare semver string (expected e.g. '1.3.0' or '1.3.0-rc.1'). Refusing to publish/tag/release — this action does not trust an unvalidated caller-supplied version (B7)." >&2
+          exit 1
+        fi
+
     - name: Setup Node
       # actions/setup-node v4.1.0. NO registry-url: NF4 — we must not write an
-      # _authToken line that would shadow @semantic-release/npm's native OIDC.
+      # _authToken line that would shadow native OIDC.
       uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af
       with:
         node-version: ${{ inputs.node_version }}
 
-    - name: Verify Node + npm floors (Node >= 22.14, npm >= 11.5.1) — M1
+    - name: Verify Node + npm floors (Node >= 22.14, npm >= 11.5.1)
       shell: bash
       run: |
         set -euo pipefail
-        # --- Node engine floor (semantic-release@25 / npm@13 / github@12) ---
+        # --- Node engine floor: required by npm's OWN OIDC trusted-publishing
+        # feature (npm's official trusted-publishers docs) — re-justified per
+        # the header's "Node/npm floor" section; the prior tool that motivated
+        # this floor is fully removed in this rewrite. ---
         node_v="$(node --version)"        # e.g. v24.16.0
         node_v="${node_v#v}"
         node_major="${node_v%%.*}"
         node_rest="${node_v#*.}"
         node_minor="${node_rest%%.*}"
         if [ "${node_major}" -lt 22 ] || { [ "${node_major}" -eq 22 ] && [ "${node_minor}" -lt 14 ]; }; then
-          echo "::error::npm-release: Node ${node_v} is too old; semantic-release@25 requires Node >= 22.14 (or >= 24.10). Set node_version to '24'." >&2
+          echo "::error::npm-release: Node ${node_v} is too old; npm's own OIDC trusted-publishing feature requires Node >= 22.14. Set node_version to '24'." >&2
           exit 1
         fi
-        # --- npm floor (LOAD-BEARING for OIDC, M1): the PATH npm performs the
+        # --- npm floor (LOAD-BEARING for OIDC): the PATH npm performs the
         # trusted-publishing exchange, so it must be >= 11.5.1. Node 24 already
         # ships npm 11.13.0; only upgrade if the runner's npm is older. ---
         npm_v="$(npm --version)"
@@ -184,120 +361,322 @@ runs:
           fi
         fi
         if [ "${need_upgrade}" -eq 1 ]; then
-          # Pinned upgrade target (NF2) — not npm@latest. This npm becomes the
-          # root of trust for the OIDC publish, so it must be a deliberate pin,
-          # refreshed alongside the toolchain list in the header. Matches the
-          # npm bundled with the default Node 24.
+          # Pinned upgrade target — not npm@latest. This npm becomes the root of
+          # trust for the OIDC publish, so it must be a deliberate pin, refreshed
+          # alongside the toolchain list in the header. Matches the npm bundled
+          # with the default Node 24.
           echo "npm-release: npm ${npm_v} < 11.5.1 (no OIDC trusted publishing); upgrading to npm@11.13.0"
           npm install -g npm@11.13.0
           npm_v="$(npm --version)"
         fi
         echo "npm-release: Node ${node_v} (OK), npm ${npm_v} (OK for OIDC trusted publishing)"
 
-    - name: Generate .releaserc from inputs
-      id: build_rc
+    - name: Download same-run npm tarball (CI->CD artifact handoff, NFR-Rel-1)
+      if: ${{ env.HASHIRA_NPM_RELEASE_DRY_RUN != '1' }}
+      # actions/download-artifact v4.3.0 — latest v4.x release; independent
+      # version line from actions/upload-artifact (both implement the v4
+      # artifact storage protocol; verified directly against the tag, not
+      # guessed — see header).
+      uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        name: npm-tarball
+        path: ${{ runner.temp }}/hashira-npm-release-download
+
+    - name: Locate downloaded tarball
+      id: locate_tarball
+      if: ${{ env.HASHIRA_NPM_RELEASE_DRY_RUN != '1' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        download_dir="${RUNNER_TEMP}/hashira-npm-release-download"
+        # Exactly one .tgz is expected (npm-package-ci.yml's `version` job
+        # uploads exactly one tarball under this artifact name). Fail loud on
+        # zero or more than one rather than silently picking the first match.
+        mapfile -t tgz_files < <(find "${download_dir}" -maxdepth 1 -name '*.tgz' | sort)
+        if [ "${#tgz_files[@]}" -eq 0 ]; then
+          echo "::error::npm-release: no .tgz found in the downloaded 'npm-tarball' artifact at ${download_dir}. Did the caller's job 'needs:' the npm-package-ci.yml job that uploads it?" >&2
+          exit 1
+        fi
+        if [ "${#tgz_files[@]}" -gt 1 ]; then
+          echo "::error::npm-release: expected exactly one .tgz in the 'npm-tarball' artifact, found ${#tgz_files[@]}: ${tgz_files[*]}" >&2
+          exit 1
+        fi
+        echo "tarball_path=${tgz_files[0]}" >> "${GITHUB_OUTPUT}"
+        echo "npm-release: found tarball ${tgz_files[0]}" >> "${GITHUB_STEP_SUMMARY}"
+
+    - name: Resolve credential environment per auth mode (no publish yet)
+      id: resolve_auth
       shell: bash
       env:
-        SR_TARGET: ${{ inputs.target }}
-        SR_PRERELEASE: ${{ inputs.prerelease_branches }}
-        SR_MAINTENANCE: ${{ inputs.maintenance_branches }}
-        SR_OVERRIDES: ${{ inputs.x_releaserc_overrides }}
+        NR_AUTH: ${{ inputs.auth }}
+        NR_NPM_TOKEN: ${{ inputs.npm_token }}
+        NR_TARGET: ${{ inputs.target }}
       run: |
         set -euo pipefail
-        rc_path="${RUNNER_TEMP}/.releaserc.json"
-        export RC_PATH="${rc_path}"
-        node -e '
-          const { buildReleaserc } = require(process.env.GITHUB_ACTION_PATH + "/lib/build-releaserc");
-          const rc = buildReleaserc({
-            target: process.env.SR_TARGET,
-            prerelease_branches: process.env.SR_PRERELEASE,
-            maintenance_branches: process.env.SR_MAINTENANCE,
-            x_releaserc_overrides: process.env.SR_OVERRIDES,
-          });
-          require("fs").writeFileSync(process.env.RC_PATH, JSON.stringify(rc, null, 2));
-        '
-        echo "rc_path=${rc_path}" >> "${GITHUB_OUTPUT}"
-        echo "npm-release: generated .releaserc at ${rc_path}"
 
-    - name: Install pinned semantic-release + plugins
-      shell: bash
-      working-directory: ${{ runner.temp }}
-      run: |
-        set -euo pipefail
-        # Install into a throwaway tree under $RUNNER_TEMP so the consumer's
-        # package.json/node_modules at working_directory is untouched.
-        cat > package.json <<'EOF'
-        {
-          "name": "hashira-npm-release-runtime",
-          "private": true,
-          "version": "0.0.0"
-        }
-        EOF
-        npm install --no-audit --no-fund --no-save \
-          semantic-release@25.0.3 \
-          @semantic-release/commit-analyzer@13.0.1 \
-          @semantic-release/release-notes-generator@14.1.1 \
-          @semantic-release/npm@13.1.5 \
-          @semantic-release/github@12.0.8
+        # In dry-run mode no credential prep is needed at all — the publish
+        # step below short-circuits before touching any credential or env.
+        if [ "${HASHIRA_NPM_RELEASE_DRY_RUN:-0}" = "1" ]; then
+          echo "attempt_token_first=false" >> "${GITHUB_OUTPUT}"
+          exit 0
+        fi
 
-    - name: Run semantic-release
-      id: run
+        case "${NR_AUTH}" in
+          token)
+            if [ -z "${NR_NPM_TOKEN}" ]; then
+              echo "::error::npm-release: auth=token requires a non-empty 'npm_token'." >&2
+              exit 1
+            fi
+            echo "attempt_token_first=true" >> "${GITHUB_OUTPUT}"
+            echo "npm-release: auth=token; using the provided npm_token directly (OIDC never attempted)." >> "${GITHUB_STEP_SUMMARY}"
+            ;;
+          oidc|auto)
+            # Both start with the SAME clean, OIDC-only attempt — see header
+            # '## Authentication model'. `auto` additionally retries with a
+            # token below if this first attempt fails and a token is present.
+            echo "attempt_token_first=false" >> "${GITHUB_OUTPUT}"
+            ;;
+        esac
+
+        # Registry host, used to scope the throwaway .npmrc's _authToken line
+        # (never the consumer's own working-directory .npmrc — see header).
+        registry_host="$(node -e 'console.log(new URL(process.env.NR_TARGET).host)')"
+        echo "registry_host=${registry_host}" >> "${GITHUB_OUTPUT}"
+
+    - name: Publish to npm registry
+      id: publish
       shell: bash
       working-directory: ${{ inputs.working_directory }}
       env:
-        RC_PATH: ${{ steps.build_rc.outputs.rc_path }}
-        SR_BIN_DIR: ${{ runner.temp }}/node_modules/.bin
-        # NF5: composite actions have NO `secrets` context. Source the GitHub
-        # token from the github context — required for @semantic-release/github
-        # and for semantic-release's tag push.
-        GITHUB_TOKEN: ${{ github.token }}
-        # R5: provenance attestation (free with OIDC).
-        NPM_CONFIG_PROVENANCE: "true"
-        # NF6: NPM_TOKEN is NOT set here. If the consumer exported it as a
-        # job/step env it propagates into this step automatically and
-        # @semantic-release/npm uses it as the token-auth fallback. On the
-        # official registry with id-token:write, no token is needed (native OIDC).
+        NR_AUTH: ${{ inputs.auth }}
+        NR_TARGET: ${{ inputs.target }}
+        NR_VERSION: ${{ inputs.version }}
+        NR_NPM_TOKEN: ${{ inputs.npm_token }}
+        NR_TARBALL: ${{ steps.locate_tarball.outputs.tarball_path }}
+        NR_ATTEMPT_TOKEN_FIRST: ${{ steps.resolve_auth.outputs.attempt_token_first }}
+        NR_REGISTRY_HOST: ${{ steps.resolve_auth.outputs.registry_host }}
+        # NF4: this throwaway userconfig is the ONLY .npmrc this action ever
+        # writes to — never the consumer's own working-directory .npmrc. A
+        # fresh empty file per run; reused (overwritten) between the clean
+        # OIDC attempt and the token-auth attempt under auth=auto.
+        NR_USERCONFIG: ${{ runner.temp }}/hashira-npm-release.npmrc
+        # Pass-2 fix (Blocker/Major): `--userconfig` only relocates the
+        # per-user layer; npm's separate per-project `.npmrc` (cwd +
+        # ancestor walk) and global-config layers are untouched by it. This
+        # throwaway `--globalconfig` closes the global-layer gap.
+        NR_GLOBALCONFIG: ${{ runner.temp }}/hashira-npm-release-global.npmrc
+        # Closes the project-.npmrc leak: relocating config FILES can't
+        # suppress the cwd/ancestor-walk layer; only an empty throwaway cwd
+        # can — never `inputs.working_directory` (NR_TARBALL is absolute).
+        NR_PUBLISH_CWD: ${{ runner.temp }}/hashira-npm-release-publish-cwd
       run: |
         set -euo pipefail
-        if [ ! -f package.json ]; then
-          echo "::error::npm-release: no package.json at '$(pwd)'. Check out the package source at working_directory (and use fetch-depth: 0) before invoking this action." >&2
+
+        # Clean cwd for the publish subprocess only — fresh per run, reused
+        # between the OIDC and token-auth attempts. Never working_directory.
+        rm -rf "${NR_PUBLISH_CWD}"
+        mkdir -p "${NR_PUBLISH_CWD}"
+
+        if [ "${HASHIRA_NPM_RELEASE_DRY_RUN:-0}" = "1" ]; then
+          echo "npm-release: HASHIRA_NPM_RELEASE_DRY_RUN=1 -> skipping actual npm publish"
+          echo "released=false" >> "${GITHUB_OUTPUT}"
+          echo "version=" >> "${GITHUB_OUTPUT}"
+          echo "npm-release: dry-run; no publish attempted" >> "${GITHUB_STEP_SUMMARY}"
+          exit 0
+        fi
+
+        # npm's own `publish` command refuses a prerelease version under the
+        # default dist-tag (`npm error: You must specify a tag using --tag
+        # when publishing a prerelease version.`) — confirmed by direct
+        # reproduction during this iteration's implementation, BEFORE the
+        # credential/OIDC check ever runs. `version` may legitimately be a
+        # prerelease (the resolver's contract permits prerelease tags — see
+        # spec.md §7's test-strategy note), so this is a real publish-time
+        # requirement, not a test-fixture-only concern. Derive a dist-tag
+        # from the prerelease identifier (npm's own documented convention,
+        # e.g. `1.3.0-rc.1` -> tag `rc`); a non-prerelease version needs no
+        # explicit --tag (defaults to `latest`).
+        #
+        # Pass-2 Minor fix, both confirmed by direct reproduction: (1) build
+        # metadata (`+...`) always comes after prerelease but was never
+        # stripped first, so `1.0.0+build-7` wrongly matched `*-*` and
+        # derived tag `7` — fixed by stripping `+...` first. (2) a purely-
+        # numeric leading prerelease id (`1.0.0-0`) derived tag `0`, which
+        # npm itself rejects ("Tag name must not be a valid SemVer range").
+        version_no_build="${NR_VERSION%%+*}"
+        tag_args=()
+        if [[ "${version_no_build}" == *-* ]]; then
+          prerelease_part="${version_no_build#*-}"
+          dist_tag="${prerelease_part%%.*}"
+          if [[ "${dist_tag}" =~ ^[0-9]+$ ]]; then
+            echo "::error::npm-release: version '${NR_VERSION}' has a purely-numeric leading prerelease identifier ('${dist_tag}'), which npm rejects as a dist-tag name ('Tag name must not be a valid SemVer range'). Use a non-numeric leading prerelease identifier (e.g. 'rc.0' instead of '0')." >&2
+            exit 1
+          fi
+          tag_args=( --tag "${dist_tag}" )
+          echo "npm-release: prerelease version ${NR_VERSION} -> dist-tag '${dist_tag}'"
+        fi
+
+        # Pass-2 fix (Blocker): `-u NPM_TOKEN -u NODE_AUTH_TOKEN` + an empty
+        # `--userconfig` does NOT make the subprocess's credential surface
+        # genuinely empty — two leak paths, reproduced against real npm
+        # 11.13.0 (see diary): (1) ANY `npm_config_*`/`NPM_CONFIG_*` env var
+        # maps directly to registry auth config, untouched by either, and
+        # the key's registry/scope portion is unbounded, so this must be
+        # closed by scrubbing the actual environment, not a fixed list;
+        # (2) `--userconfig` only relocates the per-user layer — npm's
+        # separate per-project `.npmrc` (cwd + ancestor walk) is untouched,
+        # and the publish cwd is `inputs.working_directory` (the consumer's
+        # repo). Fixed at the root: run from NR_PUBLISH_CWD (empty throwaway
+        # cwd) so the `.npmrc` walk finds nothing, scrub every
+        # `npm_config_*`/`NPM_CONFIG_*` var from the actual environment, and
+        # an empty `--globalconfig` alongside `--userconfig`.
+        npm_config_env_clear_args=()
+        while IFS= read -r -d '' env_entry; do
+          env_name="${env_entry%%=*}"
+          case "${env_name}" in
+            npm_config_*|NPM_CONFIG_*)
+              npm_config_env_clear_args+=( -u "${env_name}" )
+              ;;
+          esac
+        done < <(env -0)
+
+        # publish_clean: positively scrub every credential npm could fall
+        # back to (see the fix comment above), so a real OIDC failure
+        # surfaces as npm's own ENEEDAUTH — fail-loud by construction.
+        publish_clean() {
+          : > "${NR_USERCONFIG}"
+          : > "${NR_GLOBALCONFIG}"
+          ( cd "${NR_PUBLISH_CWD}" && env -u NPM_TOKEN -u NODE_AUTH_TOKEN "${npm_config_env_clear_args[@]}" \
+            npm publish "${NR_TARBALL}" --registry "${NR_TARGET}" \
+              --userconfig "${NR_USERCONFIG}" --globalconfig "${NR_GLOBALCONFIG}" \
+              --provenance "${tag_args[@]}" )
+        }
+
+        # publish_token: the explicit, scoped token-auth path. The token is
+        # written ONLY to the throwaway userconfig as a registry-scoped
+        # _authToken line. ACTIONS_ID_TOKEN_REQUEST_URL/_TOKEN/NPM_ID_TOKEN
+        # are unset — confirmed by source that without BOTH GitHub vars,
+        # oidc() returns before any network call, so OIDC is never even
+        # attempted here. Same clean-cwd + npm_config_* scrub + empty
+        # --globalconfig as publish_clean (symmetric Major fix): without
+        # them, the consumer's intended npm_token is not provably the
+        # credential that actually gets used — a project .npmrc or
+        # npm_config_* var could silently shadow it with a DIFFERENT one.
+        #
+        # NO --provenance here (corrected from an earlier draft of this
+        # action that forced it unconditionally — caught by direct
+        # reproduction during this iteration's implementation, not assumed
+        # safe): npm's own provenance-prerequisite check
+        # (libnpmpublish/lib/publish.js `ensureProvenanceGeneration`) THROWS
+        # `EUSAGE` under `ciInfo.GITHUB_ACTIONS` if
+        # `ACTIONS_ID_TOKEN_REQUEST_URL` is absent — exactly the variable this
+        # function deliberately unsets. Forcing --provenance here would hard-
+        # fail every token-auth publish on a real GitHub Actions runner
+        # (verified locally: `npm error code EUSAGE … Automatic provenance
+        # generation not supported`), not just skip a nice-to-have. A
+        # token-auth consumer may not have granted `id-token: write` at all,
+        # so this is the correct behavior, not a gap.
+        publish_token() {
+          {
+            echo "//${NR_REGISTRY_HOST}/:_authToken=${NR_NPM_TOKEN}"
+          } > "${NR_USERCONFIG}"
+          : > "${NR_GLOBALCONFIG}"
+          ( cd "${NR_PUBLISH_CWD}" && env -u ACTIONS_ID_TOKEN_REQUEST_URL -u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u NPM_ID_TOKEN \
+            "${npm_config_env_clear_args[@]}" \
+            npm publish "${NR_TARBALL}" --registry "${NR_TARGET}" \
+              --userconfig "${NR_USERCONFIG}" --globalconfig "${NR_GLOBALCONFIG}" \
+              "${tag_args[@]}" )
+        }
+
+        log_file="${RUNNER_TEMP}/npm-release-publish.log"
+        attempted_oidc=0
+        if [ "${NR_ATTEMPT_TOKEN_FIRST}" = "true" ]; then
+          # auth=token: only the explicit token path, ever.
+          publish_token 2>&1 | tee "${log_file}"
+          publish_status="${PIPESTATUS[0]}"
+        else
+          # auth=oidc or auth=auto: always start with the clean, OIDC-only
+          # attempt.
+          attempted_oidc=1
+          set +e
+          publish_clean 2>&1 | tee "${log_file}"
+          publish_status="${PIPESTATUS[0]}"
+          set -e
+        fi
+
+        if [ "${publish_status}" -ne 0 ] && [ "${NR_AUTH}" = "auto" ] && [ "${attempted_oidc}" -eq 1 ] && [ -n "${NR_NPM_TOKEN}" ]; then
+          # auth=auto's fallback (D3/D11): the clean OIDC-only attempt above
+          # failed before reaching any registry network call (npm's
+          # noCreds->ENEEDAUTH throw happens before #registryVersions/
+          # libnpmpublish — verified by source-tracing AND direct local
+          # reproduction, see header), so retrying with a token here cannot
+          # double-publish.
+          echo "::warning::npm-release: auth=auto; the OIDC-only publish attempt failed, falling back to the provided npm_token. This is a posture downgrade (no long-lived secret -> long-lived secret) — set auth=oidc and fix the trusted-publishing config to avoid this, or set auth=token to make the fallback explicit."
+          publish_token 2>&1 | tee -a "${log_file}"
+          publish_status="${PIPESTATUS[0]}"
+        fi
+
+        if [ "${publish_status}" -ne 0 ]; then
+          # Diagnostic-only marker (not a public output/contract — mirrors
+          # nuget-push's nuget-push-failure-reason.txt pattern): lets a
+          # self-CI negative test assert *this specific* failure reason (npm's
+          # own ENEEDAUTH, surfaced because no credential was reachable), not
+          # merely "the step failed", so a future change adding an
+          # earlier-failing check couldn't silently stop exercising this path
+          # while the test stays green for the wrong reason.
+          failure_reason="other"
+          if grep -q 'ENEEDAUTH' "${log_file}" 2>/dev/null; then
+            failure_reason="eneedauth"
+          fi
+          echo "${failure_reason}" > "${RUNNER_TEMP}/npm-release-failure-reason.txt" 2>/dev/null || true
+          # No --skip-duplicate equivalent on npm (Minor, deferred — see
+          # progress.md). Messages below only claim an OIDC/credential cause
+          # when failure_reason confirms it — no longer mis-attributed.
+          if [ "${NR_AUTH}" = "oidc" ]; then
+            if [ "${failure_reason}" = "eneedauth" ]; then
+              echo "::error::npm-release: auth=oidc failed — npm's own ENEEDAUTH (no OIDC token reachable): a ref/job-workflow mismatch with the configured npm trusted-publishing policy, or missing 'id-token: write' on the calling job. auth=oidc never falls back to npm_token, even if one is set. See docs/flows/npm.md." >&2
+            else
+              echo "::error::npm-release: auth=oidc failed — see the npm error above. This was NOT npm's ENEEDAUTH (no-credential) failure; a common other cause is the registry rejecting a re-publish of an already-published version (npm has no --skip-duplicate equivalent — see docs/flows/npm.md). auth=oidc never falls back to npm_token, even if one is set." >&2
+            fi
+          elif [ "${NR_AUTH}" = "auto" ]; then
+            echo "::error::npm-release: auth=auto; OIDC failed and no usable npm_token fallback was available (or the fallback also failed) — see the npm error(s) above. If this is a re-run, a common cause is the registry rejecting a re-publish of an already-published version (npm has no --skip-duplicate equivalent)." >&2
+          else
+            echo "::error::npm-release: auth=token publish failed — see the npm error above. If this is a re-run, a common cause is the registry rejecting a re-publish of an already-published version (npm has no --skip-duplicate equivalent)." >&2
+          fi
           exit 1
         fi
-        extra_args=""
-        if [ "${HASHIRA_SEMANTIC_RELEASE_DRY_RUN:-0}" = "1" ]; then
-          extra_args="--dry-run --no-ci"
-          echo "npm-release: HASHIRA_SEMANTIC_RELEASE_DRY_RUN=1 -> --dry-run --no-ci"
-        fi
-        log_file="${RUNNER_TEMP}/semantic-release.log"
-        # shellcheck disable=SC2086
-        "${SR_BIN_DIR}/semantic-release" --extends "${RC_PATH}" ${extra_args} 2>&1 | tee "${log_file}"
-        # Parse the log for the published-version line. These strings are NOT a
-        # documented public contract of semantic-release — they are
-        # human-readable log lines. Any deliberate bump of the pinned
-        # semantic-release version MUST re-run the self-CI dry-run smoke and
-        # update these patterns if the wording changed. Outputs are
-        # informational only — no second job consumes them (the publish is
-        # atomic within this action).
-        version=""
-        released="false"
-        if grep -Eq 'Published release [0-9]+\.[0-9]+\.[0-9]+' "${log_file}"; then
-          version="$(grep -Eo 'Published release [0-9]+\.[0-9]+\.[0-9]+' "${log_file}" \
-            | head -n1 | awk '{ print $3 }')"
-          released="true"
-        elif grep -Eq 'The next release version is [0-9]+\.[0-9]+\.[0-9]+' "${log_file}"; then
-          version="$(grep -Eo 'The next release version is [0-9]+\.[0-9]+\.[0-9]+' "${log_file}" \
-            | head -n1 | awk '{ print $6 }')"
-        fi
-        # --dry-run never publishes; force released=false regardless of the log.
-        if [ "${HASHIRA_SEMANTIC_RELEASE_DRY_RUN:-0}" = "1" ]; then
-          released="false"
-        fi
-        echo "released=${released}" >> "${GITHUB_OUTPUT}"
-        echo "version=${version}" >> "${GITHUB_OUTPUT}"
-        if [ "${released}" = "true" ]; then
-          echo "npm-release: published v${version} via OIDC trusted publishing" >> "${GITHUB_STEP_SUMMARY}"
-        elif [ -n "${version}" ]; then
-          echo "npm-release: would release v${version} (dry-run)" >> "${GITHUB_STEP_SUMMARY}"
+
+        echo "released=true" >> "${GITHUB_OUTPUT}"
+        echo "version=${NR_VERSION}" >> "${GITHUB_OUTPUT}"
+        echo "npm-release: published ${NR_VERSION} to ${NR_TARGET}" >> "${GITHUB_STEP_SUMMARY}"
+
+    # Tag + GitHub Release creation (D4 atomicity, D13). Runs only after a
+    # successful publish (this step is unconditional in the YAML, but the
+    # publish step above already `exit 1`'d on any publish failure, so a failed
+    # publish never reaches here — composite-action steps run sequentially and a
+    # failed `shell: bash` step halts the run). Skipped entirely in dry-run mode.
+    - name: Tag + GitHub Release (idempotent; D4 release-creates-the-tag)
+      if: ${{ env.HASHIRA_NPM_RELEASE_DRY_RUN != '1' }}
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      env:
+        # NF5: composite actions have NO `secrets` context (matches
+        # nuget-push's identical convention). Source the GitHub token from
+        # the `github` context — required for the `gh` CLI below (it checks
+        # `GH_TOKEN` then `GITHUB_TOKEN`; using `GITHUB_TOKEN` matches
+        # nuget-push's convention exactly).
+        GITHUB_TOKEN: ${{ github.token }}
+        NR_VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        tag="v${NR_VERSION}"
+        # Idempotency (D4): if the release already exists (parallel run or
+        # retry after a partial earlier attempt), do nothing. Otherwise create
+        # the release + tag in one shot against $GITHUB_SHA so the tag points
+        # at exactly the commit whose artifact was published.
+        if gh release view "${tag}" --json id >/dev/null 2>&1; then
+          echo "npm-release: release ${tag} already exists; skipping tag (idempotent)." >> "${GITHUB_STEP_SUMMARY}"
         else
-          echo "npm-release: no release this run" >> "${GITHUB_STEP_SUMMARY}"
+          gh release create "${tag}" --generate-notes --target "${GITHUB_SHA}"
+          echo "npm-release: created release ${tag} at ${GITHUB_SHA}" >> "${GITHUB_STEP_SUMMARY}"
         fi

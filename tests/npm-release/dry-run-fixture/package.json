@@ -2,7 +2,7 @@
   "name": "hashira-npm-release-dry-run-fixture",
   "version": "0.0.0",
   "private": true,
-  "description": "Static fixture for the npm-release dry-run self-CI job. version 0.0.0 + no conventional-commit history → semantic-release reports 'no release this run'. 'private: true' is REQUIRED here (not just defense-in-depth): the npm-release builder always sets npmPublish:true, and @semantic-release/npm verifies npm auth ONLY when npmPublish!==false AND pkg.private!==true (index.js). The dry-run self-CI job grants no id-token/NPM_TOKEN, so private:true is what lets verifyConditions pass without auth. Removing it breaks the job with an opaque auth error.",
+  "description": "Static fixture for the npm-release dry-run self-CI job (iteration 3.4 rewrite). The self-CI job `npm pack`s this directory into a .tgz, uploads it under the artifact name 'npm-tarball' (the same name npm-package-ci.yml's real `version` job uses), then invokes the npm-release composite with HASHIRA_NPM_RELEASE_DRY_RUN=1 — proving the REAL actions/download-artifact + tarball-locate steps end-to-end, while the dry-run flag skips only the actual `npm publish` and tag/release steps (the network-touching, irreversible parts). 'private: true' is harmless here (npm publish --dry-run/no-op paths never inspect it), kept for defense-in-depth in case this fixture is ever packed by a tool that does.",
   "repository": {
     "type": "git",
     "url": "https://github.com/skathio/hashira.git"
