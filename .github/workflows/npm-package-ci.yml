@@ -361,15 +361,26 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.sha }}
         run: |
-          # NOTE: `set -uo pipefail` deliberately OMITS `-e`. The step is
-          # non-blocking by D11; we want commitlint's non-zero exit code to
-          # be CAPTURED (status=$?) rather than abort the script. Do NOT
-          # re-introduce `-e` — doing so converts every npx blip into a
-          # blocking failure and defeats D11's "warns, does not block"
-          # guarantee. The empty-report check below distinguishes "non-CC
+          # NOTE: explicit `+e` here, not just omitting `-e` from this line.
+          # GitHub's default `shell: bash` step is invoked as
+          # `bash --noprofile --norc -e -o pipefail {0}` — `-e` is ALREADY
+          # active before this script's first line ever runs. Writing only
+          # `set -uo pipefail` (no `+e`) does NOT turn it back off; that was
+          # the actual bug here (hashira-v2 iteration 6.5, found via rogue's
+          # live migration — the first real `workflow_call` invocation of
+          # this workflow ever exercised this step against real commits,
+          # which immediately tripped it: any PR range containing a single
+          # non-Conventional-Commit message made `npx commitlint` exit
+          # non-zero, which — because `-e` was still active — aborted the
+          # step immediately, before `status=$?` ever ran, defeating D11's
+          # "warns, does not block" guarantee the comment below already
+          # described as the intent). The step is non-blocking by D11; we
+          # want commitlint's non-zero exit code to be CAPTURED
+          # (status=$?) rather than abort the script — hence the explicit
+          # `+e`. The empty-report check below distinguishes "non-CC
           # commits found" from "install failed" so a misleading sticky
           # comment can't be posted on an install failure.
-          set -uo pipefail
+          set -uo pipefail +e
           # Pin commitlint CLI + config-conventional inside the npx
           # invocation. npm has no SHA-pin equivalent; see the npm
           # supply-chain trust model paragraph in
