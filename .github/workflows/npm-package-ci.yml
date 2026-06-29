@@ -1,9 +1,18 @@
 # Reusable workflow: npm-package-ci (CI half of the npm flow per D8).
 #
-# Runs lint (with inline non-blocking commitlint warning per D11) + test +
-# scan-suite + coverage-report. No publish step. The Publish half is the
-# `npm-release` composite action (`.github/actions/npm-release/`), invoked
-# from the consumer's own publish.yml job (see docs/flows/npm.md).
+# Runs lint (with inline non-blocking commitlint warning per D11) + test
+# (coverage is reported INSIDE this job — see the `test` job below) +
+# scan-suite. No publish step. The Publish half is the `npm-release`
+# composite action (`.github/actions/npm-release/`), invoked from the
+# consumer's own publish.yml job (see docs/flows/npm.md).
+#
+# Coverage reporting was originally a separate `coverage-report` job, but
+# that ran on a fresh runner with no artifact handoff from `test` and
+# always failed "file not found" — the same bug class found and fixed in
+# `nuget-package-ci.yml` (hashira-v2 iteration 6.5), discovered here via
+# somi's live iteration 6.1/6.2 migration. Removed; coverage reporting now
+# runs as the last step of `test`, in the same workspace `run-tests-js`
+# wrote the coverage file to.
 #
 # ## Version resolution + stamp (D1/D8, iteration 2.2)
 #
@@ -14,7 +23,7 @@
 # assertion step). When `bump` is empty (every routine PR/push CI run that
 # isn't cutting a release) the `version` job is skipped entirely and every
 # other job runs exactly as before this iteration — `version` neither gates
-# nor is gated by `lint`/`test`/`scan-suite`/`coverage-report`.
+# nor is gated by `lint`/`test`/`scan-suite`.
 #
 # CI->CD output-boundary contract (D8, phase 2 exit criteria "Major 3 fix"):
 # this workflow declares exactly ONE workflow-level output, `resolved_version`
@@ -46,10 +55,10 @@
 # it needs:
 #   - version : contents:read (resolver + pack/stamp; no working-tree write)
 #   - lint  : contents:read, pull-requests:write   (commitlint sticky-comment)
-#   - test  : contents:read
+#   - test  : contents:read, pull-requests:write (coverage-report sticky
+#             comment, run as the last step of this job — see below)
 #   - scan-suite : contents:read, security-events:write (CodeQL),
 #                  pull-requests:read (dependency-review on PR)
-#   - coverage-report : contents:read, pull-requests:write (sticky comment)
 #
 # Reusable workflows can only NARROW the caller's grants, never broaden.
 # Consumers must mirror this matrix at their caller job's `permissions:`
@@ -194,9 +203,9 @@ jobs:
   # job entirely — no resolver invocation, no checkout-with-full-tags, no
   # pack/stamp work — and shows as "skipped" rather than running pointless
   # steps behind a step-level `if:`. Deliberately independent of `setup`/
-  # `lint`/`test`/`scan-suite`/`coverage-report`: nothing here gates them and
-  # nothing here is gated by them, so existing CI behavior for non-release
-  # runs is provably unaffected by this job's presence.
+  # `lint`/`test`/`scan-suite`: nothing here gates them and nothing here is
+  # gated by them, so existing CI behavior for non-release runs is provably
+  # unaffected by this job's presence.
   version:
     name: version
     if: ${{ inputs.bump != '' }}
@@ -461,6 +470,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      # coverage-report (run as the last step of this job) posts a sticky PR
+      # comment via actions/github-script on pull_request events.
+      pull-requests: write
     steps:
       # actions/checkout v4.2.2 — consumer's tree.
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
@@ -481,6 +493,17 @@ jobs:
         uses: ./.hashira/.github/actions/run-tests-js
         with:
           command: ${{ inputs.test_command }}
+          coverage_path: ${{ inputs.coverage_path }}
+      # Report coverage IN THIS JOB: run-tests-js just standardized the
+      # coverage file at `coverage_path` in this workspace, so it is present
+      # here. (A separate coverage-report job ran on a fresh runner with no
+      # artifact handoff and always failed "file not found" — same class of
+      # bug as nuget-package-ci.yml's, found and fixed via somi's iteration
+      # 6.1/6.2 live migration. Removed entirely rather than wired up with
+      # an artifact handoff, mirroring that fix.)
+      - name: Report coverage
+        uses: ./.hashira/.github/actions/coverage-report
+        with:
           coverage_path: ${{ inputs.coverage_path }}
 
   scan-suite:
@@ -515,31 +538,3 @@ jobs:
         uses: ./.hashira/.github/actions/scan-suite
         with:
           scan_disable: ${{ inputs.scan_disable }}
-
-  coverage-report:
-    name: coverage-report
-    needs: [lint, test, scan-suite]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: write
-    steps:
-      # actions/checkout v4.2.2 — consumer's tree.
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
-      # actions/setup-node v4.1.0 — coverage-report's parser shim needs node.
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
-        with:
-          node-version: ${{ inputs.node_version }}
-      # Library self-checkout per D14.
-      - name: Checkout hashira library (D14)
-        # actions/checkout v4.2.2
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
-        with:
-          repository: skathio/hashira
-          ref: ${{ inputs.library_ref }}
-          path: .hashira
-          persist-credentials: false
-      - name: Report coverage
-        uses: ./.hashira/.github/actions/coverage-report
-        with:
-          coverage_path: ${{ inputs.coverage_path }}
