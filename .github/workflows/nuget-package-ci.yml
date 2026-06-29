@@ -3,10 +3,17 @@
 # Runs restore-build → test (in series; tests consume build outputs) plus
 # scan-suite in parallel. Coverage is reported INSIDE the test job: the
 # cobertura file run-tests-dotnet standardizes only exists in the test
-# job's workspace, and a previous separate `coverage-report` job ran on a
-# fresh runner with no artifact handoff, so it always failed "file not
-# found". The Publish half lives in `nuget-package-publish.yml` (iteration
-# 3.3).
+# job's workspace. A separate `coverage-report` job ran on a fresh runner
+# with no artifact handoff, so it always failed "file not found" — this
+# was a known, tracked gap (iter 2.3 review) that went unnoticed until
+# rogue's iter-6.3/6.4 live migration actually exercised this workflow as
+# a real `workflow_call` for the first time. Removed entirely (hashira-v2
+# iteration 6.5) rather than wired up with an artifact handoff, since
+# coverage reporting already works correctly inside the `test` job above.
+# The Publish half is `nuget-push` (a composite action invoked directly
+# from the consumer's own job, per D2 — not a reusable workflow; the old
+# `nuget-package-publish.yml` reusable workflow was retired in iteration
+# 3.2).
 #
 # ## Version resolution + stamp (D1/D8, iteration 2.3)
 #
@@ -19,7 +26,8 @@
 # `bump` is empty (every routine PR/push CI run that isn't cutting a
 # release) the `version` job is skipped entirely and every other job runs
 # exactly as before this iteration — `version` neither gates nor is gated
-# by `setup`/`restore-build`/`test`/`scan-suite`/`coverage-report`.
+# by `setup`/`restore-build`/`test`/`scan-suite` (coverage reporting is a
+# step inside `test`, not its own job — see the header note above).
 #
 # MinVer-stamping decision (phase 2 exit criteria, iteration 2.3): MinVer is
 # RETAINED, not replaced. `dotnet-pack-version`'s new `version_override`
@@ -231,8 +239,8 @@ jobs:
   # job entirely — no resolver invocation, no checkout-with-full-tags, no
   # pack/stamp work — and shows as "skipped" rather than running pointless
   # steps behind a step-level `if:`. Deliberately independent of `setup`/
-  # `restore-build`/`test`/`scan-suite`/`coverage-report`: nothing here gates
-  # them and nothing here is gated by them, so existing CI behavior for
+  # `restore-build`/`test`/`scan-suite`: nothing here gates them and nothing
+  # here is gated by them, so existing CI behavior for
   # non-release runs is provably unaffected by this job's presence. Mirrors
   # `npm-package-ci.yml` iteration 2.2's `version` job shape exactly.
   version:
@@ -540,27 +548,3 @@ jobs:
         uses: ./.hashira/.github/actions/scan-suite
         with:
           scan_disable: ${{ inputs.scan_disable }}
-
-  coverage-report:
-    name: coverage-report
-    needs: [restore-build, test, scan-suite]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: write
-    steps:
-      # actions/checkout v4.2.2 — consumer's tree.
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
-      # Library self-checkout per D14.
-      - name: Checkout hashira library (D14)
-        # actions/checkout v4.2.2
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
-        with:
-          repository: skathio/hashira
-          ref: ${{ inputs.library_ref }}
-          path: .hashira
-          persist-credentials: false
-      - name: Report coverage
-        uses: ./.hashira/.github/actions/coverage-report
-        with:
-          coverage_path: ${{ inputs.coverage_path }}
