@@ -184,7 +184,7 @@ jobs:
       contents: read
     steps:
       # actions/checkout v4.2.2 — consumer's tree.
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
       # actions/setup-node v4.1.0
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
         with:
@@ -219,14 +219,14 @@ jobs:
       # (fetch-depth: 0, fetch-tags: true) so the resolver can see the real
       # tag list via `git tag --list` below; the other jobs' shallow
       # checkout is intentionally left as-is (they don't need tag history).
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           fetch-depth: 0
           fetch-tags: true
       # Library self-checkout per D14: ./.hashira/ holds hashira at library_ref.
       - name: Checkout hashira library (D14)
         # actions/checkout v4.2.2
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           repository: skathio/hashira
           ref: ${{ inputs.library_ref }}
@@ -297,7 +297,7 @@ jobs:
         # actions/upload-artifact v4.4.3 — same pin already verified and in
         # use at .github/actions/coverage-report/action.yml; reused here
         # rather than introducing a new pin to the verified-pin set.
-        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           # Stable, documented name: Phase 3's CD job downloads this exact
           # name to publish "the same-run artifact" (sdd.md §8's open item;
@@ -355,7 +355,7 @@ jobs:
     steps:
       # actions/checkout v4.2.2 — consumer's tree, full history so commitlint
       # can walk the PR range across merge commits.
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           fetch-depth: 0
       # actions/setup-node v4.1.0
@@ -510,7 +510,7 @@ jobs:
       pull-requests: write
     steps:
       # actions/checkout v4.2.2 — consumer's tree.
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
       # actions/setup-node v4.1.0
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
         with:
@@ -518,7 +518,7 @@ jobs:
       # Library self-checkout per D14: ./.hashira/ holds hashira at library_ref.
       - name: Checkout hashira library (D14)
         # actions/checkout v4.2.2
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           repository: skathio/hashira
           ref: ${{ inputs.library_ref }}
@@ -555,7 +555,7 @@ jobs:
       pull-requests: read
     steps:
       # actions/checkout v4.2.2 — consumer's tree.
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
       # actions/setup-node v4.1.0 — visibility-detect shim runs via `node`.
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
         with:
@@ -563,7 +563,7 @@ jobs:
       # Library self-checkout per D14.
       - name: Checkout hashira library (D14)
         # actions/checkout v4.2.2
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           repository: skathio/hashira
           ref: ${{ inputs.library_ref }}
