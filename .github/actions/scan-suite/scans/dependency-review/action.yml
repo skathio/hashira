@@ -23,8 +23,13 @@ runs:
         HASHIRA_FORCE_PRIVATE_NO_GHAS: ${{ env.HASHIRA_FORCE_PRIVATE_NO_GHAS }}
       run: |
         set -euo pipefail
+        # See the identical fix + comment in scan-suite/scans/codeql —
+        # GITHUB_ACTION_PATH doesn't reliably resolve for a composite action
+        # nested two levels deep; anchor on GITHUB_WORKSPACE instead, which
+        # is fixed and known regardless of nesting depth (found live: this
+        # was the actual failure in scan-suite's first real workflow_call).
         out="$(node -e '
-          const { detect } = require(process.env.GITHUB_ACTION_PATH + "/../../lib/visibility-detect.js");
+          const { detect } = require(process.env.GITHUB_WORKSPACE + "/.hashira/.github/actions/scan-suite/lib/visibility-detect.js");
           const ctx = JSON.parse(process.env.GH_CONTEXT);
           const r = detect({ ghContext: ctx, env: process.env });
           console.log(JSON.stringify(r));

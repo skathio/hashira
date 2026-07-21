@@ -240,6 +240,21 @@ jobs:
           ref: ${{ inputs.library_ref }}
           path: .hashira
           persist-credentials: false
+      - name: Install dependencies
+        # Found via a real consumer's first live PR against this flow (v2 —
+        # neither this job nor `test` ever installed the consumer's own
+        # devDependencies before running `build_command`/`test_command`;
+        # every consumer hit a bare `npm run build`/`npm test` against an
+        # empty node_modules). `docs/flows/static-webapp.md §8` used to tell
+        # consumers to work around this by folding `npm install` into their
+        # own `build_command` — that advice is now obsolete and removed;
+        # fixing it here closes the gap for every consumer instead of
+        # relying on each one remembering the workaround (this job's own
+        # first real consumer didn't). `npm ci` (not `npm install`) for
+        # lockfile-respecting, reproducible CI installs — the same
+        # convention `_self-ci.yml` already uses elsewhere in this repo.
+        shell: bash
+        run: npm ci
       - name: Build static site
         shell: bash
         env:
@@ -290,6 +305,13 @@ jobs:
           ref: ${{ inputs.library_ref }}
           path: .hashira
           persist-credentials: false
+      # See the identical step + comment in build-and-upload above — same
+      # bug, same fix, this job's half of it (test_command has no
+      # documented consumer-side workaround at all, unlike build_command's
+      # now-removed one, so this half was unconditionally broken).
+      - name: Install dependencies
+        shell: bash
+        run: npm ci
       - name: Run tests
         uses: ./.hashira/.github/actions/run-tests-js
         with:
