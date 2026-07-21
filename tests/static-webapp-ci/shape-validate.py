@@ -17,7 +17,8 @@ Acceptance checks per phase 4.2:
   (d) Workflow-level `permissions:` is `{}` (NF6 deny-all baseline).
   (e) Per-job permissions match the design (build-and-upload has
       id-token:write + pages:write; scan-suite has security-events:write
-      + pull-requests:read; coverage-report has pull-requests:write).
+      + pull-requests:read; test has pull-requests:write for the
+      coverage-report sticky comment, run as the last step of that job).
 
 Run from repo root: python3 tests/static-webapp-ci/shape-validate.py
 Exits 0 on success; non-zero with a clear error otherwise.
@@ -54,7 +55,10 @@ DOCUMENTED_INPUTS = [
 REQUIRED_PERMISSIONS = {
     "build-and-upload": {"id-token": "write", "pages": "write"},
     "scan-suite": {"security-events": "write", "pull-requests": "read"},
-    "coverage-report": {"pull-requests": "write"},
+    # coverage-report runs as the last step of `test` (job collapse — see
+    # "Coverage report handoff" in static-webapp-ci.yml's header), not as
+    # its own job; pull-requests:write moved here with it.
+    "test": {"pull-requests": "write"},
 }
 
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")

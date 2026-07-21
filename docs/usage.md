@@ -786,9 +786,10 @@ workflow (`npm-package-ci.yml`, `nuget-package-ci.yml`,
 
 ## Coverage reporting
 
-The CI half of every package/webapp flow ends with a `coverage-report` job
-that parses the consumer's coverage file and renders a sticky PR comment
-with per-file coverage percentages and a delta against the PR's base.
+The CI half of every package/webapp flow ends its `test` job with a
+`coverage-report` step that parses the consumer's coverage file and renders
+a sticky PR comment with per-file coverage percentages and a delta against
+the PR's base.
 
 ### Supported formats
 
