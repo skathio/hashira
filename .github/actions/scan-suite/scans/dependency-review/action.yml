@@ -28,6 +28,15 @@ runs:
         # nested two levels deep; anchor on GITHUB_WORKSPACE instead, which
         # is fixed and known regardless of nesting depth (found live: this
         # was the actual failure in scan-suite's first real workflow_call).
+        # Also relies on the root `package.json` (`"type": "commonjs"`,
+        # added after this) as a boundary: with no package.json inside
+        # `.hashira/`, Node's CJS/ESM resolution for this require() walks up
+        # past `.hashira/` into the CONSUMER's own workspace root — an
+        # ESM-typed consumer (`"type": "module"`) then makes Node load this
+        # file as an ES module, silently returning an object without
+        # `detect` instead of throwing (found live against a real ESM
+        # consumer: passed hashira's own self-CI, which has no package.json
+        # anywhere in its tree to trigger the misclassification).
         out="$(node -e '
           const { detect } = require(process.env.GITHUB_WORKSPACE + "/.hashira/.github/actions/scan-suite/lib/visibility-detect.js");
           const ctx = JSON.parse(process.env.GH_CONTEXT);
