@@ -15,10 +15,11 @@
 #   - build-and-upload: contents:read, id-token:write, pages:write
 #                       (id-token + pages required by upload-pages-artifact;
 #                       see `.github/actions/pages-upload/action.yml` header)
-#   - test            : contents:read
+#   - test            : contents:read, pull-requests:write (coverage-report
+#                       sticky comment, run as the last step of this job —
+#                       see "Coverage report handoff" below)
 #   - scan-suite      : contents:read, security-events:write (CodeQL),
 #                       pull-requests:read (dependency-review on PR)
-#   - coverage-report : contents:read, pull-requests:write (sticky comment)
 #
 # Reusable workflows can only NARROW the caller's grants, never broaden.
 # Consumers must mirror this matrix at their caller job's `permissions:`
@@ -54,6 +55,24 @@
 # have separate `lint`/`test` jobs that don't fuse anything). Acceptable
 # because the fusion is forced by the upload primitive's locality
 # requirement, not by a discretionary design choice.
+#
+# ## Coverage report handoff (test/coverage-report collapse)
+#
+# `coverage-report` used to be its own job, `needs: [build-and-upload, test,
+# scan-suite]`, checking out the consumer's tree fresh on its own runner. It
+# always failed "file not found": `run-tests-js` (in the `test` job) writes
+# the coverage file into THAT job's own workspace, which does not exist on
+# `coverage-report`'s separate runner — no artifact handoff connected them.
+# Found live against a real consumer (Hinokami) once the two bugs upstream
+# of it were fixed and CI finally ran this job for the first time. Same
+# class of bug npm-package-ci.yml's and nuget-package-ci.yml's `test` jobs
+# already fixed by running coverage-report as their own last step — this
+# workflow was never migrated to match. Fixed the same way: run "Report
+# coverage" as the last step of `test` (same job, same workspace, same
+# `.hashira/` checkout already there for `run-tests-js`) and remove the
+# separate job, rather than wire up `upload-artifact`/`download-artifact`
+# (an extra SHA pin plus a `path:` to keep in sync in three places — the
+# same trade-off already made for the build-and-upload collapse above).
 #
 # ## Trust boundary
 #
@@ -284,6 +303,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      # coverage-report (run as the last step of this job) posts a sticky PR
+      # comment via actions/github-script on pull_request events.
+      pull-requests: write
     steps:
       # actions/checkout v4.2.2 — consumer's tree.
       # persist-credentials:false per iter-4.2 review Minor #2 (defense-in-depth:
@@ -316,6 +338,13 @@ jobs:
         uses: ./.hashira/.github/actions/run-tests-js
         with:
           command: ${{ inputs.test_command }}
+          coverage_path: ${{ inputs.coverage_path }}
+      # Report coverage IN THIS JOB — see "Coverage report handoff" above.
+      # run-tests-js just standardized the coverage file at `coverage_path`
+      # in this workspace, so it is present here.
+      - name: Report coverage
+        uses: ./.hashira/.github/actions/coverage-report
+        with:
           coverage_path: ${{ inputs.coverage_path }}
 
   scan-suite:
@@ -355,36 +384,3 @@ jobs:
         uses: ./.hashira/.github/actions/scan-suite
         with:
           scan_disable: ${{ inputs.scan_disable }}
-
-  coverage-report:
-    name: coverage-report
-    needs: [build-and-upload, test, scan-suite]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: write
-    steps:
-      # actions/checkout v4.2.2 — consumer's tree.
-      # persist-credentials:false per iter-4.2 review Minor #2 (defense-in-depth:
-      # build_command / test_command run in these jobs and the default git
-      # credential could be exfiltrated if the trust contract is violated).
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
-        with:
-          persist-credentials: false
-      # actions/setup-node v4.1.0 — coverage-report's parser shim needs node.
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
-        with:
-          node-version: ${{ inputs.node_version }}
-      # Library self-checkout per D14.
-      - name: Checkout hashira library (D14)
-        # actions/checkout v4.2.2
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
-        with:
-          repository: skathio/hashira
-          ref: ${{ inputs.library_ref }}
-          path: .hashira
-          persist-credentials: false
-      - name: Report coverage
-        uses: ./.hashira/.github/actions/coverage-report
-        with:
-          coverage_path: ${{ inputs.coverage_path }}
