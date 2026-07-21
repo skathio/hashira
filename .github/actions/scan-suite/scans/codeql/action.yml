@@ -52,6 +52,18 @@ runs:
         # checked out at the workspace root by the `library_ref` checkout
         # step in every caller job, at a fixed, known path regardless of
         # composite-nesting depth — anchor on GITHUB_WORKSPACE instead.
+        #
+        # Second occurrence of the same symptom, different cause: found live
+        # against a real ESM consumer (`"type": "module"` in their
+        # package.json). With no package.json inside `.hashira/`, Node's
+        # CJS/ESM boundary walk for this require() continued past
+        # `.hashira/` into the consumer's own workspace root and loaded this
+        # file as an ES module — require() didn't throw, it just returned an
+        # object with no `detect` export. Fixed by the root `package.json`
+        # (`"type": "commonjs"`) added to this repo, which is always closer
+        # to any file under `.hashira/` than a consumer's own root. Self-CI
+        # never catches this class of bug: hashira has no package.json of
+        # its own to trigger the misclassification when testing itself.
         out="$(node -e '
           const { detect } = require(process.env.GITHUB_WORKSPACE + "/.hashira/.github/actions/scan-suite/lib/visibility-detect.js");
           const ctx = JSON.parse(process.env.GH_CONTEXT);
