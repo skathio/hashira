@@ -41,8 +41,19 @@ runs:
         HASHIRA_FORCE_PRIVATE_NO_GHAS: ${{ env.HASHIRA_FORCE_PRIVATE_NO_GHAS }}
       run: |
         set -euo pipefail
+        # Found live (first real workflow_call of this action ever hit
+        # "TypeError: detect is not a function"): GITHUB_ACTION_PATH for a
+        # composite action nested two levels deep (orchestrator ->
+        # scan-suite -> this action) does not reliably resolve to THIS
+        # action's own directory on every runner version — the `../../`
+        # climb from it lands somewhere that exists but isn't
+        # lib/visibility-detect.js, so require() silently resolved to the
+        # wrong module and `detect` was undefined. `.hashira` is always
+        # checked out at the workspace root by the `library_ref` checkout
+        # step in every caller job, at a fixed, known path regardless of
+        # composite-nesting depth — anchor on GITHUB_WORKSPACE instead.
         out="$(node -e '
-          const { detect } = require(process.env.GITHUB_ACTION_PATH + "/../../lib/visibility-detect.js");
+          const { detect } = require(process.env.GITHUB_WORKSPACE + "/.hashira/.github/actions/scan-suite/lib/visibility-detect.js");
           const ctx = JSON.parse(process.env.GH_CONTEXT);
           const r = detect({ ghContext: ctx, env: process.env });
           console.log(JSON.stringify(r));

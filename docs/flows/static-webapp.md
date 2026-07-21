@@ -378,14 +378,18 @@ If your build output directory is not one of `dist/` / `build/` /
 workspace-relative and must not contain `..` segments or a leading `/`
 (rejected loudly by `pages-upload`).
 
-**Note on `node_modules` and lifecycle hooks**: for frameworks that
-require `node_modules` at build time, `build_command` may include
-`npm install && npm run build`. Consumers who want to harden against
-transitive-dependency lifecycle hooks (postinstall scripts running
-inside the `id-token: write` job) can add `--ignore-scripts` to the
-install step: `npm install --ignore-scripts && npm run build`. This is
-the same defense-in-depth the npm flow's publish path (the `npm-release`
-action) recommends.
+**Note on `node_modules`**: `static-webapp-ci.yml`'s `build-and-upload` and `test` jobs run
+`npm ci` automatically before `build_command`/`test_command` — you do **not** need to fold
+`npm install` into your own `build_command` (an earlier version of this doc recommended that
+workaround; it's obsolete now that the flow installs dependencies itself, and doing it yourself
+would just install twice).
+
+**Lifecycle-hook hardening tradeoff**: this automatic `npm ci` does not pass `--ignore-scripts`,
+so transitive-dependency postinstall hooks run inside the `id-token: write` job (the same
+defense-in-depth the npm flow's publish path, the `npm-release` action, recommends guarding
+against). There is currently no consumer-facing input to opt into `--ignore-scripts` here — if
+this matters for your threat model, treat it as a known gap and flag it rather than trying to
+route around it via `build_command` (the automatic install runs regardless, before your command).
 
 ## 9. Common failure modes
 

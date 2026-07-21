@@ -524,6 +524,13 @@ jobs:
           ref: ${{ inputs.library_ref }}
           path: .hashira
           persist-credentials: false
+      # Same bug as static-webapp-ci.yml's test/build-and-upload jobs — this
+      # job ran `test_command` against an empty node_modules with nothing
+      # ever installing the consumer's devDependencies (found via the same
+      # live-consumer PR that surfaced the static-webapp-ci.yml half).
+      - name: Install dependencies
+        shell: bash
+        run: npm ci
       - name: Run tests
         uses: ./.hashira/.github/actions/run-tests-js
         with:
