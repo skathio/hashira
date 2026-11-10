@@ -22,7 +22,7 @@ jobs:
       contents: read
     steps:
       # actions/checkout v4.2.2
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       # Pin actionlint by downloading the release binary at a fixed version +
       # verifying the SHA-256 of the archive. Chosen over `rhysd/actionlint@<sha>`
       # so the toolchain has one fewer Marketplace-action pin to refresh; the
@@ -56,7 +56,7 @@ jobs:
       contents: read
     steps:
       # actions/checkout v4.2.2
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - name: List composite-action directories (scaffold smoke)
         run: |
           set -euo pipefail
@@ -77,11 +77,11 @@ jobs:
       contents: read
     steps:
       # actions/checkout v4.2.2
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       # actions/setup-node v4.1.0 — needed only for a recent enough node
       # to have `node --test` (>= 18). Default ubuntu-latest node would
       # also work but pinning makes the matrix explicit.
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: '20'
       - name: Run coverage parser unit tests
@@ -100,10 +100,10 @@ jobs:
       pull-requests: write
     steps:
       # actions/checkout v4.2.2
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       # D14 self-checkout: composite actions reference library from .hashira/
       - name: Checkout library into .hashira
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ github.sha }}
           path: .hashira
@@ -113,7 +113,7 @@ jobs:
       # binary on PATH for its parser shim. Run setup-node BEFORE invoking
       # coverage-report so the dependency is explicit in the self-CI shape
       # (rather than relying on the preinstalled ubuntu-latest Node).
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: '20'
 
@@ -171,7 +171,7 @@ jobs:
       # actions/setup-dotnet v4.1.0 — ubuntu-latest images ship SDKs but
       # pinning the action ensures a deterministic 8.x version for the
       # fixture's <TargetFramework>net8.0</TargetFramework>.
-      - uses: actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68
         with:
           dotnet-version: '8.0.x'
       - name: run-tests-dotnet — fixture project
@@ -196,9 +196,9 @@ jobs:
       contents: read
     steps:
       # actions/checkout v4.2.2
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       # actions/setup-node v4.1.0
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: '20'
       - name: Run visibility-detect unit tests
@@ -218,16 +218,16 @@ jobs:
       security-events: write
     steps:
       # actions/checkout v4.2.2
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       # D14 self-checkout: composite actions reference library from .hashira/
       - name: Checkout library into .hashira
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ github.sha }}
           path: .hashira
           persist-credentials: false
       # actions/setup-node v4.1.0 (for visibility-detect shim invocations).
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: '20'
       - name: Run scan-suite with default scan_disable
@@ -258,16 +258,16 @@ jobs:
       security-events: write
     steps:
       # actions/checkout v4.2.2
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       # D14 self-checkout: composite actions reference library from .hashira/
       - name: Checkout library into .hashira
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ github.sha }}
           path: .hashira
           persist-credentials: false
       # actions/setup-node v4.1.0
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: '20'
       - name: Run scan-suite with gitleaks also disabled
@@ -291,7 +291,7 @@ jobs:
       contents: read
     steps:
       # actions/checkout v4.2.2
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - name: Run npm-release action shape-validation shim
         shell: bash
         run: |
@@ -314,16 +314,16 @@ jobs:
       HASHIRA_NPM_RELEASE_DRY_RUN: '1'
     steps:
       # actions/checkout v4.2.2
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       # D14 self-checkout: composite actions are referenced from .hashira/.
       - name: Checkout library into .hashira
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ github.sha }}
           path: .hashira
           persist-credentials: false
       # actions/setup-node v4.1.0
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: '24'
       - name: Pack the dry-run fixture into a real .tgz
@@ -341,7 +341,7 @@ jobs:
       - name: Upload fixture tarball as 'npm-tarball' (same artifact name the real CI version job uses)
         # actions/upload-artifact v4.4.3 — same pin already verified and in
         # use at npm-package-ci.yml / nuget-package-ci.yml / coverage-report.
-        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: npm-tarball
           path: ${{ runner.temp }}/npm-release-dry-run-pack-output/*.tgz
@@ -376,16 +376,16 @@ jobs:
       HASHIRA_NPM_RELEASE_DRY_RUN: '1'
     steps:
       # actions/checkout v4.2.2
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       # D14 self-checkout: composite actions are referenced from .hashira/.
       - name: Checkout library into .hashira
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ github.sha }}
           path: .hashira
           persist-credentials: false
       # actions/setup-node v4.1.0
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: '24'
       - name: Pack the dry-run fixture into a real .tgz
@@ -396,7 +396,7 @@ jobs:
           npm pack --pack-destination "${RUNNER_TEMP}/npm-release-dry-run-pack-output" \
             ./tests/npm-release/dry-run-fixture
       - name: Upload fixture tarball as 'npm-tarball'
-        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: npm-tarball
           path: ${{ runner.temp }}/npm-release-dry-run-pack-output/*.tgz
@@ -439,16 +439,16 @@ jobs:
       # not merely unused.
     steps:
       # actions/checkout v4.2.2
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       # D14 self-checkout: composite actions are referenced from .hashira/.
       - name: Checkout library into .hashira
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ github.sha }}
           path: .hashira
           persist-credentials: false
       # actions/setup-node v4.1.0
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: '24'
       - name: Pack a real (unique-named) tarball — never actually reaches the registry
@@ -481,7 +481,7 @@ jobs:
           npm pack --pack-destination "${RUNNER_TEMP}/npm-release-oidc-test-pack-output" \
             "${RUNNER_TEMP}/npm-release-oidc-test-pkg"
       - name: Upload fixture tarball as 'npm-tarball'
-        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: npm-tarball
           path: ${{ runner.temp }}/npm-release-oidc-test-pack-output/*.tgz
@@ -544,7 +544,7 @@ jobs:
       contents: read
     steps:
       # actions/checkout v4.2.2
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - name: Verify python3 + pyyaml availability
         shell: bash
         run: |
@@ -569,16 +569,16 @@ jobs:
       HASHIRA_FORCE_PRIVATE_NO_GHAS: '1'
     steps:
       # actions/checkout v4.2.2
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       # D14 self-checkout: composite actions reference library from .hashira/
       - name: Checkout library into .hashira
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ github.sha }}
           path: .hashira
           persist-credentials: false
       # actions/setup-node v4.1.0
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: '20'
       - name: Run scan-suite with only actionlint disabled (codeql enabled)
@@ -602,9 +602,9 @@ jobs:
       contents: read
     steps:
       # actions/checkout v4.2.2
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       # actions/setup-node v4.1.0
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: '20'
       - name: Run parse-nupkg-version unit tests
@@ -620,21 +620,21 @@ jobs:
       contents: read
     steps:
       # actions/checkout v4.2.2
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       # D14 self-checkout: composite actions reference library from .hashira/
       - name: Checkout library into .hashira
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ github.sha }}
           path: .hashira
           persist-credentials: false
       # actions/setup-node v4.1.0 (the action's MinVer-detect step shells
       # out to `node` against the shim).
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: '20'
       # actions/setup-dotnet v4.1.0 — reuses iter-1.2-verified pin per D11.
-      - uses: actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68
         with:
           dotnet-version: '8.0.x'
 
@@ -700,7 +700,7 @@ jobs:
       contents: read
     steps:
       # actions/checkout v4.2.2
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - name: Verify python3 + pyyaml availability
         shell: bash
         run: |
@@ -728,10 +728,10 @@ jobs:
       HASHIRA_NUGET_PUSH_DRY_RUN: '1'
     steps:
       # actions/checkout v4.2.2
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       # D14 self-checkout: composite actions reference library from .hashira/
       - name: Checkout library into .hashira
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ github.sha }}
           path: .hashira
@@ -770,10 +770,10 @@ jobs:
       contents: read
     steps:
       # actions/checkout v4.2.2
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       # D14 self-checkout: composite actions reference library from .hashira/
       - name: Checkout library into .hashira
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ github.sha }}
           path: .hashira
@@ -836,10 +836,10 @@ jobs:
       HASHIRA_PAGES_UPLOAD_DRY_RUN: '1'
     steps:
       # actions/checkout v4.2.2
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       # D14 self-checkout: composite actions reference library from .hashira/
       - name: Checkout library into .hashira
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ github.sha }}
           path: .hashira
@@ -877,10 +877,10 @@ jobs:
       HASHIRA_PAGES_UPLOAD_DRY_RUN: '1'
     steps:
       # actions/checkout v4.2.2
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       # D14 self-checkout: composite actions reference library from .hashira/
       - name: Checkout library into .hashira
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ github.sha }}
           path: .hashira
@@ -932,7 +932,7 @@ jobs:
       contents: read
     steps:
       # actions/checkout v4.2.2
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - name: Verify python3 + pyyaml availability
         shell: bash
         run: |
@@ -956,7 +956,7 @@ jobs:
       contents: read
     steps:
       # actions/checkout v4.2.2
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - name: Verify python3 + pyyaml availability
         shell: bash
         run: |
@@ -990,10 +990,10 @@ jobs:
       contents: read
     steps:
       # actions/checkout v4.2.2
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       # D14 self-checkout: composite actions reference library from .hashira/
       - name: Checkout library into .hashira
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ github.sha }}
           path: .hashira
@@ -1059,10 +1059,10 @@ jobs:
       HASHIRA_PAGES_DEPLOY_DRY_RUN: '1'
     steps:
       # actions/checkout v4.2.2
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       # D14 self-checkout: composite actions reference library from .hashira/
       - name: Checkout library into .hashira
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ github.sha }}
           path: .hashira
@@ -1104,7 +1104,7 @@ jobs:
       contents: read
     steps:
       # actions/checkout v4.2.2
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - name: Verify python3 + pyyaml availability
         shell: bash
         run: |
@@ -1123,7 +1123,7 @@ jobs:
       contents: read
     steps:
       # actions/checkout v4.2.2
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - name: Verify python3 + pyyaml availability
         shell: bash
         run: |
@@ -1151,7 +1151,7 @@ jobs:
       contents: read
     steps:
       # actions/checkout v4.2.2
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - name: Run dual-pin lint against the canonical fixture
         shell: bash
         run: |
@@ -1177,7 +1177,7 @@ jobs:
       contents: read
     steps:
       # actions/checkout v4.2.2
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - name: Run dual-pin lint --self-test
         shell: bash
         run: |
@@ -1211,7 +1211,7 @@ jobs:
       contents: read
     steps:
       # actions/checkout v4.2.2
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - name: Verify python3 + pyyaml availability
         shell: bash
         run: |
@@ -1240,7 +1240,7 @@ jobs:
       contents: read
     steps:
       # actions/checkout v4.2.2
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - name: Verify python3 + pyyaml availability
         shell: bash
         run: |
@@ -1275,7 +1275,7 @@ jobs:
       contents: read
     steps:
       # actions/checkout v4.2.2
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - name: Verify python3 + pyyaml availability
         shell: bash
         run: |
@@ -1304,7 +1304,7 @@ jobs:
       contents: read
     steps:
       # actions/checkout v4.2.2
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - name: Verify python3 + pyyaml availability
         shell: bash
         run: |

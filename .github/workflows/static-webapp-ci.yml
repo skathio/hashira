@@ -202,11 +202,11 @@ jobs:
       # persist-credentials:false per iter-4.2 review Minor #2 (defense-in-depth:
       # build_command / test_command run in these jobs and the default git
       # credential could be exfiltrated if the trust contract is violated).
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
       # actions/setup-node v4.1.0
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: ${{ inputs.node_version }}
       - name: Input preflight (no-op for CI half)
@@ -243,17 +243,17 @@ jobs:
       # persist-credentials:false per iter-4.2 review Minor #2 (defense-in-depth:
       # build_command / test_command run in these jobs and the default git
       # credential could be exfiltrated if the trust contract is violated).
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
       # actions/setup-node v4.1.0
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: ${{ inputs.node_version }}
       # Library self-checkout per D14 (persist-credentials:false per iter-2.3 m4).
       - name: Checkout hashira library (D14)
         # actions/checkout v4.2.2
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: skathio/hashira
           ref: ${{ inputs.library_ref }}
@@ -311,17 +311,17 @@ jobs:
       # persist-credentials:false per iter-4.2 review Minor #2 (defense-in-depth:
       # build_command / test_command run in these jobs and the default git
       # credential could be exfiltrated if the trust contract is violated).
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
       # actions/setup-node v4.1.0
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: ${{ inputs.node_version }}
       # Library self-checkout per D14.
       - name: Checkout hashira library (D14)
         # actions/checkout v4.2.2
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: skathio/hashira
           ref: ${{ inputs.library_ref }}
@@ -364,17 +364,17 @@ jobs:
       # persist-credentials:false per iter-4.2 review Minor #2 (defense-in-depth:
       # build_command / test_command run in these jobs and the default git
       # credential could be exfiltrated if the trust contract is violated).
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
       # actions/setup-node v4.1.0 — visibility-detect shim runs via `node`.
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: ${{ inputs.node_version }}
       # Library self-checkout per D14.
       - name: Checkout hashira library (D14)
         # actions/checkout v4.2.2
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: skathio/hashira
           ref: ${{ inputs.library_ref }}
