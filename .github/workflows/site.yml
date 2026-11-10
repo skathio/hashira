@@ -35,7 +35,7 @@ jobs:
   build:
     needs: gate
     # After the approval at `gate`.
-    if: ${{ always() && (needs.gate.result == 'success') }}
+    if: ${{ !cancelled() && (needs.gate.result == 'success') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -52,8 +52,9 @@ jobs:
 
   deploy:
     needs: build
-    # `always()` because a skipped `gate` upstream would otherwise skip this job too.
-    if: ${{ always() && needs.build.result == 'success' }}
+    # `!cancelled()` because a skipped `gate` upstream would otherwise skip this job too; unlike
+    # `always()` it still stops on a cancelled run.
+    if: ${{ !cancelled() && needs.build.result == 'success' }}
     runs-on: ubuntu-latest
     environment:
       name: github-pages
