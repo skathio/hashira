@@ -1,4 +1,7 @@
 # Deploys the project page in site/ to GitHub Pages (https://skathio.github.io/<repo>/).
+#
+# One release, one approval: hashira publishes no package, so this deploy is its release, and it
+# waits at `gate` for the `production` Environment's owner approval before anything builds.
 # site/ is plain static HTML, so there is no build step: the folder is uploaded as it is with
 # hashira's pages-upload and deployed with pages-deploy, at the same pin as the other skathio
 # sites. Deploys only from main; the github-pages environment's branch policy enforces that too.
@@ -19,7 +22,20 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # One release, one approval: this job waits for the `production` Environment's owner approval.
+  gate:
+    if: ${{ true }}
+    runs-on: ubuntu-latest
+    environment: production
+    permissions: {}
+    steps:
+      - name: Owner approval
+        run: echo "Approved in the production environment."
+
   build:
+    needs: gate
+    # After the approval at `gate`.
+    if: ${{ always() && (needs.gate.result == 'success') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -36,6 +52,8 @@ jobs:
 
   deploy:
     needs: build
+    # `always()` because a skipped `gate` upstream would otherwise skip this job too.
+    if: ${{ always() && needs.build.result == 'success' }}
     runs-on: ubuntu-latest
     environment:
       name: github-pages
