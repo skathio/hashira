@@ -1,0 +1,40 @@
+# Asks the org homepage (skathio/skathio.github.io) to rebuild, so this project's tile shows a
+# release or a manifest change within minutes instead of at the next scheduled build.
+# The tile itself is described by .github/homepage.json; see the homepage repo's docs/manifest.md.
+#
+# Token: HOMEPAGE_DISPATCH_TOKEN, a fine-grained token limited to skathio/skathio.github.io with
+# Contents read and write (what repository_dispatch requires). When it is not set, the job
+# notes that and succeeds, and the homepage catches up on its own schedule.
+name: homepage
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/homepage.json'
+      - 'site/mark.svg'
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Ask the homepage to rebuild
+        # A ping is a courtesy: an expired token or an API error must not fail the run.
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.HOMEPAGE_DISPATCH_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN}" ]; then
+            echo "::notice::HOMEPAGE_DISPATCH_TOKEN is not set; the homepage picks this up on its next scheduled build."
+            exit 0
+          fi
+          gh api repos/skathio/skathio.github.io/dispatches \
+            -f event_type=project-released -f "client_payload[repo]=${REPO}"

@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>hashira</title>
+<meta name="description" content="Reusable GitHub Actions workflows and composite actions for npm, NuGet and static-site releases.">
+<link rel="icon" href="mark.svg" type="image/svg+xml">
+<style>:root{--accent:#0f766e;--accent-dark:#5eead4}
+:root{--canvas:#f7f6f2;--surface:#fff;--ink:#1b1d22;--muted:#5b606b;--line:#dedbd2;--code:#efece4;
+--sans:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;--mono:ui-monospace,"SF Mono","Cascadia Code",Menlo,Consolas,monospace;color-scheme:light dark}
+@media (prefers-color-scheme:dark){:root{--canvas:#101216;--surface:#171a20;--ink:#e8e9ec;--muted:#a0a6b1;--line:#2b3039;--code:#1f232b;--accent:var(--accent-dark)}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--canvas);color:var(--ink);font:16px/1.6 var(--sans)}
+a{color:var(--accent)}
+.wrap{max-width:820px;margin:0 auto;padding:0 16px}
+.top{padding:20px 0;font-size:.9rem}
+.top a{color:var(--muted);text-decoration:none}
+.top a:hover{text-decoration:underline}
+header{padding:32px 0 8px;display:flex;gap:20px;align-items:center}
+header img{width:80px;height:80px;flex:none}
+h1{margin:0;font-size:2.2rem;letter-spacing:-.02em}
+.lede{margin:4px 0 0;color:var(--muted);font-size:1.1rem}
+h2{margin:40px 0 12px;font-size:1.25rem}
+pre{margin:0 0 10px;padding:12px 14px;background:var(--code);border:1px solid var(--line);border-radius:10px;overflow-x:auto;font:14px/1.5 var(--mono)}
+.cards{list-style:none;padding:0;margin:0;display:grid;gap:12px;grid-template-columns:repeat(auto-fill,minmax(230px,1fr))}
+.cards li{background:var(--surface);border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:12px;padding:14px 16px}
+.cards b{display:block}
+.cards span{color:var(--muted);font-size:.93rem}
+.links{display:flex;flex-wrap:wrap;gap:8px 20px;padding:0;list-style:none;font-weight:600}
+footer{margin:56px 0 40px;color:var(--muted);font-size:.85rem}
+footer a{color:var(--muted)}</style>
+</head>
+<body>
+<div class="wrap">
+<nav class="top"><a href="https://skathio.github.io/">← skathio</a></nav>
+<header>
+  <img src="mark.svg" alt="">
+  <div><h1>hashira</h1><p class="lede">Reusable GitHub Actions workflows and composite actions for npm, NuGet and static-site releases.</p></div>
+</header>
+<main>
+<h2>Use it</h2>
+<pre><code>jobs:
+  ci:
+    uses: skathio/hashira/.github/workflows/npm-package-ci.yml@&lt;40-char-sha&gt;
+    permissions:
+      contents: read
+      pull-requests: write
+      security-events: write
+    with:
+      library_ref: &#x27;&lt;40-char-sha&gt;&#x27;   # the same SHA as the uses: ref</code></pre>
+<h2>What it carries for you</h2>
+<ul class="cards">
+<li><b>Three flows</b><span>npm package, NuGet package, and a static site on GitHub Pages.</span></li>
+<li><b>Pinned actions</b><span>Every third-party action is pinned to a full commit SHA.</span></li>
+<li><b>Deny-all permissions</b><span>Each job is granted only what it needs.</span></li>
+<li><b>OIDC publishing</b><span>Trusted publishing to npm and nuget.org, with no long-lived tokens.</span></li>
+<li><b>Explicit releases</b><span>A dispatch with a bump picks the version. Nothing is inferred from commit messages.</span></li>
+<li><b>Scan suite</b><span>osv, gitleaks, dependency review, CodeQL and actionlint.</span></li>
+</ul>
+<h2>Read more</h2>
+<ul class="links">
+<li><a href="https://github.com/skathio/hashira/blob/main/docs/usage.md">Usage and pin policy</a></li>
+<li><a href="https://github.com/skathio/hashira/blob/main/docs/flows/npm.md">npm flow</a></li>
+<li><a href="https://github.com/skathio/hashira/blob/main/docs/flows/nuget.md">NuGet flow</a></li>
+<li><a href="https://github.com/skathio/hashira/blob/main/docs/flows/static-webapp.md">Static site flow</a></li>
+<li><a href="https://github.com/skathio/hashira/releases">Releases</a></li>
+<li><a href="https://github.com/skathio/hashira">Code</a></li>
+</ul>
+</main>
+<footer><p>hashira is MIT-licensed. · <a href="https://skathio.github.io/">More skathio projects</a></p></footer>
+</div>
+</body>
+</html>

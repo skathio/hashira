@@ -1,0 +1,48 @@
+# Deploys the project page in site/ to GitHub Pages (https://skathio.github.io/<repo>/).
+# site/ is plain static HTML, so there is no build step: the folder is uploaded as it is with
+# hashira's pages-upload and deployed with pages-deploy, at the same pin as the other skathio
+# sites. Deploys only from main; the github-pages environment's branch policy enforces that too.
+name: site
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'site/**'
+      - '.github/workflows/site.yml'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write   # pages-upload (upload-pages-artifact)
+      pages: write      # pages-upload (upload-pages-artifact)
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          persist-credentials: false
+      - uses: skathio/hashira/.github/actions/pages-upload@e4facc4ca8d8896285931a3b80a1a958584d1a85
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    permissions:
+      pages: write      # deploy-pages
+      id-token: write   # deploy-pages authenticates via OIDC
+    steps:
+      - id: deploy
+        uses: skathio/hashira/.github/actions/pages-deploy@e4facc4ca8d8896285931a3b80a1a958584d1a85

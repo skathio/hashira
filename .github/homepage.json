@@ -1,0 +1,6 @@
+{
+  "name": "hashira",
+  "tagline": "Reusable GitHub Actions workflows and composite actions for npm, NuGet and static-site releases.",
+  "colour": "#0f766e",
+  "image": "site/mark.svg"
+}

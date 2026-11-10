@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="512" height="512" role="img" aria-label="hashira">
+  <title>hashira</title>
+  <!-- Hashira: the pillars a release stands on. Lintel, three columns, base. -->
+  <rect width="64" height="64" rx="14" fill="#0f766e"/>
+  <g fill="#e6f6f3">
+    <rect x="11" y="13" width="42" height="6" rx="2"/>
+    <rect x="16" y="22" width="7" height="21" rx="1.5"/>
+    <rect x="28.5" y="22" width="7" height="21" rx="1.5"/>
+    <rect x="41" y="22" width="7" height="21" rx="1.5"/>
+    <rect x="11" y="46" width="42" height="6" rx="2"/>
+  </g>
+</svg>
