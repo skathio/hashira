@@ -1,7 +1,7 @@
 # Deploys the project page in site/ to GitHub Pages (https://skathio.github.io/<repo>/).
 #
-# One release, one approval: hashira publishes no package, so this deploy is its release, and it
-# waits at `gate` for the `production` Environment's owner approval before anything builds.
+# The merge is the approval: main only takes reviewed pull requests (or an owner), so a push to
+# main that touches site/ deploys with no second, manual approval. github-pages accepts main only.
 # site/ is plain static HTML, so there is no build step: the folder is uploaded as it is with
 # hashira's pages-upload and deployed with pages-deploy, at the same pin as the other skathio
 # sites. Deploys only from main; the github-pages environment's branch policy enforces that too.
@@ -19,20 +19,7 @@ permissions: {}
 
 
 jobs:
-  # One release, one approval: this job waits for the `production` Environment's owner approval.
-  gate:
-    if: ${{ true }}
-    runs-on: ubuntu-latest
-    environment: production
-    permissions: {}
-    steps:
-      - name: Owner approval
-        run: echo "Approved in the production environment."
-
   build:
-    needs: gate
-    # After the approval at `gate`.
-    if: ${{ !cancelled() && (needs.gate.result == 'success') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -49,14 +36,10 @@ jobs:
 
   deploy:
     needs: build
-    # One Pages deploy at a time. On this job only, so a run waiting at `gate` never holds the
-    # queue for the others.
+    # One Pages deploy at a time; a newer run queues behind an older one instead of racing it.
     concurrency:
       group: pages
       cancel-in-progress: false
-    # `!cancelled()` because a skipped `gate` upstream would otherwise skip this job too; unlike
-    # `always()` it still stops on a cancelled run.
-    if: ${{ !cancelled() && needs.build.result == 'success' }}
     runs-on: ubuntu-latest
     environment:
       name: github-pages
