@@ -1,6 +1,11 @@
 {
   "name": "hashira",
-  "tagline": "Reusable GitHub Actions workflows and composite actions for npm, NuGet and static-site releases.",
-  "colour": "#0f766e",
+  "kind": "CI/CD library",
+  "tagline": "Reusable GitHub Actions workflows for npm, NuGet and static sites: pinned, deny-all permissions, OIDC publishing.",
+  "tags": [
+    "GitHub Actions",
+    "OIDC"
+  ],
+  "colour": "#ff6a3d",
   "image": "site/mark.svg"
 }

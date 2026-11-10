@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="512" height="512" role="img" aria-label="skathio">
+  <title>skathio</title>
+  <!-- The org mark: the rune sowilo (ᛊ, an S) in SoMi's red, glowing in a dark disc. -->
+  <defs>
+    <radialGradient id="g" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#2a0a0c"/><stop offset="1" stop-color="#0b0c0f"/></radialGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="1.6" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+  </defs>
+  <circle cx="32" cy="32" r="31" fill="url(#g)"/>
+  <circle cx="32" cy="32" r="27" fill="none" stroke="#b80f0f" stroke-width="2"/>
+  <path d="M26 15L39 27L25 37L38 49" fill="none" stroke="#ff4d4d" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" filter="url(#glow)"/>
+</svg>
