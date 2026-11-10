@@ -17,9 +17,6 @@ on:
 
 permissions: {}
 
-concurrency:
-  group: pages
-  cancel-in-progress: false
 
 jobs:
   # One release, one approval: this job waits for the `production` Environment's owner approval.
@@ -52,6 +49,11 @@ jobs:
 
   deploy:
     needs: build
+    # One Pages deploy at a time. On this job only, so a run waiting at `gate` never holds the
+    # queue for the others.
+    concurrency:
+      group: pages
+      cancel-in-progress: false
     # `!cancelled()` because a skipped `gate` upstream would otherwise skip this job too; unlike
     # `always()` it still stops on a cancelled run.
     if: ${{ !cancelled() && needs.build.result == 'success' }}
