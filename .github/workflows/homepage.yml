@@ -4,8 +4,9 @@
 #
 # Token: HOMEPAGE_DISPATCH_TOKEN, a fine-grained token limited to skathio/skathio.github.io with
 # Contents read and write (what repository_dispatch requires). Keep it as a secret of the
-# `homepage` environment, which only main and release tags can use, so a workflow pushed to any
-# other branch cannot read it. When it is not set, the job notes that and succeeds, and the
+# `homepage` environment, which only main can use, so a workflow pushed to any other branch or
+# tag cannot read it. A release is picked up by the homepage's scheduled build, or at once by
+# running this workflow by hand on main. When it is not set, the job notes that and succeeds, and the
 # homepage catches up on its own schedule. A failed ping warns on the run instead of failing it.
 name: homepage
 
@@ -15,8 +16,6 @@ on:
     paths:
       - '.github/homepage.json'
       - 'site/mark.svg'
-  release:
-    types: [published]
   workflow_dispatch:
 
 permissions: {}
@@ -31,8 +30,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.HOMEPAGE_DISPATCH_TOKEN }}
           REPO: ${{ github.repository }}
-          # A release says so; a manifest or image change, or a manual run, is an update.
-          EVENT: ${{ github.event_name == 'release' && 'project-released' || 'project-updated' }}
+          EVENT: project-updated
         run: |
           set -uo pipefail
           if [ -z "${GH_TOKEN}" ]; then
