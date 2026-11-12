@@ -1,5 +1,5 @@
 # Asks the org homepage (skathio/skathio.github.io) to rebuild, so this project's tile shows a
-# release or a manifest change within minutes instead of at the next scheduled build.
+# manifest or image change within minutes instead of at the next scheduled build.
 # The tile itself is described by .github/homepage.json; see the homepage repo's docs/manifest.md.
 #
 # Token: HOMEPAGE_DISPATCH_TOKEN, a fine-grained token limited to skathio/skathio.github.io with
