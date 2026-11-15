@@ -84,9 +84,9 @@ checks with `gh pr checks <n> --watch`. Read a failure with `gh run view <id> --
 ## Release flow
 
 Releases are cut by hand. Tag `vX.Y.Z` on main, create the GitHub Release (`gh release create`), then roll the major
-tag forward (`git tag -f v2 vX.Y.Z && git push -f origin v2`). `v1` is frozen. The major tags are the only tags that
-are ever force-pushed. See `.claude/skills/release/SKILL.md`. Pushing tags is the maintainer's call: never do it
-unless asked.
+tag `v2` forward to the release commit. `v1` is frozen, and `v2` is the only tag that is ever force-pushed. Follow
+`.claude/skills/release/SKILL.md` for the exact commands. Pushing tags is the maintainer's call: never do it unless
+asked.
 
 The site deploys on every push to main that touches `site/**` (`site.yml`, `github-pages` environment, main only, no
 second approval). `site.yml` pins hashira's own `pages-upload` and `pages-deploy` by SHA.

@@ -23,8 +23,8 @@ pick up the result at once. Do each push step only when the maintainer has asked
    git push origin vX.Y.Z
    gh release create vX.Y.Z --verify-tag --title vX.Y.Z --generate-notes
    ```
-4. Roll the major tag. This is the only allowed force-push in this repo, and it applies only to `v1` and `v2`. `v1` is
-   frozen:
+4. Roll the major tag. This is the only allowed force-push in this repo, and it applies to `v2` only. `v1` is frozen
+   and is never moved:
    ```sh
    git tag -f v2 'vX.Y.Z^{commit}' && git push -f origin v2
    ```
