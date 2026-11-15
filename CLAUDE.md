@@ -104,6 +104,9 @@ describe the screenshots in the PR. Follow `.claude/skills/visual-test-site/SKIL
 - `.claude/` is gitignored except `.claude/skills/`. Local settings stay untracked. `.somi/` is gitignored too.
 - `pages-deploy` refuses `pull_request` events on purpose (the B8 guard). The PR run of
   `pages-deploy-smoke-non-pull-request-dry-run` reports the guard firing, and that is correct.
-- CI runs the Node tests on Node 20 (`setup-node`). Keep test code compatible with Node 20, even if your local Node is newer.
+- CI runs the unit tests on Node 20 and the `npm-release` dry-run and OIDC jobs on Node 24 (`setup-node`). Keep test
+  and `lib/` code compatible with Node 20, even if your local Node is newer.
+- A hook outside this repo can leave a literal `${CLAUDE_PROJECT_DIR}/` directory with an audit log in the repo root.
+  It is gitignored. Never commit it, because it contains local paths.
 - Editing an input or output means editing three things: the YAML, its `docs/flows/*.md` table, and possibly the
   shape-validate expectations. Change all three in one PR.
