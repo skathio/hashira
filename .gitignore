@@ -1,4 +1,8 @@
 .somi
-.claude
+# Local Claude settings stay untracked; repo skills are shared.
+.claude/*
+!.claude/skills/
 __pycache__/
 *.pyc
+# A hook outside this repo writes here when it does not expand the variable; local paths, never commit.
+/${CLAUDE_PROJECT_DIR}/
