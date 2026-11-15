@@ -1,4 +1,6 @@
 .somi
-.claude
+# Local Claude settings stay untracked; repo skills are shared.
+.claude/*
+!.claude/skills/
 __pycache__/
 *.pyc
