@@ -186,7 +186,7 @@ jobs:
       # actions/checkout v4.2.2 — consumer's tree.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       # actions/setup-node v4.1.0
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: ${{ inputs.node_version }}
       - name: Secret preflight (no-op for CI half)
@@ -233,7 +233,7 @@ jobs:
           path: .hashira
           persist-credentials: false
       # actions/setup-node v4.1.0 — needed for `npm pack`/`npm pkg set` below.
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: ${{ inputs.node_version }}
       - name: Gather tag list
@@ -297,7 +297,7 @@ jobs:
         # actions/upload-artifact v4.4.3 — same pin already verified and in
         # use at .github/actions/coverage-report/action.yml; reused here
         # rather than introducing a new pin to the verified-pin set.
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           # Stable, documented name: Phase 3's CD job downloads this exact
           # name to publish "the same-run artifact" (sdd.md §8's open item;
@@ -359,7 +359,7 @@ jobs:
         with:
           fetch-depth: 0
       # actions/setup-node v4.1.0
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: ${{ inputs.node_version }}
       - name: Run commitlint over PR range (non-blocking)
@@ -512,7 +512,7 @@ jobs:
       # actions/checkout v4.2.2 — consumer's tree.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       # actions/setup-node v4.1.0
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: ${{ inputs.node_version }}
       # Library self-checkout per D14: ./.hashira/ holds hashira at library_ref.
@@ -564,7 +564,7 @@ jobs:
       # actions/checkout v4.2.2 — consumer's tree.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       # actions/setup-node v4.1.0 — visibility-detect shim runs via `node`.
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: ${{ inputs.node_version }}
       # Library self-checkout per D14.
