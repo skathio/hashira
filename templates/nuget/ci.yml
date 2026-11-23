@@ -1,0 +1,53 @@
+# .github/workflows/ci.yml: the hashira NuGet package flow.
+# Pull requests and pushes run CI. To release, run this workflow with a bump:
+#   gh workflow run ci.yml -f bump=patch
+name: ci
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Cut a release: patch, minor or major. Empty runs CI only."
+        type: choice
+        options: ['', patch, minor, major]
+      seed_version:
+        description: "Baseline for the first release when no stable tag exists, e.g. 0.0.0."
+        type: string
+
+permissions: {}
+
+jobs:
+  ci:
+    uses: skathio/hashira/.github/workflows/nuget-package-ci.yml@v3
+    permissions:
+      contents: read # check out the repository
+      pull-requests: write # coverage comment on the pull request
+      security-events: write # upload CodeQL results when CodeQL is enabled
+  publish:
+    needs: ci
+    if: needs.ci.outputs.resolved_version != ''
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: write # create the release tag and GitHub Release
+      pull-requests: read # release notes read the merged pull requests
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      # actions/setup-dotnet v4.1.0
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68
+        with:
+          dotnet-version: '8.0.x'
+      # actions/download-artifact v4.3.0: the .nupkg the ci job packed
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: nuget-package
+          path: ${{ runner.temp }}/nupkg
+      - uses: skathio/hashira/.github/actions/nuget-push@v3
+        with:
+          nupkg_path: ${{ runner.temp }}/nupkg/*.nupkg
+          version: ${{ needs.ci.outputs.resolved_version }}
+          auth: token
+          api_key: ${{ secrets.NUGET_API_KEY }}

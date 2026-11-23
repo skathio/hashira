@@ -1,7 +1,7 @@
 # npm package flow — adoption walk-through
 
 > **Audience**: a consumer adopting `skathio/hashira` for an npm package repo.
-> **Scope**: copy-paste-ready CI + Publish caller workflow templates, input
+> **Scope**: the copy-paste-ready caller workflow template, input
 > tables, OIDC trusted-publisher onboarding, `production` Environment setup,
 > common failure modes.
 > **Status**: derived directly from `.github/workflows/npm-package-ci.yml`
@@ -54,12 +54,18 @@ new resolver output (D8's one-scalar `version` output is untouched); it is
 purely a CD-composite-side flag change. See
 [`../usage.md`](../usage.md#release-notes) for the cross-cutting framing.
 
-## 1. CI caller workflow template
+## 1. Caller workflow template
 
-Copy this into `.github/workflows/ci.yml` in your npm package repo:
+Copy this into `.github/workflows/ci.yml` in your npm package repo. It is
+the whole caller: one file, a `ci` job that calls `npm-package-ci.yml` and a
+gated `publish` job that runs the `npm-release` composite action. The same
+file is [`templates/npm/ci.yml`](../../templates/npm/ci.yml), and a lint
+keeps the two identical.
 
 ```yaml
-# .github/workflows/ci.yml
+# .github/workflows/ci.yml: the hashira npm package flow.
+# Pull requests and pushes run CI. To release, run this workflow with a bump:
+#   gh workflow run ci.yml -f bump=patch
 name: ci
 on:
   pull_request:
@@ -68,102 +74,83 @@ on:
   workflow_dispatch:
     inputs:
       bump:
-        description: "Set to cut a release: patch | minor | major. Leave empty for a routine CI run."
+        description: "Cut a release: patch, minor or major. Empty runs CI only."
         type: choice
         options: ['', patch, minor, major]
-        default: ''
       seed_version:
-        description: "Bare semver baseline (e.g. '0.0.0'). Only needed for the first release / no prior stable tag."
+        description: "Baseline for the first release when no stable tag exists, e.g. 0.0.0."
         type: string
-        default: ''
 
-# Deny-all default; each job grants what it needs.
 permissions: {}
 
 jobs:
   ci:
-    # Pin to a SHA for reproducible builds (recommended), or @v2 for the
-    # rolling tag. NEVER pin to @main — see docs/usage.md "Pin policy".
-    uses: skathio/hashira/.github/workflows/npm-package-ci.yml@<40-char-sha>
-    # Per-job grants MUST mirror the matrix below — reusable workflows
-    # can only narrow the caller's grants, not broaden them.
+    uses: skathio/hashira/.github/workflows/npm-package-ci.yml@v3
     permissions:
-      contents: read
-      pull-requests: write       # commitlint sticky comment + coverage report
-      security-events: write     # CodeQL (when scan_disable enables it)
-    with:
-      node_version: '20'
-      test_command: 'npm test'
-      coverage_path: 'coverage/lcov.info'
-      # scan_disable defaults to 'codeql,actionlint'. Pass '' to enable
-      # everything; pass a CSV to disable specific scans.
-      # scan_disable: ''
-      library_ref: '<40-char-sha>'  # MUST be the SAME SHA as @<…> above.
-      bump: ${{ inputs.bump }}
-      seed_version: ${{ inputs.seed_version }}
-```
-
-`bump`/`seed_version` are passed straight through to the CI workflow's
-`version` job, which only runs when `bump` is non-empty (every routine
-PR/push run leaves it empty and is unaffected). The maintainer triggers a
-release via `gh workflow run ci.yml -f bump=minor` (or the Actions UI's "Run
-workflow" form).
-
-## 2. Publish caller workflow template
-
-The publish step is a **composite action (`npm-release`) called from a job
-in your own `ci.yml`** — NOT a reusable workflow. This is required: npm
-OIDC trusted publishing validates the OIDC token's `job_workflow_ref` claim
-against the trusted-publisher's registered "Workflow filename," and a job
-running inside a `workflow_call`-invoked reusable workflow carries the
-*reusable workflow's* path as that claim — which can never match your
-`ci.yml`. A composite action runs inline in *your* job's context, so
-the claim matches and OIDC works (D2's architectural spine — see
-[`../usage.md`](../usage.md#gate-model)).
-
-Because the gated `publish` job lives in the **same caller file** as `ci`
-(linked via `needs:`), the CD job reads the resolved version straight off
-the CI job's output — `needs.<job-id>.outputs.resolved_version` — there is
-nothing to recompute. Do **not** wire this as a separate `workflow_run`-
-triggered file — that is exactly the cross-run secret-exposure shape v2
-avoids (see [`../usage.md`](../usage.md#not-workflow_run)). Append this job
-to the same `ci.yml` file from §1:
-
-```yaml
-# .github/workflows/ci.yml (continued — same file as §1)
+      contents: read # check out the repository
+      pull-requests: write # commitlint and coverage comments on the pull request
+      security-events: write # upload CodeQL results when CodeQL is enabled
   publish:
     needs: ci
-    if: ${{ inputs.bump != '' }}
+    if: needs.ci.outputs.resolved_version != ''
     runs-on: ubuntu-latest
-    environment: production   # single gate; configure >=1 required reviewer (see §7)
+    environment: production
     permissions:
-      id-token: write       # npm OIDC trusted-publishing token exchange (auth: oidc/auto)
-      contents: write        # gh release create tags the commit
-      pull-requests: read    # --generate-notes reads merged-PR metadata (read-only)
+      contents: write # create the release tag and GitHub Release
+      id-token: write # npm trusted publishing exchanges an OIDC token
+      pull-requests: read # release notes read the merged pull requests
     steps:
-      - uses: actions/checkout@<sha>  # v4.2.2
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: skathio/hashira/.github/actions/npm-release@v3
         with:
-          persist-credentials: true  # REQUIRED: gh release create needs git
-                                      # credentials on this job. checkout's default,
-                                      # but set it explicitly — a consumer who
-                                      # hardens with persist-credentials:false gets
-                                      # a SILENT tag/release failure AFTER publish.
-      - uses: skathio/hashira/.github/actions/npm-release@<40-char-sha-or-v2>
-        with:
-          version: ${{ needs.ci.outputs.resolved_version }}  # D8 — consumed, not recomputed
-          # auth defaults to 'auto'. Use 'oidc' once trusted publishing is
-          # confirmed working (no silent downgrade); 'token' to opt out of
-          # OIDC entirely.
-          # auth: oidc
-          # Only if auth=token, or as the auth=auto fallback. This is a
-          # declared composite-action INPUT (with:), not an env var —
-          # npm-release never reads secrets.*/env.* for the token, only
-          # inputs.npm_token.
-          # npm_token: ${{ secrets.NPM_TOKEN }}
+          version: ${{ needs.ci.outputs.resolved_version }}
 ```
 
-The `ci` job (§1) is the gate: `publish` only runs after it passes, and only
-when `bump` was set on the dispatch. One `production` approval per release.
+- **Pin.** `@v3` follows the v3 major tag. Pin a 40-character commit SHA
+  instead for reproducible builds; never pin `@main` (see
+  [`../usage.md`](../usage.md#pin-policy)). The CI workflow checks its
+  composite actions out at the commit your `uses:` ref resolved to, so the
+  ref decides all the library code the run executes.
+- **Release.** A routine pull request or push leaves `bump` empty: no
+  version is resolved and `publish` is skipped. Run the workflow with
+  `bump` set (`gh workflow run ci.yml -f bump=minor`, or the Actions UI's
+  "Run workflow" form) to cut a release. The CI workflow reads `bump` and
+  `seed_version` from this dispatch by itself, so the `ci` job does not
+  forward them; a value passed with `with:` wins over the dispatch input.
+- **Optional inputs.** Every CI input has a default (see §3). Add a `with:`
+  block to the `ci` job only for what you change, for example
+  `coverage_path` or `quality_level`.
+
+## 2. Why publish is a job in your own file
+
+The publish step is a **composite action (`npm-release`) called from a job
+in your own `ci.yml`**, not a reusable workflow. npm OIDC trusted publishing
+validates the OIDC token's `job_workflow_ref` claim against the
+trusted-publisher's registered "Workflow filename", and a job running
+inside a `workflow_call`-invoked reusable workflow carries the *reusable
+workflow's* path as that claim, which can never match your `ci.yml`. A
+composite action runs inline in *your* job's context, so the claim matches
+(see [`../usage.md`](../usage.md#gate-model)).
+
+Because `publish` lives in the same file as `ci` (linked by `needs:`), it
+reads the resolved version straight off the CI job's output,
+`needs.ci.outputs.resolved_version`; there is nothing to recompute. Do
+**not** wire it as a separate `workflow_run`-triggered file: that is the
+cross-run secret-exposure shape this library avoids (see
+[`../usage.md`](../usage.md#not-workflow_run)).
+
+`npm-release` authenticates with `auth: auto` by default: npm OIDC trusted
+publishing first (the reason for `id-token: write`), then `npm_token` when
+you pass one, for example `npm_token: ${{ secrets.NPM_TOKEN }}`. Set
+`auth: oidc` once trusted publishing works (no fallback), or `auth: token`
+to opt out of OIDC (see §6). `actions/checkout` keeps its default
+`persist-credentials: true`: `gh release create` needs those credentials,
+and turning them off makes the tag and Release step fail after the publish
+succeeded.
+
+The `ci` job is the gate: `publish` only runs after it passes, and only
+when a version was resolved. One `production` approval per release.
 
 ## 3. Input table
 
@@ -175,19 +162,21 @@ field-by-field against the actual shipped YAML.
 
 | Input | Type | Default | Meaning |
 |-------|------|---------|---------|
-| `node_version` | string | `"20"` | Node major to install via `actions/setup-node` before lint/test/scan/coverage. |
-| `test_command` | string | `"npm test"` | Shell command that runs the consumer's tests. **Trusted input (raw-shell sink per D10d)** — do NOT pass values derived from PR titles, issue bodies, branch names, or other externally controlled context. |
-| `coverage_path` | string | `"coverage/lcov.info"` | Path to the lcov coverage file produced by `test_command`. Consumed by `coverage-report`. |
+| `node_version` | string | `"20"` | Node major to install via `actions/setup-node`. Trusted input. |
+| `test_command` | string | `"npm test"` | Shell command that runs the consumer's tests. **Trusted input**: it runs as raw shell, so do NOT pass values derived from PR titles, issue bodies, branch names, or other externally controlled context. |
+| `coverage_path` | string | `""` | Path to the coverage file the tests write. Empty uses the flow's standard path: `coverage/lcov.info` for npm and static-webapp, `coverage/cobertura.xml` for NuGet. Consumed by `coverage-report`, which runs inside the `test` job. Trusted input. |
 | `scan_disable` | string | `"codeql,actionlint"` | Comma-separated list of scans to skip (D10c). Pass `""` to enable everything. Values: `codeql`, `osv`, `gitleaks`, `dependency-review`, `actionlint`. |
-| `library_ref` | string | _(required, no default)_ | SHA, tag, or branch of `skathio/hashira` checked out into `.hashira/` for in-repo composite actions (D9/D14). **Required** — every caller must pin it explicitly. PIN TO A SHA for reproducible builds; see the dual-pin invariant in [`../usage.md`](../usage.md#the-library_ref-dual-pin-invariant). |
-| `bump` | string | `""` | One of `patch`\|`minor`\|`major`. Optional — leave empty for routine PR/push CI runs that aren't cutting a release. When set, the `version` job resolves the next version, surfaces it in the run summary, and stamps it into a packed tarball (D1/D8). |
-| `seed_version` | string | `""` | Bare semver baseline (e.g. `"0.0.0"`) for a major/initial release with no prior stable tag (FR-3). Passed through to `version-resolver` unchanged; ignored when a stable tag already exists or `bump` is empty. D14: the chosen `bump` still applies arithmetic **on top of** the seed — it is not published literally. |
+| `bump` | string | `""` | One of `patch`\|`minor`\|`major`. Empty falls back to the caller's `workflow_dispatch` input `bump`; a value passed with `with:` wins. When neither is set, as on routine pull_request and push runs, no release is cut. When set, the `version` job resolves the next version, shows it in the run summary and stamps it into the packed release artifact, never into the checked-out tree. |
+| `seed_version` | string | `""` | Bare semver baseline (e.g. `"0.0.0"`) for a first release with no prior stable tag. Empty falls back to the caller's `workflow_dispatch` input `seed_version`; a value passed with `with:` wins. Passed to `version-resolver` unchanged; ignored when a stable tag already exists or no bump is set. The bump still applies **on top of** the seed: the seed itself is not published. |
+| `quality_gate` | boolean | `true` | Run SoMi's quality gate (the `quality-gate` job) on what a pull request changes. `false` skips the job. The gate runs only on `pull_request` events; on `push` and `workflow_dispatch` it passes and writes "skipped: quality gate runs on pull requests" to the job summary. |
+| `quality_level` | string | `"strict"` | SoMi quality level for the gate: exactly `"strict"`, `"standard"` or `"relaxed"`. Any other value, including `""`, fails the `setup` job with an error naming the three. |
 
 ### CI output (`npm-package-ci.yml`)
 
 | Output | Meaning |
 |--------|---------|
-| `resolved_version` | The resolved, validated bare semver string (e.g. `"1.3.0"`, no `v` prefix). Empty when `bump` was not provided. The workflow's **only** output (D8) — there is no second output for the `v`-prefixed tag form (derive it yourself: `v${{ needs.ci.outputs.resolved_version }}`) or for the bump kind (already your own dispatch input). |
+| `resolved_version` | The resolved, validated bare semver string (e.g. `"1.3.0"`, no `v` prefix). Empty when `bump` was not provided. The workflow's **only** version output, so the CI-to-CD boundary stays one scalar — there is no second output for the `v`-prefixed tag form (derive it yourself: `v${{ needs.ci.outputs.resolved_version }}`) or for the bump kind (already your own dispatch input). |
+| `library_sha` | The `skathio/hashira` commit this run checked its composite actions out at. The workflow resolves it itself from its own commit (`job.workflow_sha`), so it always equals the commit your `uses:` ref resolved to. There is no input to set it. |
 
 ### Publish inputs (`npm-release` composite action)
 
@@ -316,7 +305,7 @@ Setup (one-time, on npmjs.com):
 3. Add a trusted publisher with these values:
    - **GitHub organization or user**: `<your-github-org-or-user>`
    - **Repository name**: `<your-package-repo-name>`
-   - **Workflow filename**: `ci.yml` (matches the file you created in §1/§2
+   - **Workflow filename**: `ci.yml` (matches the file you created in §1
      — CI and the gated `publish` job live in the same caller file)
    - **Environment name** (optional but recommended): `production` (matches
      the `environment:` on your `publish` job)
@@ -467,13 +456,13 @@ generated by a different heuristic. See "What changed from v1" above and
   `ENEEDAUTH`**. On the official registry with `auth: oidc` (or `auto` with
   no `npm_token`), the OIDC token request fails and npm has no credential at
   all → npm's own `ENEEDAUTH` at the publish step. Fix: grant
-  `id-token: write` (it's in the §2 template).
+  `id-token: write` (it's in the §1 template).
 
 - **`persist-credentials: false` (or omitted) on checkout → tag/Release
   creation fails after a successful publish**. `gh release create` needs
   git credentials on the `publish` job (the composite's tag/Release step
   runs `gh` against the checked-out repo). Use `persist-credentials: true`
-  (in the §2 template) — the publish itself can succeed while the
+  (the §1 template keeps checkout's default) — the publish itself can succeed while the
   tag/Release step fails silently afterward if this is missing.
 
 - **Node < 22.14 or npm < 11.5.1 → action fails fast on the OIDC floor

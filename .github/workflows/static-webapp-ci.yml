@@ -3,7 +3,7 @@
 #
 # Runs build + test + scan-suite + coverage-report and uploads the
 # `github-pages` artifact in the SAME job as build (see "Build artifact
-# handoff" below). The Deploy half lives in `static-webapp-deploy.yml` and
+# handoff" below). The Deploy half is the `pages-deploy` composite action and
 # consumes the same-run artifact via the consumer's `deploy: needs: ci`
 # edge (D12) — no `workflow_run` trigger, no cross-run artifact lookup.
 #
@@ -20,6 +20,7 @@
 #                       see "Coverage report handoff" below)
 #   - scan-suite      : contents:read, security-events:write (CodeQL),
 #                       pull-requests:read (dependency-review on PR)
+#   - quality-gate    : contents:read
 #
 # Reusable workflows can only NARROW the caller's grants, never broaden.
 # Consumers must mirror this matrix at their caller job's `permissions:`
@@ -90,7 +91,6 @@
 #   - test_command
 #   - coverage_path
 #   - scan_disable
-#   - library_ref
 #
 # iter-4.2 security review m4: because `build_command` runs in the same
 # job that holds `id-token: write`, a consumer who violates this trust
@@ -127,26 +127,32 @@
 # with an inline version comment. Pins reused from iter 1.2 / 2.1 / 2.2
 # (verified upstream against the actions' release tags).
 #
-# ## Runtime contract: library-self-checkout via `library_ref` (D14)
+# ## Runtime contract: library self-checkout at the workflow's own commit
 #
-# Same constraint and resolution as the other reusable workflows in this
-# library: GitHub's `uses:` keyword does NOT permit expressions in the
-# `@<ref>` portion (workflow-load-time parse). Every job that consumes
-# an in-repo composite action first checks out `skathio/hashira` at
-# `${{ inputs.library_ref }}` into the reserved subdirectory `.hashira/`
-# with `persist-credentials: false` (iter-2.3 security review m4). The
-# composite-action `uses:` refs are then literal local paths
-# `uses: ./.hashira/.github/actions/<name>` (no expressions, satisfies
-# the load-time parser). The `library_ref` is substituted at runtime
-# through `actions/checkout`'s `ref:` input.
+# In-repo composite actions live at `.github/actions/<name>` in
+# `skathio/hashira`. A consumer's `$GITHUB_WORKSPACE` holds the consumer's
+# files, not the library's, and GitHub's `uses:` keyword does not accept
+# expressions in its `@<ref>` portion. So every job that runs one of these
+# actions first checks out `skathio/hashira` into the reserved
+# subdirectory `.hashira/` (`persist-credentials: false`) and then calls it
+# by the literal local path `uses: ./.hashira/.github/actions/<name>`.
 #
-# `library_ref` is a REQUIRED input (no default) as of v2 phase 1
-# iteration 1.1 — see decisions.md D9 / phases/01-naming-unification.md.
-# v1's default ('v1', with a stale comment claiming 'main') was a
-# consumer-visible contract mismatch; rather than pick a new default to
-# defend, every caller must now pin explicitly. This is a
-# breaking-contract change for any v1 caller relying on the implicit
-# default; callers MUST pass `library_ref` explicitly going forward.
+# The checkout's ref is the commit this workflow file was itself called
+# at, so a caller pinned at `@<sha>` or `@v3` runs composite actions from
+# that same commit and has no second ref to keep in sync. The `setup` job
+# reads it from `job.workflow_sha`, which GitHub documents as the commit of
+# the workflow file that defines the current job: for a reusable workflow,
+# the called file, not the caller. `github.sha` and `github.workflow_sha`
+# name the caller's commit and must never be used for this checkout.
+# `setup` fails when the value is not a 40-character SHA (GitHub
+# Enterprise Server does not provide `job.workflow_sha`), checks the
+# library out at it, and publishes the commit it actually checked out as
+# its `library_sha` output. Every other job checks out
+# `needs.setup.outputs.library_sha`, and the workflow exposes the same
+# value as its `library_sha` output.
+#
+# Trade-off: ~1–2s overhead per job for the library checkout, the cost of
+# the literal-`uses:` constraint.
 
 name: static-webapp-ci
 
@@ -154,7 +160,7 @@ on:
   workflow_call:
     inputs:
       node_version:
-        description: "Node major to install via actions/setup-node. Default '20'. Trusted input — see `## Trust boundary`."
+        description: "Node major to install via actions/setup-node. Default '20'. Trusted input."
         required: false
         type: string
         default: "20"
@@ -169,24 +175,34 @@ on:
         type: string
         default: ""
       test_command:
-        description: "Shell command that runs the consumer's tests. Default 'npm test'. Trusted input (raw-shell sink per D10d)."
+        description: "Shell command that runs the consumer's tests. Default 'npm test'. Trusted input: it runs as raw shell, so do NOT pass values derived from PR titles, issue bodies, branch names, or other externally controlled context."
         required: false
         type: string
         default: "npm test"
       coverage_path:
-        description: "Path to the lcov coverage file produced by test_command. Default 'coverage/lcov.info'. Trusted input."
+        description: "Path to the coverage file the tests write. Empty (default) uses the flow's standard path: 'coverage/lcov.info' for npm and static-webapp, 'coverage/cobertura.xml' for NuGet. Trusted input."
         required: false
         type: string
-        default: "coverage/lcov.info"
+        default: ""
       scan_disable:
         description: "Comma-separated list of scans to skip (D10c). Default 'codeql,actionlint' — pass '' to enable all. Values: codeql,osv,gitleaks,dependency-review,actionlint."
         required: false
         type: string
         default: "codeql,actionlint"
-      library_ref:
-        description: "SHA, tag, or branch of skathio/hashira to check out for in-repo composite actions (D14). REQUIRED — no default (v2 phase 1 iteration 1.1). PIN TO A SHA for reproducible consumer builds."
-        required: true
+      quality_gate:
+        description: "Run SoMi's quality gate on what a pull request changes. Default true; false skips the quality-gate job. The gate runs only on pull_request events; on other events it passes and says so in the job summary."
+        required: false
+        type: boolean
+        default: true
+      quality_level:
+        description: "SoMi quality level for the gate: exactly 'strict' (default), 'standard' or 'relaxed'. Any other value, including '', fails the setup job."
+        required: false
         type: string
+        default: "strict"
+    outputs:
+      library_sha:
+        description: "The skathio/hashira commit this run checked its composite actions out at: the commit this workflow file was called at."
+        value: ${{ jobs.setup.outputs.library_sha }}
 
 # Deny-all baseline; jobs grant the minimum.
 permissions: {}
@@ -197,6 +213,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    outputs:
+      # The hashira commit every job checks out into .hashira/.
+      library_sha: ${{ steps.library.outputs.sha }}
     steps:
       # actions/checkout v4.2.2 — consumer's tree.
       # persist-credentials:false per iter-4.2 review Minor #2 (defense-in-depth:
@@ -223,6 +242,57 @@ jobs:
           # spec §8. We do emit a summary line naming the resolved inputs
           # so the consumer can verify their wiring at a glance.
           echo "static-webapp-ci: node_version='${NODE_VERSION}' build_command='${BUILD_COMMAND}' output_dir='${OUTPUT_DIR:-<autodetect>}'" >> "${GITHUB_STEP_SUMMARY}"
+      # A misconfigured level fails here, visibly, even when the gate is off.
+      - name: Validate quality_level
+        shell: bash
+        env:
+          QUALITY_LEVEL: ${{ inputs.quality_level }}
+        run: |
+          set -euo pipefail
+          case "${QUALITY_LEVEL}" in
+            strict|standard|relaxed) ;;
+            *)
+              echo "::error::static-webapp-ci: quality_level must be exactly 'strict', 'standard' or 'relaxed', got ${QUALITY_LEVEL@Q}."
+              exit 1
+              ;;
+          esac
+      # Resolve the commit THIS workflow file was called at (see "Runtime
+      # contract" in the header) and check the library out at it.
+      - name: Resolve hashira's own commit
+        id: self
+        shell: bash
+        env:
+          # The called workflow file's commit, never the caller's.
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${WORKFLOW_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::static-webapp-ci: job.workflow_sha is '${WORKFLOW_SHA}', not a 40-character commit SHA, so hashira's composite actions cannot be checked out at the commit this workflow was called at (GitHub Enterprise Server does not provide job.workflow_sha)."
+            exit 1
+          fi
+          echo "sha=${WORKFLOW_SHA}" >> "${GITHUB_OUTPUT}"
+      - name: Checkout hashira library at its own commit
+        # actions/checkout v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: skathio/hashira
+          ref: ${{ steps.self.outputs.sha }}
+          path: .hashira
+          persist-credentials: false
+      - name: Confirm the checked-out library commit
+        id: library
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ steps.self.outputs.sha }}
+        run: |
+          set -euo pipefail
+          actual="$(git -C .hashira rev-parse HEAD)"
+          if [[ "${actual}" != "${EXPECTED_SHA}" ]]; then
+            echo "::error::static-webapp-ci: .hashira is at ${actual}, expected ${EXPECTED_SHA}."
+            exit 1
+          fi
+          echo "sha=${actual}" >> "${GITHUB_OUTPUT}"
+          echo "static-webapp-ci: hashira composite actions checked out at ${actual}" >> "${GITHUB_STEP_SUMMARY}"
 
   build-and-upload:
     name: build-and-upload
@@ -250,13 +320,13 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: ${{ inputs.node_version }}
-      # Library self-checkout per D14 (persist-credentials:false per iter-2.3 m4).
-      - name: Checkout hashira library (D14)
+      # Library self-checkout at this workflow's own commit (see header).
+      - name: Checkout hashira library at its own commit
         # actions/checkout v4.2.2
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: skathio/hashira
-          ref: ${{ inputs.library_ref }}
+          ref: ${{ needs.setup.outputs.library_sha }}
           path: .hashira
           persist-credentials: false
       - name: Install dependencies
@@ -318,13 +388,13 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: ${{ inputs.node_version }}
-      # Library self-checkout per D14.
-      - name: Checkout hashira library (D14)
+      # Library self-checkout at this workflow's own commit (see header).
+      - name: Checkout hashira library at its own commit
         # actions/checkout v4.2.2
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: skathio/hashira
-          ref: ${{ inputs.library_ref }}
+          ref: ${{ needs.setup.outputs.library_sha }}
           path: .hashira
           persist-credentials: false
       # See the identical step + comment in build-and-upload above — same
@@ -338,14 +408,14 @@ jobs:
         uses: ./.hashira/.github/actions/run-tests-js
         with:
           command: ${{ inputs.test_command }}
-          coverage_path: ${{ inputs.coverage_path }}
+          coverage_path: ${{ inputs.coverage_path || 'coverage/lcov.info' }}
       # Report coverage IN THIS JOB — see "Coverage report handoff" above.
       # run-tests-js just standardized the coverage file at `coverage_path`
       # in this workspace, so it is present here.
       - name: Report coverage
         uses: ./.hashira/.github/actions/coverage-report
         with:
-          coverage_path: ${{ inputs.coverage_path }}
+          coverage_path: ${{ inputs.coverage_path || 'coverage/lcov.info' }}
 
   scan-suite:
     name: scan-suite
@@ -371,16 +441,53 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: ${{ inputs.node_version }}
-      # Library self-checkout per D14.
-      - name: Checkout hashira library (D14)
+      # Library self-checkout at this workflow's own commit (see header).
+      - name: Checkout hashira library at its own commit
         # actions/checkout v4.2.2
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: skathio/hashira
-          ref: ${{ inputs.library_ref }}
+          ref: ${{ needs.setup.outputs.library_sha }}
           path: .hashira
           persist-credentials: false
       - name: Run scan-suite
         uses: ./.hashira/.github/actions/scan-suite
         with:
           scan_disable: ${{ inputs.scan_disable }}
+
+  # SoMi's quality check on what a pull request changes. On by default;
+  # `quality_gate: false` skips this job. On push and workflow_dispatch the
+  # action passes and writes "skipped: quality gate runs on pull requests".
+  quality-gate:
+    name: quality-gate
+    needs: setup
+    if: ${{ inputs.quality_gate }}
+    runs-on: ubuntu-latest
+    permissions:
+      # Read the consumer's tree. Violations go to the job summary and to
+      # annotations, which need no grant.
+      contents: read
+    steps:
+      # actions/checkout v4.2.2 — consumer's tree. Full history so the pull
+      # request's base commit is present without a credentialed fetch.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # actions/setup-node v4.1.0 — the gate installs and runs SoMi with npm/node.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: ${{ inputs.node_version }}
+      # Library self-checkout at this workflow's own commit (see header).
+      - name: Checkout hashira library at its own commit
+        # actions/checkout v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: skathio/hashira
+          ref: ${{ needs.setup.outputs.library_sha }}
+          path: .hashira
+          persist-credentials: false
+      - name: Run the SoMi quality gate
+        uses: ./.hashira/.github/actions/quality-gate
+        with:
+          level: ${{ inputs.quality_level }}

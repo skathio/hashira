@@ -1,0 +1,109 @@
+# .github/workflows/ci.yml: the hashira NuGet package flow, as a fixture.
+# Generated from hashira's tests/consumers/nuget/. Edit it there, not here.
+#
+# This is templates/nuget/ci.yml with only these differences, which hashira's
+# fixture-diff lint (tests/shape-lints/fixture-diff.py) enforces:
+#   - the push goes to a BaGetter service container on localhost with a
+#     throwaway API key, so nothing reaches nuget.org;
+#   - the services: block that runs that BaGetter;
+#   - the production environment has no required reviewer (set in the
+#     fixture repo's settings, not here);
+#   - verification steps after the nuget-push step.
+name: ci
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Cut a release: patch, minor or major. Empty runs CI only."
+        type: choice
+        options: ['', patch, minor, major]
+      seed_version:
+        description: "Baseline for the first release when no stable tag exists, e.g. 0.0.0."
+        type: string
+
+permissions: {}
+
+jobs:
+  ci:
+    uses: skathio/hashira/.github/workflows/nuget-package-ci.yml@v3
+    permissions:
+      contents: read # check out the repository
+      pull-requests: write # coverage comment on the pull request
+      security-events: write # upload CodeQL results when CodeQL is enabled
+  publish:
+    needs: ci
+    if: needs.ci.outputs.resolved_version != ''
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: write # create the release tag and GitHub Release
+      pull-requests: read # release notes read the merged pull requests
+    services:
+      # A throwaway NuGet feed that lives only as long as this job.
+      # bagetter/bagetter 1.6.5
+      bagetter:
+        image: bagetter/bagetter@sha256:ed12b9450c7fe97df7d18b0ade1e7737abbfc865807e0ff7d5f3535860266241
+        env:
+          # Public on purpose: it only opens this job's localhost feed.
+          ApiKey: hashira-fixture-throwaway-key # gitleaks:allow
+        ports:
+          - 5555:8080
+        options: >-
+          --health-cmd "wget -q -O /dev/null http://127.0.0.1:8080/health"
+          --health-interval 2s --health-timeout 5s --health-retries 30
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      # actions/setup-dotnet v4.1.0
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68
+        with:
+          dotnet-version: '8.0.x'
+      # actions/download-artifact v4.3.0: the .nupkg the ci job packed
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: nuget-package
+          path: ${{ runner.temp }}/nupkg
+      - uses: skathio/hashira/.github/actions/nuget-push@v3
+        id: push
+        with:
+          nupkg_path: ${{ runner.temp }}/nupkg/*.nupkg
+          version: ${{ needs.ci.outputs.resolved_version }}
+          auth: token
+          target: http://localhost:5555/v3/index.json
+          # Throwaway: valid only against the BaGetter above.
+          api_key: hashira-fixture-throwaway-key # gitleaks:allow
+          # feed/nuget.config marks the HTTP feed as allowed for the push.
+          working_directory: feed
+      - name: Install the published package into a fresh project
+        shell: bash
+        env:
+          FEED: http://localhost:5555/v3/index.json
+          PACKAGE: Hashira.Fixture.NuGet
+          RESOLVED_VERSION: ${{ needs.ci.outputs.resolved_version }}
+        run: |
+          set -euo pipefail
+          consumer="${RUNNER_TEMP}/fresh-consumer"
+          mkdir -p "${consumer}"
+          cp feed/nuget.config "${consumer}/nuget.config"
+          cd "${consumer}"
+          # Written by hand: `dotnet new` only offers the SDK's newest framework.
+          printf '%s\n' '<Project Sdk="Microsoft.NET.Sdk">' \
+            '  <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net8.0</TargetFramework></PropertyGroup>' \
+            '</Project>' > Consumer.csproj
+          dotnet add package "${PACKAGE}" --version "${RESOLVED_VERSION}"
+          installed="$(dotnet list package --format json | jq -r --arg id "${PACKAGE}" \
+            '[.projects[].frameworks[]?.topLevelPackages[]? | select(.id == $id) | .resolvedVersion][0] // ""')"
+          if [[ "${installed}" != "${RESOLVED_VERSION}" ]]; then
+            echo "::error::installed ${PACKAGE} ${installed:-nothing} from ${FEED}, expected ${RESOLVED_VERSION}"
+            exit 1
+          fi
+          echo 'System.Console.WriteLine(Hashira.Fixture.NuGet.Greeter.Greet("hashira"));' > Program.cs
+          greeting="$(dotnet run)"
+          if [[ "${greeting}" != "hello, hashira" ]]; then
+            echo "::error::the installed package greeted '${greeting}', expected 'hello, hashira'"
+            exit 1
+          fi
+          echo "fixture: installed ${PACKAGE} ${installed} from ${FEED}" >> "${GITHUB_STEP_SUMMARY}"

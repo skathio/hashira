@@ -52,6 +52,10 @@ doesn't conclude the maintainer axis is the only supported extension path.
    refreshes these.
 4. Tests live under `tests/<action-name>/`. Each action must have at least one
    smoke test that the self-CI workflow exercises.
+5. Add a `### <name>` section to [`catalog.md`](./catalog.md): what it does,
+   when a consumer uses it directly, its input table (name, required,
+   default), its outputs and a `uses:` snippet. `tests/catalog/shape-validate.py`
+   fails until the section matches the YAML.
 
 ## Adding a new reusable workflow
 
@@ -75,13 +79,30 @@ doesn't conclude the maintainer axis is the only supported extension path.
    action's own header comment instead.
 3. Document every `inputs:`/`outputs:` (reusable workflow) and
    `inputs:`/`outputs:`/caller-permissions (composite action) entry in the
-   matching `docs/flows/<flow>.md` page.
+   matching `docs/flows/<flow>.md` page, and in a `### <name>` section of
+   [`catalog.md`](./catalog.md) (`tests/catalog/shape-validate.py` checks it).
+4. Write the flow's caller as `templates/<flow>/ci.yml` (at most 45
+   non-blank, non-comment lines) and copy it word for word as the first
+   caller block of `docs/flows/<flow>.md` and as the flow's caller in
+   `README.md`. `tests/templates/identity-lint.py` fails, naming the file
+   and the first differing line, when a copy drifts; change the template and
+   both copies in the same PR.
+5. Update the flow's fixture caller, `tests/consumers/<flow>/.github/workflows/ci.yml`,
+   in the same PR. It must equal the template except for the fake registry,
+   the publish target and the verification steps after the CD action;
+   `tests/shape-lints/fixture-diff.py` names the first key that differs.
 
 ## Where docs live
 
 - [`docs/usage.md`](./usage.md) — master cross-cutting contract (pin policy,
   gate model, secrets discipline, permissions baseline, evolution rules).
 - `docs/flows/<flow>.md` — per-flow consumer-facing guide.
+- [`docs/catalog.md`](./catalog.md) — every reusable workflow and composite
+  action with its inputs, outputs and a `uses:` snippet.
+- [`docs/migration-v2-to-v3.md`](./migration-v2-to-v3.md) — the breaking
+  changes from v2.
+- `templates/<flow>/ci.yml` — the one caller per flow, copied into the flow
+  guide and the README.
 
 Do not duplicate cross-cutting concerns into per-flow docs; link back to
 `usage.md`.

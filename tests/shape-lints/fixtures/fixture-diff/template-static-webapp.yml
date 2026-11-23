@@ -1,0 +1,19 @@
+# Self-test template for tests/shape-lints/fixture-diff.py: a cut-down static caller.
+name: ci
+on:
+  push:
+permissions: {}
+jobs:
+  ci:
+    uses: skathio/hashira/.github/workflows/static-webapp-ci.yml@v3
+    permissions:
+      contents: read # check out the repository
+  deploy:
+    needs: ci
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    environment: github-pages
+    permissions:
+      pages: write # deploy-pages publishes the site
+    steps:
+      - uses: skathio/hashira/.github/actions/pages-deploy@v3

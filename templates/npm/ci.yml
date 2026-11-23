@@ -1,0 +1,42 @@
+# .github/workflows/ci.yml: the hashira npm package flow.
+# Pull requests and pushes run CI. To release, run this workflow with a bump:
+#   gh workflow run ci.yml -f bump=patch
+name: ci
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Cut a release: patch, minor or major. Empty runs CI only."
+        type: choice
+        options: ['', patch, minor, major]
+      seed_version:
+        description: "Baseline for the first release when no stable tag exists, e.g. 0.0.0."
+        type: string
+
+permissions: {}
+
+jobs:
+  ci:
+    uses: skathio/hashira/.github/workflows/npm-package-ci.yml@v3
+    permissions:
+      contents: read # check out the repository
+      pull-requests: write # commitlint and coverage comments on the pull request
+      security-events: write # upload CodeQL results when CodeQL is enabled
+  publish:
+    needs: ci
+    if: needs.ci.outputs.resolved_version != ''
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: write # create the release tag and GitHub Release
+      id-token: write # npm trusted publishing exchanges an OIDC token
+      pull-requests: read # release notes read the merged pull requests
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: skathio/hashira/.github/actions/npm-release@v3
+        with:
+          version: ${{ needs.ci.outputs.resolved_version }}

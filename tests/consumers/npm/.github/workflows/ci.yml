@@ -1,0 +1,100 @@
+# .github/workflows/ci.yml: the hashira npm package flow, as a fixture.
+# Generated from hashira's tests/consumers/npm/. Edit it there, not here.
+#
+# This is templates/npm/ci.yml with only these differences, which hashira's
+# fixture-diff lint (tests/shape-lints/fixture-diff.py) enforces:
+#   - publish goes to a Verdaccio service container on localhost, with
+#     auth: token and a throwaway token, so nothing reaches npmjs.org;
+#   - the services: block that runs that Verdaccio;
+#   - the production environment has no required reviewer (set in the
+#     fixture repo's settings, not here);
+#   - verification steps after the npm-release step.
+name: ci
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Cut a release: patch, minor or major. Empty runs CI only."
+        type: choice
+        options: ['', patch, minor, major]
+      seed_version:
+        description: "Baseline for the first release when no stable tag exists, e.g. 0.0.0."
+        type: string
+
+permissions: {}
+
+jobs:
+  ci:
+    uses: skathio/hashira/.github/workflows/npm-package-ci.yml@v3
+    permissions:
+      contents: read # check out the repository
+      pull-requests: write # commitlint and coverage comments on the pull request
+      security-events: write # upload CodeQL results when CodeQL is enabled
+  publish:
+    needs: ci
+    if: needs.ci.outputs.resolved_version != ''
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: write # create the release tag and GitHub Release
+      id-token: write # npm trusted publishing exchanges an OIDC token
+      pull-requests: read # release notes read the merged pull requests
+    services:
+      # A throwaway npm registry that lives only as long as this job.
+      # verdaccio/verdaccio 6.10.7
+      verdaccio:
+        image: verdaccio/verdaccio@sha256:d394c36d62a62d264cf5566eabe323050f3e0a3f6455ccff9c355fcbfcb28073
+        # Writes one known user into the htpasswd file, then starts Verdaccio
+        # with its stock Docker config. The image's entrypoint still runs.
+        command: node -e eval(process.env.FIXTURE_REGISTRY_BOOT)
+        env:
+          # Fixed key for Verdaccio's legacy tokens, so the throwaway
+          # npm_token below decrypts to fixture:throwaway-password. Every
+          # value here is public on purpose: it only opens this job's
+          # localhost registry.
+          VERDACCIO_LEGACY_ENCRYPTION_KEY: hashira-fixture-throwaway-key-32 # gitleaks:allow
+          FIXTURE_HTPASSWD: "fixture:{SHA}ImmIkKOFpYifRE+1zvOfHYgRKeQ=" # gitleaks:allow
+          FIXTURE_REGISTRY_BOOT: >-
+            require('fs').writeFileSync('/verdaccio/storage/htpasswd', process.env.FIXTURE_HTPASSWD + '\n');
+            require('child_process')
+            .spawn('verdaccio', ['--config', '/verdaccio/conf/config.yaml', '--listen', 'http://0.0.0.0:4873'], { stdio: 'inherit' })
+            .on('exit', (code) => process.exit(code === null ? 1 : code));
+        ports:
+          - 4873:4873
+        options: >-
+          --health-cmd "wget -q -O /dev/null http://127.0.0.1:4873/-/ping"
+          --health-interval 2s --health-timeout 5s --health-retries 30
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: skathio/hashira/.github/actions/npm-release@v3
+        id: release
+        with:
+          version: ${{ needs.ci.outputs.resolved_version }}
+          target: http://localhost:4873
+          auth: token
+          # Throwaway: valid only against the Verdaccio above.
+          npm_token: MWE0NjkyZDdkMjA1Mzc5YzIxNzAyNmVjY2QzYTg2ZTI6NzIyZDY3YmE4MDM5ZTBjZThiNmM3YmJiMjA5MmFmYzViZDYzMWIzZDc3NWVjZDc1NWZkNA== # gitleaks:allow
+      - name: Install the published package into a fresh project
+        shell: bash
+        env:
+          REGISTRY: http://localhost:4873
+          RESOLVED_VERSION: ${{ needs.ci.outputs.resolved_version }}
+        run: |
+          set -euo pipefail
+          name="$(node -p "require('./package.json').name")"
+          consumer="${RUNNER_TEMP}/fresh-consumer"
+          mkdir -p "${consumer}"
+          cd "${consumer}"
+          npm init -y >/dev/null
+          npm_config_registry="${REGISTRY}" npm install "${name}@${RESOLVED_VERSION}" --no-audit --no-fund
+          installed="$(node -p "require('${name}/package.json').version")"
+          if [[ "${installed}" != "${RESOLVED_VERSION}" ]]; then
+            echo "::error::installed ${name}@${installed} from ${REGISTRY}, expected ${RESOLVED_VERSION}"
+            exit 1
+          fi
+          node -e "const lib = require('${name}'); if (lib.greet('hashira') !== 'hello, hashira') process.exit(1)"
+          echo "fixture: installed ${name}@${installed} from ${REGISTRY}" >> "${GITHUB_STEP_SUMMARY}"

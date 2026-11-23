@@ -1,0 +1,24 @@
+# Self-test template for tests/shape-lints/fixture-diff.py: a cut-down npm caller.
+name: ci
+on:
+  pull_request:
+  workflow_dispatch:
+permissions: {}
+jobs:
+  ci:
+    uses: skathio/hashira/.github/workflows/npm-package-ci.yml@v3
+    permissions:
+      contents: read # check out the repository
+  publish:
+    needs: ci
+    if: needs.ci.outputs.resolved_version != ''
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: write # create the release tag and GitHub Release
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: skathio/hashira/.github/actions/npm-release@v3
+        with:
+          version: ${{ needs.ci.outputs.resolved_version }}

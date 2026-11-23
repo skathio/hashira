@@ -14,3 +14,9 @@ updates:
     groups:
       github-actions:
         patterns: ["*"]
+  # The quality-gate action installs SoMi with `npm ci` from its own committed
+  # lockfile. This keeps that exact pin, and its integrity hash, fresh.
+  - package-ecosystem: "npm"
+    directory: "/.github/actions/quality-gate"
+    schedule:
+      interval: "weekly"

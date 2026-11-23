@@ -49,7 +49,7 @@ runs:
         # climb from it lands somewhere that exists but isn't
         # lib/visibility-detect.js, so require() silently resolved to the
         # wrong module and `detect` was undefined. `.hashira` is always
-        # checked out at the workspace root by the `library_ref` checkout
+        # checked out at the workspace root by the library self-checkout
         # step in every caller job, at a fixed, known path regardless of
         # composite-nesting depth — anchor on GITHUB_WORKSPACE instead.
         #

@@ -1,162 +1,242 @@
-# hashira-ops
+# hashira
 
-[![_self-ci](https://github.com/skathio/hashira-ops/actions/workflows/_self-ci.yml/badge.svg)](https://github.com/skathio/hashira-ops/actions/workflows/_self-ci.yml)
+[![_self-ci](https://github.com/skathio/hashira/actions/workflows/_self-ci.yml/badge.svg)](https://github.com/skathio/hashira/actions/workflows/_self-ci.yml)
 
-`hashira-ops` is a reusable-workflow + composite-action library for the three
-most common CI/CD shapes — **npm package publish**, **NuGet package publish**,
-and **static webapp / GitHub Pages deploy**. Consumers compose 1–2 caller
-workflows from pinned references; the library carries the SHA pins on
-third-party actions, the deny-all permissions narrowing, the OIDC wiring, the
-two-workflow CI + Publish/Deploy gate model, and the five-scan security suite.
+`skathio/hashira` is a library of reusable GitHub Actions workflows and
+composite actions for three CI/CD shapes: **npm package publish**, **NuGet
+package publish**, and **static webapp on GitHub Pages**. A consumer adds
+one caller file, `.github/workflows/ci.yml`, and gets the whole pipeline:
+build, tests, coverage, the security scan suite, SoMi's quality gate on
+pull requests, and a gated publish or deploy job.
 
-**Status**: v1.0.0 — released 2026-05-28.
+The library carries the SHA pins on third-party actions, deny-all
+permissions widened per job, the OIDC wiring, and the gate model: CI is a
+reusable workflow, publish or deploy is a composite action in a job of your
+own file, behind a GitHub Environment.
 
-## The three flows
+**Status**: v3. `v1` and `v2` are frozen: they stay resolvable, and get no
+further changes. Moving from v2 is covered in the
+[migration guide](docs/migration-v2-to-v3.md).
+
+## Callers
+
+Each caller below is the complete `.github/workflows/ci.yml` for its flow,
+and the same file as `templates/<flow>/ci.yml`. Copy it as is: every input
+has a default, so it sets only what the flow needs. It follows the `@v3`
+tag; pin a 40-character commit SHA instead for byte-exact, reproducible
+runs, and never `@main` (see the [pin policy](docs/usage.md#pin-policy)).
+
+Pull requests and pushes to `main` run CI. To release a package, run the
+workflow with a bump, for example `gh workflow run ci.yml -f bump=patch`
+(add `-f seed_version=0.0.0` for the first release when there is no stable
+tag). The static webapp deploys on every push to `main` and manual run.
 
 ### npm package publish
 
-CI runs on every PR; Publish runs on push-to-main, gated by a GitHub
-Environment with a required reviewer. Release-creates-the-tag chain via
-semantic-release (D4): pack → publish → idempotent `gh release create`.
-OIDC trusted publishing supported (no long-lived `NPM_TOKEN` required when
-the registry-side trust is configured).
+The `publish` job runs `npm-release` with npm OIDC trusted publishing (no
+long-lived token once the trusted publisher is configured), then creates
+the `v<version>` tag and GitHub Release. Create a `production` Environment
+with a required reviewer first.
 
 ```yaml
-# .github/workflows/ci.yml
+# .github/workflows/ci.yml: the hashira npm package flow.
+# Pull requests and pushes run CI. To release, run this workflow with a bump:
+#   gh workflow run ci.yml -f bump=patch
 name: ci
 on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Cut a release: patch, minor or major. Empty runs CI only."
+        type: choice
+        options: ['', patch, minor, major]
+      seed_version:
+        description: "Baseline for the first release when no stable tag exists, e.g. 0.0.0."
+        type: string
 
 permissions: {}
 
 jobs:
   ci:
-    # Pin to a SHA pre-v1; switch to @v1 once the rolling tag is cut.
-    uses: skathio/hashira-ops/.github/workflows/npm-package-ci.yml@<40-char-sha>
+    uses: skathio/hashira/.github/workflows/npm-package-ci.yml@v3
     permissions:
-      contents: read
-      pull-requests: write
-      security-events: write
-    with:
-      library_ref: '<40-char-sha>'    # same SHA as `uses:` ref above
+      contents: read # check out the repository
+      pull-requests: write # commitlint and coverage comments on the pull request
+      security-events: write # upload CodeQL results when CodeQL is enabled
+  publish:
+    needs: ci
+    if: needs.ci.outputs.resolved_version != ''
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: write # create the release tag and GitHub Release
+      id-token: write # npm trusted publishing exchanges an OIDC token
+      pull-requests: read # release notes read the merged pull requests
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: skathio/hashira/.github/actions/npm-release@v3
+        with:
+          version: ${{ needs.ci.outputs.resolved_version }}
 ```
 
-See [`docs/flows/npm.md`](docs/flows/npm.md) for the full walk-through
-(Publish workflow template, secret model, OIDC trusted-publisher
-onboarding, Environment setup, common failure modes).
+Walk-through: [`docs/flows/npm.md`](docs/flows/npm.md) (trusted publisher
+setup, Environment setup, failure modes).
 
 ### NuGet package publish
 
-Same two-workflow shape as npm. MinVer-driven versioning
-(`dotnet-pack-version` composite); `dotnet nuget push --skip-duplicate`
-for idempotency; `gh release view || gh release create` chain for
-the tag + GitHub Release. nuget.org's federated tokens are **not**
-auto-exchanged by `dotnet nuget push` on dotnet 8.0.x — consumers
-either wire caller-side token exchange or use the long-lived
-`NUGET_API_KEY` fallback (recommended for v1).
+The `ci` job finds the repository's one non-test `.csproj` by itself (set
+`project_path` with `with:` when there are several). The `publish` job
+pushes the same-run `.nupkg` with the `NUGET_API_KEY` secret, then creates
+the tag and GitHub Release. Create a `production` Environment with a
+required reviewer first.
 
 ```yaml
-# .github/workflows/ci.yml
+# .github/workflows/ci.yml: the hashira NuGet package flow.
+# Pull requests and pushes run CI. To release, run this workflow with a bump:
+#   gh workflow run ci.yml -f bump=patch
 name: ci
 on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Cut a release: patch, minor or major. Empty runs CI only."
+        type: choice
+        options: ['', patch, minor, major]
+      seed_version:
+        description: "Baseline for the first release when no stable tag exists, e.g. 0.0.0."
+        type: string
 
 permissions: {}
 
 jobs:
   ci:
-    uses: skathio/hashira-ops/.github/workflows/nuget-package-ci.yml@<40-char-sha>
+    uses: skathio/hashira/.github/workflows/nuget-package-ci.yml@v3
     permissions:
-      contents: read
-      pull-requests: write
-      security-events: write
-    with:
-      project_path: 'src/MyPackage/MyPackage.csproj'
-      library_ref: '<40-char-sha>'
+      contents: read # check out the repository
+      pull-requests: write # coverage comment on the pull request
+      security-events: write # upload CodeQL results when CodeQL is enabled
+  publish:
+    needs: ci
+    if: needs.ci.outputs.resolved_version != ''
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: write # create the release tag and GitHub Release
+      pull-requests: read # release notes read the merged pull requests
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      # actions/setup-dotnet v4.1.0
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68
+        with:
+          dotnet-version: '8.0.x'
+      # actions/download-artifact v4.3.0: the .nupkg the ci job packed
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: nuget-package
+          path: ${{ runner.temp }}/nupkg
+      - uses: skathio/hashira/.github/actions/nuget-push@v3
+        with:
+          nupkg_path: ${{ runner.temp }}/nupkg/*.nupkg
+          version: ${{ needs.ci.outputs.resolved_version }}
+          auth: token
+          api_key: ${{ secrets.NUGET_API_KEY }}
 ```
 
-See [`docs/flows/nuget.md`](docs/flows/nuget.md) for the full walk-through.
+Walk-through: [`docs/flows/nuget.md`](docs/flows/nuget.md) (OIDC trusted
+publishing, MinVer, Environment setup, failure modes).
 
-### Static webapp / GitHub Pages
+### Static webapp on GitHub Pages
 
-One caller workflow with two jobs (`ci` + `deploy`) connected by
-`needs: ci`. Pages deploy uses the same-run artifact handoff (D12 —
-no `workflow_run`, no cross-run artifact lookup). Autodetects the
-build output directory among `dist/` → `build/` → `out/` → `public/`.
-Deploy authenticates via OIDC (no secrets).
+The `ci` job builds (`npm run build`), tests, and uploads the Pages
+artifact; the `deploy` job runs `pages-deploy` in the `github-pages`
+Environment on pushes and manual runs, never on pull requests. Set the
+repository's Pages source to GitHub Actions first.
 
 ```yaml
-# .github/workflows/deploy.yml
-name: deploy
+# .github/workflows/ci.yml: the hashira static webapp flow (GitHub Pages).
+# Pull requests run CI only. Pushes to main and manual runs also deploy.
+name: ci
 on:
+  pull_request:
   push:
     branches: [main]
-  pull_request:    # CI half runs on PRs; deploy is gated by `needs: ci` + Environment
+  workflow_dispatch:
 
 permissions: {}
 
 jobs:
   ci:
-    uses: skathio/hashira-ops/.github/workflows/static-webapp-ci.yml@<40-char-sha>
+    uses: skathio/hashira/.github/workflows/static-webapp-ci.yml@v3
     permissions:
-      contents: read
-      id-token: write
-      pages: write
-      pull-requests: write
-      security-events: write
-    with:
-      build_command: 'npm run build'
-      library_ref: '<40-char-sha>'
+      contents: read # check out the repository
+      id-token: write # upload-pages-artifact authenticates to Pages
+      pages: write # upload-pages-artifact stores the site for deploy
+      pull-requests: write # coverage comment on the pull request
+      security-events: write # upload CodeQL results when CodeQL is enabled
   deploy:
     needs: ci
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    uses: skathio/hashira-ops/.github/workflows/static-webapp-deploy.yml@<40-char-sha>
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    environment: github-pages
     permissions:
-      contents: read
-      pages: write
-      id-token: write
-    with:
-      library_ref: '<40-char-sha>'
+      id-token: write # deploy-pages authenticates to Pages with OIDC
+      pages: write # deploy-pages publishes the site
+    steps:
+      - uses: skathio/hashira/.github/actions/pages-deploy@v3
 ```
 
-See [`docs/flows/static-webapp.md`](docs/flows/static-webapp.md) for the
-full walk-through (security callout on `library_ref` as an integrity
-control, framework guidance, Pages enablement steps, common failure
-modes).
+Walk-through: [`docs/flows/static-webapp.md`](docs/flows/static-webapp.md)
+(Pages enablement, framework guidance, failure modes).
+
+## The parts
+
+The three CI workflows are built from composite actions you can also use on
+their own: `scan-suite`, `run-tests-js`, `run-tests-dotnet`,
+`coverage-report`, `quality-gate`, `version-resolver`,
+`dotnet-pack-version`, `pages-upload`, and the publish and deploy actions
+`npm-release`, `nuget-push` and `pages-deploy`. The
+[catalog](docs/catalog.md) lists every workflow and action with what it
+does, when to use it directly, its inputs and outputs, and a `uses:`
+snippet.
 
 ## Read this next
 
-- **[`docs/usage.md`](docs/usage.md)** — cross-cutting concepts:
+- **[`docs/catalog.md`](docs/catalog.md)**: every reusable workflow and
+  composite action, with inputs, outputs and a `uses:` snippet.
+- **[`docs/migration-v2-to-v3.md`](docs/migration-v2-to-v3.md)**: every
+  breaking change from v2, with the v2 caller line and its v3 replacement.
+- **[`docs/usage.md`](docs/usage.md)**: cross-cutting concepts:
   [pin policy](docs/usage.md#pin-policy),
   [gate model](docs/usage.md#gate-model),
   [secret-passing model](docs/usage.md#secret-passing-model),
   [permissions baseline](docs/usage.md#permissions-baseline),
-  [additive-only v1.x evolution rule](docs/usage.md#additive-only-v1x-evolution-rule),
-  [`x_`-prefix experimental input convention](docs/usage.md#x_-prefix-experimental-input-convention),
-  [Environment configuration checklist](docs/usage.md#environment-configuration-adoption-checklist),
+  [evolution rule](docs/usage.md#additive-only-v1x-evolution-rule),
+  [`x_`-prefix experimental inputs](docs/usage.md#x_-prefix-experimental-input-convention),
+  [Environment checklist](docs/usage.md#environment-configuration-adoption-checklist),
   [OIDC trust onboarding](docs/usage.md#oidc-trust-onboarding),
   [scan-suite toggles](docs/usage.md#scan-suite-toggles),
   [coverage reporting](docs/usage.md#coverage-reporting).
-- **[`docs/flows/`](docs/flows/)** — per-flow walk-throughs (one file each
-  for npm, nuget, static-webapp); copy-paste-ready caller templates with
-  the input table, permissions table, and common failure modes.
-- **[`docs/contributing.md`](docs/contributing.md)** — library-internal
-  development guide.
+- **[`docs/flows/`](docs/flows/)**: one walk-through per flow, with the
+  input, permissions and secret tables and common failure modes.
+- **[`docs/contributing.md`](docs/contributing.md)**: the maintainer
+  checklist for adding an action or a workflow.
 
 ## Versioning
 
-`hashira-ops` follows an **additive-only v1.x evolution rule**: inputs and
-outputs can only be added (with defaults) in v1.x.y patch and minor releases.
-Removing an input, renaming an input, changing a default, or broadening the
-permissions matrix requires a v2.0.0 major bump. Inputs whose name starts
-with `x_` are explicitly experimental and out of the v1 contract — they
-may change semantics or disappear in any v1.x.y release. See
-[`docs/usage.md#additive-only-v1x-evolution-rule`](docs/usage.md#additive-only-v1x-evolution-rule)
-for the full contract.
+Within a major, evolution is additive only: inputs and outputs can be added
+with defaults, and removing or renaming an input, changing a default, or
+broadening the permissions a caller must grant needs the next major. Inputs
+whose name starts with `x_` are experimental and outside the contract. See
+[`docs/usage.md`](docs/usage.md#additive-only-v1x-evolution-rule) for the
+full rule.
 
 ## License
 

@@ -46,7 +46,7 @@
 #                                              # but set it explicitly — a consumer who
 #                                              # hardens with persist-credentials:false gets
 #                                              # a SILENT tag/release failure AFTER publish.
-#         - uses: skathio/hashira/.github/actions/npm-release@v2
+#         - uses: skathio/hashira/.github/actions/npm-release@v3
 #           with:
 #             version: ${{ needs.ci.outputs.resolved_version }}   # D8 — consumed, not recomputed
 #

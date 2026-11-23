@@ -1,0 +1,65 @@
+# Composite action: quality-gate
+#
+# Runs SoMi's quality check on what a pull request changes
+# (`somi quality --scope pr`, compared with the PR base commit) and fails the
+# job when SoMi reports a violation. Scoring only the change means debt that
+# was already in the repo never fails a pull request.
+#
+# - Runs only on pull_request events. Any other event passes and writes
+#   "skipped: quality gate runs on pull requests" to the job summary.
+# - Fails closed: a failed install, a missing base commit, a SoMi crash or
+#   SoMi's own 300 s timeout each fail the job with the cause in the summary.
+#   Files SoMi could not analyze are listed and do not fail the job.
+# - Violations go to the job summary as a table and to error annotations on
+#   the lines SoMi names.
+#
+# SoMi comes from the npm registry at the exact version in package.json, and
+# `npm ci --ignore-scripts` installs it from the committed package-lock.json,
+# so its integrity hash is checked and no install script runs. Dependabot
+# keeps the pin fresh. It installs into runner.temp, not into the checkout,
+# so the installed files never become part of the change SoMi scores.
+#
+# Requires: the repository checked out (any fetch depth: the base commit is
+# fetched when missing) and a `node` with npm on PATH. Logic lives in lib/.
+name: quality-gate
+description: Run SoMi's quality check on a pull request's changes and fail on a violation.
+
+inputs:
+  level:
+    description: "SoMi quality level: exactly 'strict', 'standard' or 'relaxed'. Any other value fails the job."
+    required: false
+    default: "strict"
+
+runs:
+  using: composite
+  steps:
+    - name: Gate only pull requests
+      id: event
+      shell: bash
+      run: node "${GITHUB_ACTION_PATH}/lib/run-gate.js" event
+
+    - name: Install the pinned SoMi
+      id: install
+      if: ${{ steps.event.outputs.run == 'true' }}
+      shell: bash
+      env:
+        GATE_DIR: ${{ runner.temp }}/hashira-quality-gate
+      run: |
+        set -euo pipefail
+        mkdir -p "${GATE_DIR}"
+        cp "${GITHUB_ACTION_PATH}/package.json" "${GITHUB_ACTION_PATH}/package-lock.json" "${GATE_DIR}/"
+        if ! npm ci --ignore-scripts --no-audit --no-fund --prefix "${GATE_DIR}"; then
+          printf '## SoMi quality gate\n\n**Failed:** failed install: npm ci could not install the pinned SoMi\n' >> "${GITHUB_STEP_SUMMARY}"
+          echo "::error title=quality-gate::failed install: npm ci could not install the pinned SoMi"
+          exit 1
+        fi
+        echo "cli=${GATE_DIR}/node_modules/@skathio/somi/scripts/somi.mjs" >> "${GITHUB_OUTPUT}"
+
+    - name: Run SoMi on the pull request's changes
+      if: ${{ steps.event.outputs.run == 'true' }}
+      shell: bash
+      env:
+        SOMI_CLI: ${{ steps.install.outputs.cli }}
+        GATE_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        GATE_LEVEL: ${{ inputs.level }}
+      run: node "${GITHUB_ACTION_PATH}/lib/run-gate.js" check

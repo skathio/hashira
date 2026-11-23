@@ -1,0 +1,8 @@
+{
+  "name": "hashira-quality-gate",
+  "private": true,
+  "description": "Pins the SoMi CLI that the quality-gate action installs with npm ci.",
+  "dependencies": {
+    "@skathio/somi": "5.3.0"
+  }
+}

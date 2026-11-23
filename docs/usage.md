@@ -129,8 +129,8 @@ enforces (and one it cannot):
   by direct reading of each `action.yml` and asserted by Phase 5's self-CI
   shape lint. Re-introducing such a step would silently re-open the
   `job_workflow_ref` mismatch this entire shape exists to avoid.
-- **Documented, not mechanizable**: the consumer's own `publish.yml`/
-  `deploy.yml` job that invokes the CD composite must itself be a
+- **Documented, not mechanizable**: the consumer's own `publish`/
+  `deploy` job that invokes the CD composite must itself be a
   **top-level workflow**, not a reusable workflow called from elsewhere in
   the consumer's own repo. Hashira's self-CI has no way to see a consumer's
   repository structure, so this is a stated **consumer responsibility**,
@@ -300,21 +300,22 @@ failure-mode triage per ecosystem.
 
 ## Pin policy
 
-The `uses:` ref on every consumer caller workflow, and the `library_ref`
-input on every CI reusable workflow that exposes it, together control both
-reproducibility and supply-chain integrity. hashira is past `v1.0.0`
-(tagged) and `v2` is the in-development major this document describes (D6:
-in-place `@v2`, `@v1` stays frozen and resolvable through the migration
-window — a long-lived mixed `@v1`/`@v2` state across consumers is an
-explicitly supported outcome, not a failure).
+The `uses:` ref on every consumer caller workflow controls both
+reproducibility and supply-chain integrity; the CI workflow checks its own
+composite actions out at the same commit (see "The library self-checkout"
+below). `v3` is the major this document describes. `v2` is frozen like
+`v1`: both stay tagged and resolvable, but neither gets any further change,
+so a consumer on `@v1` or `@v2` keeps running exactly what it runs today.
+Moving to v3 is a deliberate step; see
+[`migration-v2-to-v3.md`](migration-v2-to-v3.md).
 
 ### Recommended pin shapes, in increasing order of integrity tightness
 
-1. **`@v2` rolling tag** — points at the latest `v2.x.y` release. Consumers
+1. **`@v3` rolling tag** — points at the latest `v3.x.y` release. Consumers
    auto-pick up additive minor/patch releases without a PR. Trade-off:
    byte-exact reproducibility is lost across re-runs as the tag rolls
    forward. Acceptable for most consumers.
-2. **`@v2.X.Y` specific tag** — one release; the consumer opts in to each
+2. **`@v3.X.Y` specific tag** — one release; the consumer opts in to each
    new release explicitly via PR.
 3. **`@<40-char-sha>` SHA pin** — strongest integrity option: byte-exact
    reproducibility; a compromised library repo cannot silently shift a
@@ -322,97 +323,52 @@ explicitly supported outcome, not a failure).
    environments, and consumers who want a stable SBOM across re-runs.
    Dependabot's `github-actions` ecosystem can automate the bump PRs.
 
-After each `v2.X.Y` release the library owner rolls the `v2` tag forward
-(`git tag -f v2 v2.X.Y && git push -f origin v2`) — a deliberate, documented
+After each `v3.X.Y` release the library owner rolls the `v3` tag forward
+to the release commit (the commands are in `.claude/skills/release/SKILL.md`) — a deliberate, documented
 part of the release process, matching the convention every major GitHub
 Actions marketplace action follows (`actions/checkout@v4`,
 `actions/setup-node@v4`). Consumers who do not want force-pushed refs in
-their provenance audit trail use the `@v2.X.Y` or SHA pin instead. The
-library does not force-push tags other than the major-version rolling tags
-(`v1`, `v2`).
+their provenance audit trail use the `@v3.X.Y` or SHA pin instead. The
+library moves no tag other than the current major's rolling tag (`v3`);
+the frozen `v1` and `v2` tags never move again.
 
-**No consumer-facing doc example may pin a `uses:`/`library_ref` reference
+**No consumer-facing doc example may pin a `uses:` reference
 to `@main`** — an `@main` pin is mechanically reproducible-looking but is
 not reproducible (resolves to whatever commit `main` happens to be at when
 the workflow runs) and is exactly the revocable-redirect-shaped,
-supply-chain-integrity risk this policy exists to close. (`docs/flows/*.md`'s
-adoption examples are corrected to a SHA or `@v2` pin in iteration 4.3/4.4 —
-if you find a doc example still pinned `@main`, that is a defect, not an
-accepted shape.)
+supply-chain-integrity risk this policy exists to close. (The callers in
+`templates/`, `docs/flows/*.md` and `README.md` follow `@v3`; if you find a
+doc example pinned `@main`, that is a defect, not an accepted shape.)
 
-### The `library_ref` dual-pin invariant
+### The library self-checkout
 
-Every kept CI reusable workflow (`npm-package-ci.yml`, `nuget-package-ci.yml`,
-`static-webapp-ci.yml`) self-checks-out the library into a local `.hashira/`
-directory so it can invoke its own composite sub-actions via a **literal**
-`uses: ./.hashira/.github/actions/<name>` path — GitHub Actions rejects an
-interpolated/variable ref on a `uses:` line, which is *why* this
-self-checkout mechanism exists at all, not an arbitrary design choice. The
-consumer supplies the ref to check out via the `library_ref` input
-(**required**, no default — every caller must pin it explicitly).
+Every CI reusable workflow (`npm-package-ci.yml`, `nuget-package-ci.yml`,
+`static-webapp-ci.yml`) checks the library out into a local `.hashira/`
+directory so it can invoke its own composite actions through a **literal**
+`uses: ./.hashira/.github/actions/<name>` path. GitHub Actions rejects an
+expression in the `@<ref>` part of a `uses:` line, which is why this
+self-checkout exists at all.
 
-This creates two refs in play for the same library code, which must agree:
+The workflow resolves the ref to check out by itself: it is the commit the
+workflow file was called at. The `setup` job reads `job.workflow_sha`, which
+GitHub documents as the commit of the workflow file that defines the current
+job (for a reusable workflow, the called file, not the caller), fails when it
+is not a 40-character SHA, checks `skathio/hashira` out at it, and every other
+job checks out the same commit. A caller pinned at `@<sha>` or at the rolling
+major tag therefore always runs composite actions from the same commit as the
+workflow file, and there is no second ref for the caller to keep in sync. The
+commit actually checked out is published as the workflow's `library_sha`
+output.
 
-- The **outer `uses:` pin** on the consumer's caller workflow
-  (`uses: skathio/hashira/.github/workflows/<flow>-ci.yml@<sha-or-tag>`).
-- The **inner `library_ref`** input passed to that same job.
+This needs no extra permission on the caller's `ci` job: `job.workflow_sha`
+is an expression context, not an OIDC claim. It is not available on GitHub
+Enterprise Server, where the `setup` job fails with an error naming it.
 
-**Precise framing of the invariant** (corrected during this phase from an
-earlier, looser "both refs must independently name the same repository"
-description — re-verified directly against all three kept workflows):
-`library_ref` itself carries **no repository component** — it is consumed
-only as the `ref:` of a checkout step whose `repository:` field is
-**hardcoded** to `skathio/hashira` in every kept workflow. The invariant
-therefore splits into one genuine two-ref comparison and one one-sided
-property, not two symmetric checks:
-
-1. **Same-SHA** (a real comparison between two values) — the outer `uses:`
-   pin's commit and `library_ref`'s resolved commit must be identical. If
-   they diverge, the reusable-workflow YAML being executed is at one commit
-   while the in-repo composite actions it invokes via
-   `./.hashira/.github/actions/<name>` resolve to a **different** commit —
-   a pinned-looking caller silently running unknown action code.
-2. **Same-repository** (a unilateral property of `uses:` alone) — the outer
-   `uses:` ref must name the canonical `skathio/hashira`. There is nothing
-   on the `library_ref` side to compare this against, because `library_ref`
-   has no repository information of its own; it is checked against the
-   fixed point every kept workflow's self-checkout is hardcoded to.
-
-Pinning `uses: …@<sha-A>` while leaving `library_ref: 'main'` (or any
-non-pinned ref) is the **most acute violation**: the outer ref *looks* fully
-pinned, but `library_ref` resolves to whatever `main` happens to be at
-workflow-run time — a caller that appears reproducible is not. The library's
-self-CI lints this (`tests/dual-pin/lint.py`, iteration 4.1) — see
-"Self-CI-checkable scope" below for exactly what that lint can and cannot
-see. Each flow's caller template
-([`flows/npm.md`](./flows/npm.md) §1, [`flows/nuget.md`](./flows/nuget.md)
-§1, [`flows/static-webapp.md`](./flows/static-webapp.md) §1) shows the
-expected paired-pin shape.
-
-#### Self-CI-checkable scope vs. the real cross-repo guarantee
-
-The self-CI dual-pin lint validates hashira's **own** fixtures/templates for
-internal consistency — it cannot reach into a live consumer's repository to
-read their actual outer `uses:` SHA, because GitHub Actions gives no API for
-a library to introspect a consumer's caller-file content. This is a
-documented scope limit, not an oversight: the lint proves the invariant is
-*checkable and enforceable where it can be checked*; it is **not** a live
-guarantee that any given consumer's actual pin pair is currently correct.
-The real consumer-side proof that the dual-pin holds in practice is each
-ecosystem's validation release during migration (somi for npm, rogue for
-NuGet) — a live release succeeding with the documented pin shape is the
-closest thing to an end-to-end check this invariant gets.
-
-#### Why self-checkout is kept in v2 (not eliminated)
-
-Moving to published-action refs (eliminating self-checkout, and with it the
-dual-pin class entirely) was considered and **deferred to v2.x** (D9): v2
-already changes the versioning model, the CI/CD split, and all three flows'
-internal shape simultaneously — stacking a fourth simultaneous change to the
-composition mechanism itself would multiply the diagnostic search space if
-the first real v2 releases fail, with no corresponding mitigation. Revisit
-once the extension model (see "Extension contract" below) is proven across a
-full v2 release cycle on both consumers.
+The self-CI proves the contract: `_self-ci.yml` calls `nuget-package-ci.yml`
+against the in-repo .NET fixture and asserts that the workflow's `library_sha`
+output equals the commit the call was made at
+(`tests/library-self-sha/test_library_self_sha.py` checks the workflow shapes
+statically).
 
 ## Secret-passing model
 
@@ -462,7 +418,7 @@ jobs:
     steps:
       - uses: actions/checkout@<sha>
         with: { persist-credentials: true }
-      - uses: skathio/hashira/.github/actions/npm-release@v2
+      - uses: skathio/hashira/.github/actions/npm-release@v3
         with:
           version: ${{ needs.ci.outputs.resolved_version }}
           # Only if auth=token, or as the auth=auto fallback. This is a
@@ -484,8 +440,8 @@ under-granted caller job fails with a permission error inside the called
 workflow's steps.
 
 v2's shape is **CI reusable workflows + CD composite actions** — there are
-no CD reusable workflows left in this library (`nuget-package-publish.yml`
-and `static-webapp-deploy.yml` were both retired in Phase 3; their logic
+no CD reusable workflows left in this library (the v1 NuGet publish and
+static deploy reusable workflows were both retired in v2; their logic
 moved into the `nuget-push` and `pages-deploy` composites respectively, and
 the *permission grant* moved with it to the consumer's own job, since a
 composite cannot hold its own `permissions:` block).
@@ -601,7 +557,7 @@ today would no longer hold.
 The name of this rule predates v2 and is kept unchanged here (so existing
 cross-references, e.g. from `README.md`, keep resolving) — the rule itself
 is **not** v1-specific. It applies per-major: the contract guarantees that
-consumer caller workflows pinned to a given major (`@v1` or `@v2`, or any
+consumer caller workflows pinned to a given major (`@v1`, `@v2` or `@v3`, or any
 specific `@<major>.X.Y`) keep working without modification across that
 major's entire `.x.y` series. The library commits to:
 
@@ -648,10 +604,12 @@ summary in a downstream automation), pin to a specific SHA or
 `@<major>.X.Y` tag instead of the rolling major tag. The rolling tag's
 stability guarantee covers the input/output/permissions contract only.
 
-`v1` and `v2` are independent majors under this rule: `@v1` callers are
-unaffected by anything documented in this revision, and stay frozen
-(security backports only) until every consumer has validated and migrated
-off it (D6).
+`v1`, `v2` and `v3` are independent majors under this rule. `v2` is frozen
+like `v1`: no further `v2` or `v1` release is cut, and `@v1` and `@v2`
+callers are unaffected by anything documented in this revision. Every
+change, including fixes, lands in `v3`. The breaking changes between v2 and
+v3, each with the v2 caller line and its v3 replacement, are in
+[`migration-v2-to-v3.md`](migration-v2-to-v3.md).
 
 ## `x_`-prefix experimental input convention
 
@@ -807,10 +765,10 @@ and content:
 
 ### `coverage_path` input
 
-The consumer configures the path via `coverage_path`. Defaults differ per
-flow:
+The consumer configures the path via `coverage_path`. Its default is `''`
+in every flow, which means the flow's standard path:
 
-| Flow | `coverage_path` default |
+| Flow | Path used when `coverage_path` is empty |
 |------|--------------------------|
 | `npm-package-ci.yml` | `coverage/lcov.info` |
 | `nuget-package-ci.yml` | `coverage/cobertura.xml` |

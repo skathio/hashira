@@ -53,16 +53,19 @@ DOCUMENTED_INPUTS = [
     "test_filter",
     "coverage_path",
     "scan_disable",
-    "library_ref",
     "bump",
     "seed_version",
+    "quality_gate",
+    "quality_level",
 ]
 
-# Iter 2.3: the CI->CD output-boundary contract (D8 / phase 2 exit criteria
-# "Major 3 fix") requires EXACTLY this one workflow-level output — no second
-# output for the `v`-prefixed tag form or the bump kind.
+# The CI->CD output-boundary contract allows EXACTLY one version output, `resolved_version` — no second
+# output for the `v`-prefixed tag form or the bump kind. `library_sha` is
+# not a version output: it reports the hashira commit the workflow checked
+# its composite actions out at (its own commit, resolved by `setup`).
 DOCUMENTED_OUTPUTS = [
     "resolved_version",
+    "library_sha",
 ]
 
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -279,7 +282,7 @@ def main():
         fail(f"inputs missing non-empty description (D10 contract surface): {no_desc}")
 
     # Check (e): the CI->CD output-boundary contract (D8 / phase 2 exit
-    # criteria "Major 3 fix") — exactly one workflow-level output, no second
+    # criteria "Major 3 fix") — exactly the manifest's outputs, no second version
     # output for the `v`-prefixed tag form or the bump kind. Mirrors
     # `tests/npm-package-ci/shape-validate.py`'s check (d).
     outputs_block = workflow_call.get("outputs") or {}
@@ -292,7 +295,7 @@ def main():
     if extra_outputs:
         fail(
             f"workflow declares outputs not in the manifest: {extra_outputs} "
-            "(D8's one-scalar CI->CD boundary contract permits exactly "
+            "(the one-version-scalar CI->CD boundary contract permits exactly "
             f"{DOCUMENTED_OUTPUTS} — a second output, even for the "
             "`v`-prefixed tag form or the bump kind, is the exact mistake "
             "flagged across discovery, plan-review, and phase 2.1's "
