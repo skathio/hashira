@@ -142,3 +142,48 @@ test('more than 100 skipped files are capped with a count', () => {
   assert.match(md, /1 more not shown\./);
   assert.doesNotMatch(md, /g100\.js/);
 });
+
+const EXEMPTION = { rule: 'cognitive', file: 'src/b.js', line: 3, name: 'over', reason: 'reviewed elsewhere', expires: '2026-12-20' };
+
+test('a waived limit is named in the cause and listed in the summary', () => {
+  const v = interpret(run({ stdout: report({ exemptions: [EXEMPTION] }) }));
+  assert.equal(v.passed, true);
+  assert.equal(v.cause, 'no violations in scored files, 1 limit waived by an allow comment (listed below)');
+  const md = renderSummary(v, OPTS);
+  assert.match(md, /### Waived by an allow comment/);
+  assert.match(md, /\| cognitive \| src\/b\.js \| 3 \| reviewed elsewhere \| 2026-12-20 \|/);
+});
+
+test('waived limits and skipped files are both named in the cause', () => {
+  const v = interpret(run({ stdout: report({ exemptions: [EXEMPTION, EXEMPTION], skipped: [{ file: 'g.js', reason: 'generated' }] }) }));
+  assert.equal(v.cause, 'no violations in scored files, 2 limits waived by an allow comment, 1 file not scored (listed below)');
+});
+
+test('a waived limit gets a warning annotation on its line, after the errors', () => {
+  const r = parseReport(report({ ok: false, violations: [VIOLATION], exemptions: [EXEMPTION] }));
+  const lines = annotations(r);
+  assert.equal(lines.length, 2);
+  assert.match(lines[0], /^::error file=src\/a\.js,line=12,/);
+  assert.equal(lines[1], '::warning file=src/b.js,line=3,title=SoMi cognitive waived::cognitive waived until 2026-12-20: reviewed elsewhere');
+});
+
+test('an exemption reason cannot inject a workflow command or break the table', () => {
+  const evil = { ...EXEMPTION, reason: 'ok\n::add-mask::x | <b>', file: 'a,b:c.js' };
+  const r = parseReport(report({ exemptions: [evil] }));
+  const [line] = annotations(r);
+  assert.equal(line.split('\n').length, 1);
+  assert.match(line, /file=a%2Cb%3Ac\.js/);
+  assert.match(line, /ok%0A::add-mask::x/);
+  assert.match(renderSummary(interpret(run({ stdout: report({ exemptions: [evil] }) })), OPTS), /ok ::add-mask::x &#124; &lt;b&gt;/);
+});
+
+test('a report without exemptions, or with a non-array one, lists none', () => {
+  assert.deepEqual(parseReport('{"ok":true,"violations":[]}').exemptions, []);
+  assert.deepEqual(parseReport('{"ok":true,"violations":[],"exemptions":{}}').exemptions, []);
+  assert.doesNotMatch(renderSummary(interpret(run()), OPTS), /Waived/);
+});
+
+test('annotations stop at 50 even with many waived limits', () => {
+  const r = parseReport(report({ exemptions: Array.from({ length: 60 }, (_, i) => ({ ...EXEMPTION, line: i + 1 })) }));
+  assert.equal(annotations(r).length, 50);
+});

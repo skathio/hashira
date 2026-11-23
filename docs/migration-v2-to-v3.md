@@ -126,6 +126,14 @@ skip note. Two new inputs control it:
 `quality_level` accepts exactly `strict`, `standard` or `relaxed`; any other
 value, including `''`, fails the run's `setup` job.
 
+A pull request can waive a limit, or all of them, on one function with a
+comment on the line above it, such as
+`// somi-gate-allow cognitive reason="<at least 20 characters>" expires=2027-01-31`.
+The expiry may be at most 90 days away. The gate passes,
+and its job summary lists each waived limit with its reason, plus a warning
+on the line, so a reviewer sees what the author waived. Files SoMi skips as
+generated or minified are listed the same way.
+
 ## 7. Permissions
 
 No v3 CI workflow requests a permission v2 did not: the workflows resolve

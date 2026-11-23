@@ -64,6 +64,11 @@ python3 tests/shape-lints/fixture-diff.py --self-test
 python3 tests/library-self-sha/test_library_self_sha.py
 # The v3 caller templates and docs contract (unittest)
 python3 tests/v3-callers-docs/test_v3_callers_docs.py
+# CI workflow inputs, the consumer-integration job, and the fixture sources and repos (unittest; the last reads the
+# public fixture repos through an authenticated gh)
+python3 tests/ci-workflow-inputs/test_ci_workflow_inputs.py
+python3 tests/consumer-integration/test_consumer_integration.py
+python3 tests/fixture-consumers/test_fixture_consumers.py
 ```
 
 The `actionlint` CI job installs actionlint v1.7.7 from its release tarball and checks the tarball's SHA-256. If
@@ -72,7 +77,7 @@ GitHub Actions.
 
 ## CI
 
-`_self-ci.yml` runs on every pull request and every push to main, 41 jobs: actionlint, the unit tests and shape
+`_self-ci.yml` runs on every pull request and every push to main, 46 jobs: actionlint, the unit tests and shape
 lints above, and smoke jobs that run the composite actions against fixtures (`tests/pages-fixture`,
 `tests/run-tests-dotnet`, `tests/npm-release/dry-run-fixture`). Every job must be green before a merge. Wait for the
 checks with `gh pr checks <n> --watch`. Read a failure with `gh run view <id> --log-failed`.

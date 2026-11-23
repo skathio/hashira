@@ -415,8 +415,11 @@ class FixtureRepos(unittest.TestCase):
             self.assertFalse(data.get("private"), f"{OWNER}/{repo} is not public")
 
     def test_static_repo_has_pages(self):
-        data, out = gh_json(f"repos/{OWNER}/{FLOWS['static-webapp'][0]}/pages")
-        self.assertIsNotNone(data, f"Pages is not enabled: {out}")
+        # The repo's own has_pages, not the /pages endpoint: that one needs a
+        # token with Pages access, and CI runs this with a read-only token.
+        data, out = gh_json(f"repos/{OWNER}/{FLOWS['static-webapp'][0]}")
+        self.assertIsNotNone(data, out)
+        self.assertIs(data.get("has_pages"), True, f"Pages is not enabled on {FLOWS['static-webapp'][0]}")
 
     def test_environments_exist_without_required_reviewers(self):
         for flow, (repo, _, env, _, _) in FLOWS.items():

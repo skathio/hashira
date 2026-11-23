@@ -284,6 +284,8 @@ No outputs.
 
 Runs SoMi's quality check on what a pull request changes (`quality --scope pr`, against the base) and fails on a violation; outside a pull request it passes with a skip note.
 
+What it does not score is shown, never hidden. The job summary lists files SoMi skipped (generated, minified or in a skipped folder) and every limit a `somi-gate-allow` comment in the change waived, with its reason and expiry; each waived limit is also a warning annotation on its line. Neither fails the gate, so check them in review: an allow comment is written by the pull request's own author.
+
 **Use it directly**: In your own workflow to gate pull requests on SoMi's limits without the rest of a flow. Check the repository out and have `node` on the path first; the base commit is fetched when missing.
 
 | Input | Required | Default |

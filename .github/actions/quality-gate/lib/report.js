@@ -52,7 +52,10 @@ function parseReport(stdout) {
   // A file the PR marks as generated or minified is skipped, not scored, so
   // the summary must show it: otherwise the marker hides code from the gate.
   const skipped = Array.isArray(report.skipped) ? report.skipped : [];
-  return { ok: report.ok, violations: report.violations, unanalyzed, skipped };
+  // The PR's own allow comments can waive a limit, so what they waived is
+  // shown too, or a reviewer would read the pass as a clean change.
+  const exemptions = Array.isArray(report.exemptions) ? report.exemptions : [];
+  return { ok: report.ok, violations: report.violations, unanalyzed, skipped, exemptions };
 }
 
 function crashCause(run) {
@@ -64,10 +67,14 @@ function crashCause(run) {
   return `SoMi crashed: it exited with code ${run.status} without a readable report`;
 }
 
+const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+
 function cleanCause(report) {
-  const n = report.skipped.length;
-  if (n === 0) return 'no violations';
-  return `no violations in scored files, ${n} file${n === 1 ? '' : 's'} not scored (listed below)`;
+  const notes = [];
+  if (report.exemptions.length) notes.push(`${plural(report.exemptions.length, 'limit')} waived by an allow comment`);
+  if (report.skipped.length) notes.push(`${plural(report.skipped.length, 'file')} not scored`);
+  if (notes.length === 0) return 'no violations';
+  return `no violations in scored files, ${notes.join(', ')} (listed below)`;
 }
 
 /** { passed, cause, report } for one run: { status, signal, error, stdout, stderr, timeoutSeconds }. */
@@ -102,6 +109,15 @@ function skippedList(skipped) {
   return ['### Files not scored', '', note, '', ...items, ...more];
 }
 
+function exemptionTable(exemptions) {
+  const rows = exemptions.slice(0, MAX_ROWS).map((e) =>
+    `| ${[e.rule, e.file, e.line, e.reason, e.expires].map(escapeCell).join(' | ')} |`);
+  const more = exemptions.length > MAX_ROWS ? [`\n${exemptions.length - MAX_ROWS} more not shown.`] : [];
+  const note = 'An allow comment in this change waived these limits. They do not fail the gate: check each reason in review.';
+  return ['### Waived by an allow comment', '', note, '', '| Rule | File | Line | Reason | Expires |',
+    '| --- | --- | --- | --- | --- |', ...rows, ...more];
+}
+
 /** Markdown for the job summary. */
 function renderSummary(verdict, { level, base }) {
   const lines = ['## SoMi quality gate', '', `**${verdict.passed ? 'Passed' : 'Failed'}:** ${escapeCell(verdict.cause)}`];
@@ -110,6 +126,7 @@ function renderSummary(verdict, { level, base }) {
   if (report && report.violations.length) lines.push('', ...violationTable(report.violations));
   if (report && report.unanalyzed.length) lines.push('', ...unanalyzedList(report.unanalyzed));
   if (report && report.skipped.length) lines.push('', ...skippedList(report.skipped));
+  if (report && report.exemptions.length) lines.push('', ...exemptionTable(report.exemptions));
   if (verdict.stderr) {
     const tail = String(verdict.stderr).slice(-MAX_STDERR).replace(CONTROL_BUT_NEWLINE, ' ');
     lines.push('', 'SoMi\'s error output:', '', '<pre>', escapeHtml(tail), '</pre>');
@@ -117,14 +134,23 @@ function renderSummary(verdict, { level, base }) {
   return `${lines.join('\n')}\n`;
 }
 
-/** One `::error` workflow command per violation that names a file and line. */
+const located = (items) => items.filter((v) => typeof v.file === 'string' && Number.isInteger(v.line) && v.line > 0);
+
+function command(kind, item, title, message) {
+  return `::${kind} file=${escapeProperty(item.file)},line=${item.line},title=${escapeProperty(title)}::${escapeData(message)}`;
+}
+
+/**
+ * One `::error` per violation and one `::warning` per waived limit that name a
+ * file and line, violations first, at most MAX_ANNOTATIONS in all.
+ */
 function annotations(report) {
   if (!report) return [];
-  const located = report.violations.filter((v) => typeof v.file === 'string' && Number.isInteger(v.line) && v.line > 0);
-  return located.slice(0, MAX_ANNOTATIONS).map((v) => {
-    const props = `file=${escapeProperty(v.file)},line=${v.line},title=${escapeProperty(`SoMi ${v.rule}`)}`;
-    return `::error ${props}::${escapeData(`${v.rule}: ${v.value} is over the limit of ${v.limit}`)}`;
-  });
+  const errors = located(report.violations).map((v) =>
+    command('error', v, `SoMi ${v.rule}`, `${v.rule}: ${v.value} is over the limit of ${v.limit}`));
+  const warnings = located(report.exemptions || []).map((e) =>
+    command('warning', e, `SoMi ${e.rule} waived`, `${e.rule} waived until ${e.expires}: ${e.reason}`));
+  return [...errors, ...warnings].slice(0, MAX_ANNOTATIONS);
 }
 
 module.exports = { escapeCell, escapeData, escapeProperty, parseReport, interpret, renderSummary, annotations };

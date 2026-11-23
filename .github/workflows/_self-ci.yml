@@ -1599,6 +1599,31 @@ jobs:
           python3 -c 'import yaml; print("pyyaml " + yaml.__version__)'
           python3 tests/consumer-integration/test_consumer_integration.py
 
+  fixture-consumers-contract:
+    name: fixture-consumers-contract
+    # The fixture sources against their templates, the fixture-diff lint's
+    # negative cases, and the three public fixture repos (public, Pages on,
+    # environments without a required reviewer).
+    runs-on: ubuntu-latest
+    permissions:
+      # Read this repo, and the public fixture repos through the API.
+      contents: read
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Run fixture-consumers contract tests
+        shell: bash
+        env:
+          # gh needs a token even for public repos; this job's read-only one
+          # is enough, because every endpoint it reads is public.
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 -c 'import yaml; print("pyyaml " + yaml.__version__)'
+          python3 tests/fixture-consumers/test_fixture_consumers.py
+
   consumer-integration:
     name: consumer-integration (${{ matrix.flow }})
     # Proves each flow works for a real consumer: for this commit S it pushes
