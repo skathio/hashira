@@ -82,8 +82,18 @@ test('open pushes hashira/<S> with refs rewritten, the -gate branch for npm, and
     [/pulls\?head=/, []],
     [/-X POST repos\/\S+\/pulls /, (n) => ({ number: n, html_url: `https://github.com/${REPO}/pull/${n}` })],
   ]);
+  const pushes = [];
+  deps.git = (cwd, args) => {
+    if (args[0] === 'push') pushes.push(args);
+    return git(cwd, args);
+  };
   integrate.open(ctx, deps);
   const { heads } = readState(ctx);
+  // Both branches go up in one atomic push, so the -gate commit never
+  // depends on a commit the remote received in an earlier push.
+  assert.equal(pushes.length, 1);
+  assert.ok(pushes[0].includes('--atomic'));
+  assert.deepEqual(pushes[0].slice(-2), [`${heads.main}:refs/heads/hashira/${S}`, `${heads.gate}:refs/heads/hashira/${S}-gate`]);
   const show = (ref, file) => git(tmp, ['--git-dir', ctx.remote, 'show', `${ref}:${file}`]);
   assert.equal(git(tmp, ['--git-dir', ctx.remote, 'rev-parse', `hashira/${S}`]).trim(), heads.main);
   assert.equal(git(tmp, ['--git-dir', ctx.remote, 'rev-parse', `hashira/${S}-gate`]).trim(), heads.gate);
