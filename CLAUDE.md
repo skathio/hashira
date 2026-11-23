@@ -116,7 +116,7 @@ that is ever force-pushed. Follow
 asked.
 
 The site deploys on every push to main that touches `site/**` (`site.yml`, `github-pages` environment, main only, no
-second approval). `site.yml` pins hashira's own `pages-upload` and `pages-deploy` by SHA.
+second approval). `site.yml` pins hashira's own `pages-upload` and `pages-deploy` by SHA (the v3.0.0 commit).
 
 ## Frontend: visual testing is mandatory
 
