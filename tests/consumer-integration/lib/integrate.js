@@ -70,10 +70,9 @@ function rewriteWorkflows(dir, sha) {
   }
 }
 
-function commitAndPush(deps, dir, message, branch) {
+function commit(deps, dir, message) {
   deps.git(dir, [...IDENTITY, 'add', '-A']);
   deps.git(dir, [...IDENTITY, 'commit', '--quiet', '--allow-empty', '-m', message]);
-  deps.git(dir, ['push', '--quiet', '--force', 'origin', `HEAD:refs/heads/${branch}`]);
   return deps.git(dir, ['rev-parse', 'HEAD']).trim();
 }
 
@@ -85,11 +84,17 @@ function pushBranches(ctx, deps) {
   deps.git(ctx.workdir, ['clone', '--quiet', '--depth', '1', '--branch', 'main', ctx.remote, dir]);
   replaceTree(dir, ctx.source);
   rewriteWorkflows(dir, ctx.sha);
-  const heads = { main: commitAndPush(deps, dir, `test: hashira ${ctx.sha}`, branches.main) };
+  const heads = { main: commit(deps, dir, `test: hashira ${ctx.sha}`) };
   if (plan.FLOWS[ctx.flow].gate) {
     fs.writeFileSync(path.join(dir, 'gate.js'), plan.gateSource());
-    heads.gate = commitAndPush(deps, dir, 'test: add a function over the quality limit', branches.gate);
+    heads.gate = commit(deps, dir, 'test: add a function over the quality limit');
   }
+  // One atomic push carries every branch in a single pack. Pushed one after
+  // the other, the -gate push sent only its own commit and leaned on the
+  // hashira/<S> commit pushed a second earlier, and GitHub sometimes
+  // rejected it with "missing necessary objects".
+  const refspecs = Object.keys(heads).map((key) => `${heads[key]}:refs/heads/${branches[key]}`);
+  deps.git(dir, ['push', '--quiet', '--force', '--atomic', 'origin', ...refspecs]);
   return heads;
 }
 
