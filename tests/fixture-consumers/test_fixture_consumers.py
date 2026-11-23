@@ -25,6 +25,7 @@ Run from the repo root: python3 tests/fixture-consumers/test_fixture_consumers.p
 Needs python3, PyYAML and an authenticated `gh` for the repo checks.
 """
 
+import base64
 import json
 import os
 import re
@@ -420,6 +421,20 @@ class FixtureRepos(unittest.TestCase):
         data, out = gh_json(f"repos/{OWNER}/{FLOWS['static-webapp'][0]}")
         self.assertIsNotNone(data, out)
         self.assertIs(data.get("has_pages"), True, f"Pages is not enabled on {FLOWS['static-webapp'][0]}")
+
+    def test_fixture_repos_are_hidden_from_the_org_homepage(self):
+        # skathio.github.io lists every public repo unless its default branch's
+        # .github/homepage.json says "listed": false, and these repos must be
+        # public. Checked in the source and on the live default branch, which
+        # the integration job never pushes to.
+        for flow, (repo, _, _, _, _) in FLOWS.items():
+            with self.subTest(flow=flow):
+                source = json.loads(read(f"tests/consumers/{flow}/.github/homepage.json"))
+                self.assertIs(source.get("listed"), False, f"tests/consumers/{flow}: homepage.json must say listed: false")
+                data, out = gh_json(f"repos/{OWNER}/{repo}/contents/.github/homepage.json")
+                self.assertIsNotNone(data, f"{OWNER}/{repo} has no .github/homepage.json on its default branch: {out}")
+                live = json.loads(base64.b64decode(data["content"]))
+                self.assertIs(live.get("listed"), False, f"{OWNER}/{repo} is listed on the org homepage")
 
     def test_environments_exist_without_required_reviewers(self):
         for flow, (repo, _, env, _, _) in FLOWS.items():
