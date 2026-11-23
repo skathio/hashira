@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    Fixture consumer of hashira's NuGet flow. nuget-package-ci.yml, called
+    with no project_path, restores, tests and packs the single .csproj that
+    is not named like a test project, so this one project is both the
+    package and its tests. The test packages are PrivateAssets="all", so
+    the packed .nupkg depends on none of them.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <IsPackable>true</IsPackable>
+    <PackageId>Hashira.Fixture.NuGet</PackageId>
+    <Authors>skathio</Authors>
+    <Description>Fixture consumer of hashira's NuGet flow. Published only to a throwaway feed inside its own CI run.</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/skathio/hashira-fixture-nuget</RepositoryUrl>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="MinVer" Version="5.0.0" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" PrivateAssets="all" />
+    <PackageReference Include="xunit" Version="2.9.2" PrivateAssets="all" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" PrivateAssets="all" />
+    <PackageReference Include="coverlet.collector" Version="6.0.2" PrivateAssets="all" />
+  </ItemGroup>
+</Project>

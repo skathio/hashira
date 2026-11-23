@@ -18,7 +18,7 @@ h1{font-size:4rem;line-height:1.05;letter-spacing:-.035em;margin:12px 0 20px}h1 
 .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin:28px 0 18px}.stat{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
 .stat b{display:block;font-size:1.6rem}.stat span{color:var(--muted);font-size:.85rem}
 .pills{display:flex;flex-wrap:wrap;gap:8px}.pills span{border:1px solid var(--line);border-radius:999px;padding:2px 12px;font-size:.82rem}.pills span:nth-child(-n+2){border-color:var(--accent);color:var(--accent)}
-section{border-top:1px solid var(--line);padding:64px 0}h2{font-size:2rem;letter-spacing:-.02em;margin:6px 0 10px}.sub{color:var(--muted);max-width:660px;margin:0 0 28px}
+section{border-top:1px solid var(--line);padding:64px 0}h2{font-size:2rem;letter-spacing:-.02em;margin:6px 0 10px}.sub{color:var(--muted);max-width:660px;margin:0 0 28px}.sub a{color:var(--accent);text-decoration:underline;text-underline-offset:2px}
 pre{margin:0 0 12px;padding:16px 18px;background:var(--code);border:1px solid var(--line);border-radius:12px;overflow-x:auto;font:14px/1.6 var(--mono)}
 .k{color:var(--accent)}.c{color:var(--muted)}.t{color:#0369a1}@media (prefers-color-scheme:dark){:root:not([data-theme=light]) .t{color:#7dd3fc}}:root[data-theme=dark] .t{color:#7dd3fc}
 .two{display:grid;grid-template-columns:1fr 1fr;gap:18px}
@@ -37,10 +37,10 @@ footer{border-top:1px solid var(--line);padding:32px 0 48px;color:var(--muted);f
 <div class=eyebrow>CI/CD library · MIT</div>
 <h1>hash<i>ira</i>: the pillars every release stands on.</h1>
 <p class=lede>Reusable GitHub Actions workflows and composite actions for the three shapes most projects ship: an npm package, a NuGet package and a static site on Pages. Pinned, least-privilege, and publishing through OIDC, so a release needs one approval and no long-lived token.</p>
-<div class=stats><div class=stat><b>3</b><span>flows: npm, NuGet, Pages</span></div><div class=stat><b>10</b><span>composite actions</span></div><div class=stat><b>5</b><span>scans in the suite</span></div><div class=stat><b>OIDC</b><span>trusted publishing, no stored token</span></div></div>
-<div class=pills><span>GitHub Actions</span><span>OIDC</span><span>SHA-pinned</span><span>Deny-all permissions</span><span>actionlint</span></div>
+<div class=stats><div class=stat><b>3</b><span>flows: npm, NuGet, Pages</span></div><div class=stat><b>11</b><span>composite actions</span></div><div class=stat><b>5</b><span>scans in the suite</span></div><div class=stat><b>OIDC</b><span>trusted publishing, no stored token</span></div></div>
+<div class=pills><span>GitHub Actions</span><span>OIDC</span><span>SHA-pinned</span><span>Deny-all permissions</span><span>actionlint</span><span>Quality gate</span></div>
 </div><img class=emblem src="mark.svg" alt=""></header>
-<section id="flows"><div class=eyebrow>Flows</div><h2>Three shapes, one contract</h2><p class=sub>Each flow is a CI reusable workflow plus a release composite action. Your repo keeps one or two short caller files.</p>
+<section id="flows"><div class=eyebrow>Flows</div><h2>Three shapes, one contract</h2><p class=sub>Each flow is a CI reusable workflow plus a release composite action. Your repo keeps one short caller file.</p>
 <div class=grid>
 <div class=flow><code>npm-package-ci · npm-release</code><h3>npm package</h3><p>Lint, test and scan on every PR. Release on a dispatch with a bump: pack, publish with OIDC trusted publishing, tag and GitHub Release.</p></div>
 <div class=flow><code>nuget-package-ci · nuget-push</code><h3>NuGet package</h3><p>Build, test and pack with the resolved version stamped in, then push to nuget.org through OIDC, behind one production approval.</p></div>
@@ -49,14 +49,20 @@ footer{border-top:1px solid var(--line);padding:32px 0 48px;color:var(--muted);f
 <section id="use"><div class=eyebrow>Use it</div><h2>A caller file is a few lines</h2>
 <pre><span class=k>jobs</span>:
   <span class=k>ci</span>:
-    <span class=k>uses</span>: skathio/hashira/.github/workflows/npm-package-ci.yml@<span class=t>v2</span>
+    <span class=k>uses</span>: skathio/hashira/.github/workflows/npm-package-ci.yml@<span class=t>v3</span>
     <span class=k>permissions</span>:
       contents: read
       pull-requests: write
       security-events: write
-    <span class=k>with</span>:
-      library_ref: <span class=t>'v2'</span>   <span class=c># the same ref as the uses: pin</span></pre>
-<p class=sub>Pin to a full commit SHA for reproducible builds, or to <code>v2</code> for the rolling major. Never <code>main</code>.</p></section>
+  <span class=k>publish</span>:
+    <span class=k>needs</span>: ci
+    <span class=k>if</span>: needs.ci.outputs.resolved_version != ''
+    <span class=k>environment</span>: production   <span class=c># one approval per release</span>
+    <span class=k>steps</span>:
+      - <span class=k>uses</span>: skathio/hashira/.github/actions/npm-release@<span class=t>v3</span>
+        <span class=k>with</span>:
+          version: ${{ needs.ci.outputs.resolved_version }}</pre>
+<p class=sub>An excerpt: the full file, with its triggers and the publish job's permissions, is in <a href="https://github.com/skathio/hashira/blob/main/templates/npm/ci.yml"><code>templates/</code></a>. Pin to a full commit SHA for reproducible builds, or to <code>v3</code> for the rolling major. Never <code>main</code>. Coming from v2? The <a href="https://github.com/skathio/hashira/blob/main/docs/migration-v2-to-v3.md">migration guide</a> lists every change.</p></section>
 <section id="security"><div class=eyebrow>Security</div><h2>What it carries for you</h2><div class=grid>
 <div class=f><b>Pinned actions</b><span>Every third-party action is pinned to a full commit SHA, with its version in a comment.</span></div>
 <div class=f><b>Deny-all permissions</b><span>The workflow baseline is <code>{}</code>; each job is granted only what it needs.</span></div>
@@ -64,9 +70,12 @@ footer{border-top:1px solid var(--line);padding:32px 0 48px;color:var(--muted);f
 <div class=f><b>Explicit releases</b><span>A dispatch with a bump picks the version. Nothing is inferred from commit messages.</span></div>
 <div class=f><b>Scan suite</b><span>osv, gitleaks, dependency review, CodeQL and actionlint. Each flow sets its defaults, and you can switch any of them off.</span></div>
 <div class=f><b>No pull_request_target</b><span>Shape lints refuse the trigger that hands secrets to fork PRs.</span></div>
+<div class=f><b>Quality gate</b><span>SoMi scores what each pull request changes and blocks code over its limits. On by default, one input to switch off.</span></div>
+<div class=f><b>One pin, not two</b><span>Each workflow checks its own actions out at the commit you pinned. There is no second ref to keep in step.</span></div>
+<div class=f><b>Tested like a consumer</b><span>Every change runs all three flows end to end in real fixture repos, publishing packages to throwaway registries.</span></div>
 </div></section>
 <section id="users"><div class=eyebrow>In production</div><h2>Every skathio project ships on it</h2><div class=users>
 <a href="https://skathio.github.io/somi/"><img src="users/somi.svg" alt="">SoMi · npm</a><a href="https://skathio.github.io/rogue/"><img src="users/rogue.svg" alt="">Rogue · NuGet</a><a href="https://skathio.github.io/hinokami/"><img src="users/hinokami.svg" alt="">Hinokami · Pages</a><a href="https://skathio.github.io/maneki/"><img src="users/maneki.svg" alt="">Maneki · Pages</a><a href="https://skathio.github.io/"><img src="users/skathio.svg" alt="">skathio.github.io · Pages</a></div></section>
-<section id="docs"><div class=eyebrow>Docs</div><h2>Read more</h2><div class=links><a class=p href="https://github.com/skathio/hashira/blob/main/docs/usage.md">Usage and pin policy</a><a href="https://github.com/skathio/hashira/blob/main/docs/flows/npm.md">npm flow</a><a href="https://github.com/skathio/hashira/blob/main/docs/flows/nuget.md">NuGet flow</a><a href="https://github.com/skathio/hashira/blob/main/docs/flows/static-webapp.md">Static site flow</a><a href="https://github.com/skathio/hashira/releases">Releases</a><a href="https://github.com/skathio/hashira">Code</a></div></section>
+<section id="docs"><div class=eyebrow>Docs</div><h2>Read more</h2><div class=links><a class=p href="https://github.com/skathio/hashira/blob/main/docs/usage.md">Usage and pin policy</a><a href="https://github.com/skathio/hashira/blob/main/docs/flows/npm.md">npm flow</a><a href="https://github.com/skathio/hashira/blob/main/docs/flows/nuget.md">NuGet flow</a><a href="https://github.com/skathio/hashira/blob/main/docs/flows/static-webapp.md">Static site flow</a><a href="https://github.com/skathio/hashira/blob/main/docs/catalog.md">Catalog</a><a href="https://github.com/skathio/hashira/blob/main/docs/migration-v2-to-v3.md">v2 to v3</a><a href="https://github.com/skathio/hashira/releases">Releases</a><a href="https://github.com/skathio/hashira">Code</a></div></section>
 <footer>hashira · MIT · part of <a style="text-decoration:underline" href="https://skathio.github.io/">skathio</a></footer>
 </div></body></html>

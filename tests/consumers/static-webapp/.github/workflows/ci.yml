@@ -1,0 +1,65 @@
+# .github/workflows/ci.yml: the hashira static webapp flow, as a fixture.
+# Generated from hashira's tests/consumers/static-webapp/. Edit it there, not here.
+#
+# This is templates/static-webapp/ci.yml with only these differences, which
+# hashira's fixture-diff lint (tests/shape-lints/fixture-diff.py) enforces:
+#   - the pages-deploy step has an id, so the next step can read page_url;
+#   - the github-pages environment has no required reviewer (set in the
+#     fixture repo's settings, not here);
+#   - a verification step after the pages-deploy step.
+name: ci
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  ci:
+    uses: skathio/hashira/.github/workflows/static-webapp-ci.yml@v3
+    permissions:
+      contents: read # check out the repository
+      id-token: write # upload-pages-artifact authenticates to Pages
+      pages: write # upload-pages-artifact stores the site for deploy
+      pull-requests: write # coverage comment on the pull request
+      security-events: write # upload CodeQL results when CodeQL is enabled
+  deploy:
+    needs: ci
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    environment: github-pages
+    permissions:
+      id-token: write # deploy-pages authenticates to Pages with OIDC
+      pages: write # deploy-pages publishes the site
+    steps:
+      - uses: skathio/hashira/.github/actions/pages-deploy@v3
+        id: deploy
+      - name: Check the live site serves this run's hashira commit
+        shell: bash
+        env:
+          PAGE_URL: ${{ steps.deploy.outputs.page_url }}
+          # The commit the ci job checked hashira's actions out at. The build
+          # wrote the ref the caller pins into marker.txt, and hashira's
+          # integration job pins that same commit.
+          EXPECTED: ${{ needs.ci.outputs.library_sha }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${PAGE_URL}" || ! "${EXPECTED}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::need page_url and a 40-character library_sha, got '${PAGE_URL}' and '${EXPECTED}'"
+            exit 1
+          fi
+          url="${PAGE_URL%/}/marker.txt?run=${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          served=""
+          # Pages can take a few minutes to serve a new deployment.
+          for _ in $(seq 1 30); do
+            served="$(curl -fsSL "${url}" 2>/dev/null | tr -d '[:space:]' || true)"
+            [[ "${served}" == "${EXPECTED}" ]] && break
+            sleep 10
+          done
+          if [[ "${served}" != "${EXPECTED}" ]]; then
+            echo "::error::${url} serves '${served}', expected ${EXPECTED}"
+            exit 1
+          fi
+          echo "fixture: ${url} serves hashira commit ${served}" >> "${GITHUB_STEP_SUMMARY}"

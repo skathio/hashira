@@ -112,11 +112,10 @@ Targets checked (CHECK B): every `.github/workflows/*.yml` file in this
 repository.
 
 Targets checked (CHECK A): the main caller-workflow example in each of
-`docs/flows/npm.md` (§2, "Publish caller workflow template" — split across
-two snippets with §1 the CI half and §2 the gated half), `docs/flows/
-nuget.md` (§2, same shape), and `docs/flows/static-webapp.md` (§1, "Main
-caller workflow template" — both `ci` and `deploy` jobs in ONE fenced
-block, a different shape from npm/nuget's two-snippet split; this check's
+`docs/flows/npm.md` and `docs/flows/nuget.md` (§1, "Caller workflow
+template") and `docs/flows/static-webapp.md` (§1, "Main caller workflow
+template"). Each is one fenced block holding the whole caller, `ci` and
+the gated job together, identical to `templates/<flow>/ci.yml`; this check's
 gated-job-finder works on both shapes generically by searching for ANY
 job-shaped node with a `needs:` key, not by assuming a fixed document
 shape).
@@ -167,20 +166,18 @@ FIXTURES_DIR = os.path.join(REPO_ROOT, "tests", "shape-lints", "fixtures")
 # CHECK A targets: (doc_path, doc_label, heading_substring). The heading
 # substring is matched against any "## "/"### " line containing it (same
 # semantics as docs-cross-ref.py's extract_first_yaml_block_in_section).
-# npm/nuget split the CI and Publish halves into two fenced snippets under
-# two different ## headings; the gated job (publish) lives in the SECOND
-# snippet for both. static-webapp puts both jobs (ci + deploy) in ONE
-# fenced block under its FIRST heading.
+# Each flow doc holds its whole caller, `ci` and the gated job, in ONE
+# fenced block under its first section's heading.
 GATE_DOC_TARGETS = [
     (
         os.path.join(REPO_ROOT, "docs", "flows", "npm.md"),
         "docs/flows/npm.md",
-        "Publish caller workflow template",
+        "Caller workflow template",
     ),
     (
         os.path.join(REPO_ROOT, "docs", "flows", "nuget.md"),
         "docs/flows/nuget.md",
-        "Publish caller workflow template",
+        "Caller workflow template",
     ),
     (
         os.path.join(REPO_ROOT, "docs", "flows", "static-webapp.md"),

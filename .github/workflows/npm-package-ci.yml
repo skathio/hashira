@@ -16,17 +16,19 @@
 #
 # ## Version resolution + stamp (D1/D8, iteration 2.2)
 #
-# A `version` job, gated at the JOB level on `inputs.bump != ''`, resolves the
+# A `version` job, gated at the JOB level on a non-empty bump (`inputs.bump`,
+# or else the caller's workflow_dispatch input `bump`), resolves the
 # next release version via `.github/actions/version-resolver` and stamps it
 # into an `npm pack`-built tarball — never into the checked-out working tree
 # (D1's stamp-only, no-commit-back invariant; verified by a `git status`
 # assertion step). When `bump` is empty (every routine PR/push CI run that
 # isn't cutting a release) the `version` job is skipped entirely and every
-# other job runs exactly as before this iteration — `version` neither gates
-# nor is gated by `lint`/`test`/`scan-suite`.
+# other job runs exactly as before this iteration — `version` needs only
+# `setup` (for the library commit) and neither gates nor is gated by
+# `lint`/`test`/`scan-suite`.
 #
 # CI->CD output-boundary contract (D8, phase 2 exit criteria "Major 3 fix"):
-# this workflow declares exactly ONE workflow-level output, `resolved_version`
+# this workflow declares exactly ONE version output, `resolved_version`
 # — the resolver's single scalar, mapped straight through
 # (`jobs.version.outputs.resolved_version` <- `steps.resolve.outputs.version`).
 # No second output for the `v`-prefixed tag form or the bump kind. A
@@ -59,6 +61,7 @@
 #             comment, run as the last step of this job — see below)
 #   - scan-suite : contents:read, security-events:write (CodeQL),
 #                  pull-requests:read (dependency-review on PR)
+#   - quality-gate : contents:read
 #
 # Reusable workflows can only NARROW the caller's grants, never broaden.
 # Consumers must mirror this matrix at their caller job's `permissions:`
@@ -90,36 +93,32 @@
 # All third-party `uses:` refs are pinned to a full 40-char commit SHA
 # with an inline version comment. Pins reused from iter 1.2 / 2.1.
 #
-# ## Runtime contract: library-self-checkout via `library_ref` (D14)
+# ## Runtime contract: library self-checkout at the workflow's own commit
 #
-# In-repo composite actions live at `.github/actions/<name>` in the
-# `skathio/hashira` repo. When this workflow is invoked from a
-# consumer repo, the consumer's `$GITHUB_WORKSPACE` contains the
-# consumer's files, not the library's. GitHub's `uses:` keyword does NOT
-# permit expressions in the `@<ref>` portion (workflow-load-time parse,
-# before expression evaluation), so the originally-proposed shape
-# `uses: skathio/hashira/.github/actions/<name>@${{ inputs.library_ref }}`
-# is rejected by the runtime.
+# In-repo composite actions live at `.github/actions/<name>` in
+# `skathio/hashira`. A consumer's `$GITHUB_WORKSPACE` holds the consumer's
+# files, not the library's, and GitHub's `uses:` keyword does not accept
+# expressions in its `@<ref>` portion. So every job that runs one of these
+# actions first checks out `skathio/hashira` into the reserved
+# subdirectory `.hashira/` (`persist-credentials: false`) and then calls it
+# by the literal local path `uses: ./.hashira/.github/actions/<name>`.
 #
-# Resolution (D14): every job that consumes an in-repo composite action
-# first checks out `skathio/hashira` at `${{ inputs.library_ref }}`
-# into the reserved subdirectory `.hashira/`. The composite-action
-# `uses:` refs are then literal local paths
-# `uses: ./.hashira/.github/actions/<name>` (no expressions, satisfies
-# the load-time parser). The `library_ref` is substituted at runtime
-# through `actions/checkout`'s `ref:` input (where expressions ARE
-# permitted because it's a step input, not the `uses:` keyword itself).
+# The checkout's ref is the commit this workflow file was itself called
+# at, so a caller pinned at `@<sha>` or `@v3` runs composite actions from
+# that same commit and has no second ref to keep in sync. The `setup` job
+# reads it from `job.workflow_sha`, which GitHub documents as the commit of
+# the workflow file that defines the current job: for a reusable workflow,
+# the called file, not the caller. `github.sha` and `github.workflow_sha`
+# name the caller's commit and must never be used for this checkout.
+# `setup` fails when the value is not a 40-character SHA (GitHub
+# Enterprise Server does not provide `job.workflow_sha`), checks the
+# library out at it, and publishes the commit it actually checked out as
+# its `library_sha` output. Every other job checks out
+# `needs.setup.outputs.library_sha`, and the workflow exposes the same
+# value as its `library_sha` output.
 #
-# `library_ref` is a REQUIRED input (no default) as of v2 phase 1
-# iteration 1.1 — see decisions.md D9 / phases/01-naming-unification.md.
-# v1's default ('v1', with a stale comment claiming 'main') was a
-# consumer-visible contract mismatch; rather than pick a new default to
-# defend, every caller must now pin explicitly. This is a
-# breaking-contract change for any v1 caller relying on the implicit
-# default; callers MUST pass `library_ref` explicitly going forward.
-#
-# Trade-off: ~1–2s overhead per job for the library checkout. Acceptable
-# at v1; documented as the cost of the literal-`uses:` constraint.
+# Trade-off: ~1–2s overhead per job for the library checkout, the cost of
+# the literal-`uses:` constraint.
 
 name: npm-package-ci
 
@@ -127,42 +126,48 @@ on:
   workflow_call:
     inputs:
       node_version:
-        description: "Node major to install via actions/setup-node."
+        description: "Node major to install via actions/setup-node. Default '20'. Trusted input."
         required: false
         type: string
         default: "20"
       test_command:
-        description: "Shell command that runs the consumer's tests. Trusted input (raw-shell sink per D10d; do NOT pass values derived from PR titles, issue bodies, branch names, or other externally controlled context)."
+        description: "Shell command that runs the consumer's tests. Default 'npm test'. Trusted input: it runs as raw shell, so do NOT pass values derived from PR titles, issue bodies, branch names, or other externally controlled context."
         required: false
         type: string
         default: "npm test"
       coverage_path:
-        description: "Path to the lcov coverage file produced by test_command. Default 'coverage/lcov.info'."
+        description: "Path to the coverage file the tests write. Empty (default) uses the flow's standard path: 'coverage/lcov.info' for npm and static-webapp, 'coverage/cobertura.xml' for NuGet. Trusted input."
         required: false
         type: string
-        default: "coverage/lcov.info"
+        default: ""
       scan_disable:
         description: "Comma-separated list of scans to skip (D10c). Default 'codeql,actionlint' — pass '' to enable all. Values: codeql,osv,gitleaks,dependency-review,actionlint."
         required: false
         type: string
         default: "codeql,actionlint"
-      library_ref:
-        description: "SHA, tag, or branch of skathio/hashira to check out for in-repo composite actions (D14). REQUIRED — no default (v2 phase 1 iteration 1.1). PIN TO A SHA for reproducible consumer builds."
-        required: true
-        type: string
       bump:
-        description: "One of 'patch' | 'minor' | 'major'. OPTIONAL — leave empty/unset for routine PR/push CI runs that aren't cutting a release. When set, the version job resolves the next version, surfaces it in the run summary, and stamps it into a packed tarball's package.json (D1/D8). Empty by default so every non-release CI run is unaffected."
+        description: "One of 'patch', 'minor' or 'major'. Empty (default) falls back to the caller's workflow_dispatch input 'bump'; a value passed here wins. When neither is set, as on routine pull_request and push runs, no release is cut. When set, the version job resolves the next version, shows it in the run summary and stamps it into the packed release artifact, never into the checked-out tree."
         required: false
         type: string
         default: ""
       seed_version:
-        description: "Bare semver baseline (e.g. '0.0.0') for a major/initial release with no prior stable tag (FR-3). Passed through to the version-resolver action unchanged; ignored when a stable tag already exists or when 'bump' is empty."
+        description: "Bare semver baseline (e.g. '0.0.0') for a first release with no prior stable tag. Empty (default) falls back to the caller's workflow_dispatch input 'seed_version'; a value passed here wins. Passed to version-resolver unchanged; ignored when a stable tag already exists or no bump is set."
         required: false
         type: string
         default: ""
+      quality_gate:
+        description: "Run SoMi's quality gate on what a pull request changes. Default true; false skips the quality-gate job. The gate runs only on pull_request events; on other events it passes and says so in the job summary."
+        required: false
+        type: boolean
+        default: true
+      quality_level:
+        description: "SoMi quality level for the gate: exactly 'strict' (default), 'standard' or 'relaxed'. Any other value, including '', fails the setup job."
+        required: false
+        type: string
+        default: "strict"
     outputs:
       # CI->CD output-boundary contract (D8 / phases/02-version-resolver.md
-      # exit criteria, "Major 3 fix"): exactly ONE workflow-level output,
+      # exit criteria, "Major 3 fix"): exactly ONE version output,
       # mapped straight through from the version job's single scalar. No
       # second output for the `v`-prefixed tag form or the bump kind — the
       # consumer's CD job derives those locally
@@ -170,8 +175,11 @@ on:
       # already its own dispatch input). Empty when `bump` was not provided
       # (the `version` job did not run).
       resolved_version:
-        description: "The resolved, validated bare semver string (e.g. '1.3.0', no 'v' prefix). Empty when 'bump' was not provided. The workflow's only output (D8)."
+        description: "The resolved, validated bare semver string (e.g. '1.3.0', no 'v' prefix). Empty when 'bump' was not provided. The workflow's only version output: the CD side derives the tag form and bump kind itself."
         value: ${{ jobs.version.outputs.resolved_version }}
+      library_sha:
+        description: "The skathio/hashira commit this run checked its composite actions out at: the commit this workflow file was called at."
+        value: ${{ jobs.setup.outputs.library_sha }}
 
 # Deny-all baseline; jobs grant the minimum.
 permissions: {}
@@ -182,6 +190,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    outputs:
+      # The hashira commit every job checks out into .hashira/.
+      library_sha: ${{ steps.library.outputs.sha }}
     steps:
       # actions/checkout v4.2.2 — consumer's tree.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -197,18 +208,71 @@ jobs:
           # here for symmetry with the Publish half which validates
           # NPM_TOKEN presence + shape per spec §8.
           echo "npm-package-ci: secret preflight (no secrets required for CI)"
+      # A misconfigured level fails here, visibly, even when the gate is off.
+      - name: Validate quality_level
+        shell: bash
+        env:
+          QUALITY_LEVEL: ${{ inputs.quality_level }}
+        run: |
+          set -euo pipefail
+          case "${QUALITY_LEVEL}" in
+            strict|standard|relaxed) ;;
+            *)
+              echo "::error::npm-package-ci: quality_level must be exactly 'strict', 'standard' or 'relaxed', got ${QUALITY_LEVEL@Q}."
+              exit 1
+              ;;
+          esac
+      # Resolve the commit THIS workflow file was called at (see "Runtime
+      # contract" in the header) and check the library out at it.
+      - name: Resolve hashira's own commit
+        id: self
+        shell: bash
+        env:
+          # The called workflow file's commit, never the caller's.
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${WORKFLOW_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::npm-package-ci: job.workflow_sha is '${WORKFLOW_SHA}', not a 40-character commit SHA, so hashira's composite actions cannot be checked out at the commit this workflow was called at (GitHub Enterprise Server does not provide job.workflow_sha)."
+            exit 1
+          fi
+          echo "sha=${WORKFLOW_SHA}" >> "${GITHUB_OUTPUT}"
+      - name: Checkout hashira library at its own commit
+        # actions/checkout v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: skathio/hashira
+          ref: ${{ steps.self.outputs.sha }}
+          path: .hashira
+          persist-credentials: false
+      - name: Confirm the checked-out library commit
+        id: library
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ steps.self.outputs.sha }}
+        run: |
+          set -euo pipefail
+          actual="$(git -C .hashira rev-parse HEAD)"
+          if [[ "${actual}" != "${EXPECTED_SHA}" ]]; then
+            echo "::error::npm-package-ci: .hashira is at ${actual}, expected ${EXPECTED_SHA}."
+            exit 1
+          fi
+          echo "sha=${actual}" >> "${GITHUB_OUTPUT}"
+          echo "npm-package-ci: hashira composite actions checked out at ${actual}" >> "${GITHUB_STEP_SUMMARY}"
 
   # Resolves + stamps the release version (D1/D8). Gated at the JOB level on
-  # `inputs.bump != ''` so a routine PR/push CI run (bump unset) skips this
+  # a non-empty bump so a routine PR/push CI run (no bump) skips this
   # job entirely — no resolver invocation, no checkout-with-full-tags, no
   # pack/stamp work — and shows as "skipped" rather than running pointless
-  # steps behind a step-level `if:`. Deliberately independent of `setup`/
-  # `lint`/`test`/`scan-suite`: nothing here gates them and nothing here is
-  # gated by them, so existing CI behavior for non-release runs is provably
-  # unaffected by this job's presence.
+  # steps behind a step-level `if:`. Needs only `setup`, for the library
+  # commit it checks out; independent of `lint`/`test`/`scan-suite`:
+  # nothing here gates them and nothing here is gated by them, so existing
+  # CI behavior for non-release runs is unaffected by this job's presence.
   version:
     name: version
-    if: ${{ inputs.bump != '' }}
+    needs: setup
+    # A `with: bump` wins; otherwise the caller's workflow_dispatch input.
+    if: ${{ (inputs.bump || github.event.inputs.bump) != '' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -223,13 +287,13 @@ jobs:
         with:
           fetch-depth: 0
           fetch-tags: true
-      # Library self-checkout per D14: ./.hashira/ holds hashira at library_ref.
-      - name: Checkout hashira library (D14)
+      # Library self-checkout at this workflow's own commit (see header).
+      - name: Checkout hashira library at its own commit
         # actions/checkout v4.2.2
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: skathio/hashira
-          ref: ${{ inputs.library_ref }}
+          ref: ${{ needs.setup.outputs.library_sha }}
           path: .hashira
           persist-credentials: false
       # actions/setup-node v4.1.0 — needed for `npm pack`/`npm pkg set` below.
@@ -255,13 +319,14 @@ jobs:
         uses: ./.hashira/.github/actions/version-resolver
         with:
           tags: ${{ steps.tags.outputs.tags }}
-          bump: ${{ inputs.bump }}
-          seed_version: ${{ inputs.seed_version }}
+          # An explicit `with:` value wins over the caller's dispatch input.
+          bump: ${{ inputs.bump || github.event.inputs.bump }}
+          seed_version: ${{ inputs.seed_version || github.event.inputs.seed_version }}
       - name: Surface resolved version in run summary (NFR-DX-3)
         shell: bash
         env:
           RESOLVED_VERSION: ${{ steps.resolve.outputs.version }}
-          BUMP: ${{ inputs.bump }}
+          BUMP: ${{ inputs.bump || github.event.inputs.bump }}
         run: |
           set -euo pipefail
           echo "npm-package-ci: resolved version ${RESOLVED_VERSION} (bump=${BUMP})" >> "${GITHUB_STEP_SUMMARY}"
@@ -515,13 +580,13 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: ${{ inputs.node_version }}
-      # Library self-checkout per D14: ./.hashira/ holds hashira at library_ref.
-      - name: Checkout hashira library (D14)
+      # Library self-checkout at this workflow's own commit (see header).
+      - name: Checkout hashira library at its own commit
         # actions/checkout v4.2.2
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: skathio/hashira
-          ref: ${{ inputs.library_ref }}
+          ref: ${{ needs.setup.outputs.library_sha }}
           path: .hashira
           persist-credentials: false
       # Same bug as static-webapp-ci.yml's test/build-and-upload jobs — this
@@ -535,7 +600,7 @@ jobs:
         uses: ./.hashira/.github/actions/run-tests-js
         with:
           command: ${{ inputs.test_command }}
-          coverage_path: ${{ inputs.coverage_path }}
+          coverage_path: ${{ inputs.coverage_path || 'coverage/lcov.info' }}
       # Report coverage IN THIS JOB: run-tests-js just standardized the
       # coverage file at `coverage_path` in this workspace, so it is present
       # here. (A separate coverage-report job ran on a fresh runner with no
@@ -546,7 +611,7 @@ jobs:
       - name: Report coverage
         uses: ./.hashira/.github/actions/coverage-report
         with:
-          coverage_path: ${{ inputs.coverage_path }}
+          coverage_path: ${{ inputs.coverage_path || 'coverage/lcov.info' }}
 
   scan-suite:
     name: scan-suite
@@ -567,16 +632,53 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: ${{ inputs.node_version }}
-      # Library self-checkout per D14.
-      - name: Checkout hashira library (D14)
+      # Library self-checkout at this workflow's own commit (see header).
+      - name: Checkout hashira library at its own commit
         # actions/checkout v4.2.2
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: skathio/hashira
-          ref: ${{ inputs.library_ref }}
+          ref: ${{ needs.setup.outputs.library_sha }}
           path: .hashira
           persist-credentials: false
       - name: Run scan-suite
         uses: ./.hashira/.github/actions/scan-suite
         with:
           scan_disable: ${{ inputs.scan_disable }}
+
+  # SoMi's quality check on what a pull request changes. On by default;
+  # `quality_gate: false` skips this job. On push and workflow_dispatch the
+  # action passes and writes "skipped: quality gate runs on pull requests".
+  quality-gate:
+    name: quality-gate
+    needs: setup
+    if: ${{ inputs.quality_gate }}
+    runs-on: ubuntu-latest
+    permissions:
+      # Read the consumer's tree. Violations go to the job summary and to
+      # annotations, which need no grant.
+      contents: read
+    steps:
+      # actions/checkout v4.2.2 — consumer's tree. Full history so the pull
+      # request's base commit is present without a credentialed fetch.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # actions/setup-node v4.1.0 — the gate installs and runs SoMi with npm/node.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: ${{ inputs.node_version }}
+      # Library self-checkout at this workflow's own commit (see header).
+      - name: Checkout hashira library at its own commit
+        # actions/checkout v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: skathio/hashira
+          ref: ${{ needs.setup.outputs.library_sha }}
+          path: .hashira
+          persist-credentials: false
+      - name: Run the SoMi quality gate
+        uses: ./.hashira/.github/actions/quality-gate
+        with:
+          level: ${{ inputs.quality_level }}

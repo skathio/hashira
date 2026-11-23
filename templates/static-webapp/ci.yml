@@ -1,0 +1,30 @@
+# .github/workflows/ci.yml: the hashira static webapp flow (GitHub Pages).
+# Pull requests run CI only. Pushes to main and manual runs also deploy.
+name: ci
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  ci:
+    uses: skathio/hashira/.github/workflows/static-webapp-ci.yml@v3
+    permissions:
+      contents: read # check out the repository
+      id-token: write # upload-pages-artifact authenticates to Pages
+      pages: write # upload-pages-artifact stores the site for deploy
+      pull-requests: write # coverage comment on the pull request
+      security-events: write # upload CodeQL results when CodeQL is enabled
+  deploy:
+    needs: ci
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    environment: github-pages
+    permissions:
+      id-token: write # deploy-pages authenticates to Pages with OIDC
+      pages: write # deploy-pages publishes the site
+    steps:
+      - uses: skathio/hashira/.github/actions/pages-deploy@v3

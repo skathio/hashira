@@ -47,7 +47,8 @@ DOCUMENTED_INPUTS = [
     "test_command",
     "coverage_path",
     "scan_disable",
-    "library_ref",
+    "quality_gate",
+    "quality_level",
 ]
 
 # Per-job permission requirements (subset checks — the job MAY have
@@ -59,6 +60,8 @@ REQUIRED_PERMISSIONS = {
     # "Coverage report handoff" in static-webapp-ci.yml's header), not as
     # its own job; pull-requests:write moved here with it.
     "test": {"pull-requests": "write"},
+    # The SoMi gate reads the tree and writes only summary and annotations.
+    "quality-gate": {"contents": "read"},
 }
 
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")

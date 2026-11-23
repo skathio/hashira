@@ -1,8 +1,8 @@
 # Library self-CI (dogfooding). Runs on every PR + push to main.
 # Iteration 1.1 scope: scaffold-only — actionlint over our own YAML + a smoke
 # job. Future iterations (1.2 / 1.3) extend this with action-smoke + scan-suite
-# self-application. No cross-repo `gh workflow run` triggers — fixture repos
-# are out of scope per the 2026-05-24 plan-change.
+# self-application. The consumer-integration job drives the three fixture
+# consumer repos (skathio/hashira-fixture-*) through their own CI.
 name: _self-ci
 
 on:
@@ -47,7 +47,12 @@ jobs:
           # under .github/actions/<name>/action.yml are validated implicitly
           # when referenced by a workflow; this iteration has none yet, so the
           # plain invocation is sufficient.
-          actionlint -color
+          #
+          # The -ignore covers exactly one error: actionlint (up to v1.7.12)
+          # does not know `job.workflow_sha`, which GitHub documents in the
+          # `job` context and the CI workflows' setup jobs read to find their
+          # own commit. Drop it once actionlint knows the property.
+          actionlint -color -ignore 'property "workflow_sha" is not defined in object type'
 
   smoke:
     name: smoke
@@ -206,6 +211,80 @@ jobs:
         run: |
           set -euo pipefail
           node --test tests/scan-suite/visibility-detect.test.js
+
+  quality-gate-unit-tests:
+    name: quality-gate-unit-tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      # actions/setup-node v4.1.0. Node 20 is the oldest Node the lib/ code
+      # must keep working on.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '20'
+      - name: Run quality-gate unit and contract tests
+        shell: bash
+        # Files are listed by name: Node 20's `node --test` takes no globs.
+        run: |
+          set -euo pipefail
+          node --test tests/quality-gate/contract.test.js tests/quality-gate/report.test.js tests/quality-gate/run-gate.test.js
+
+  quality-gate:
+    name: quality-gate
+    # hashira's own pull requests pass SoMi's quality gate at strict, the
+    # same check the three CI workflows run for consumers by default. On a
+    # push to main the action passes and writes its skip line.
+    runs-on: ubuntu-latest
+    permissions:
+      # Read the tree. Violations go to the job summary and to annotations,
+      # which need no grant.
+      contents: read
+    steps:
+      # actions/checkout v4.2.2. Full history so the pull request's base
+      # commit is present without a credentialed fetch.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # actions/setup-node v4.1.0. The gate installs and runs SoMi with
+      # npm/node; Node 20 is the oldest Node the consumer workflows default to.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '20'
+      - name: Run the SoMi quality gate
+        uses: ./.github/actions/quality-gate
+        with:
+          level: strict
+
+  ci-workflow-inputs:
+    name: ci-workflow-inputs
+    # Shared inputs match across the three CI workflows, bump and
+    # seed_version fall back to the caller's dispatch inputs, NuGet's
+    # project_path detection, and the quality-gate wiring. The test runs
+    # the setup steps it checks with bash, so it needs node, bash and PyYAML.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      # actions/setup-node v4.1.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '20'
+      - name: Verify python3 + pyyaml availability
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -c 'import yaml; print("pyyaml " + yaml.__version__)'
+      - name: Run the CI workflow input tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tests/ci-workflow-inputs/test_ci_workflow_inputs.py
 
   scan-suite-default:
     name: scan-suite-default
@@ -1135,54 +1214,78 @@ jobs:
           set -euo pipefail
           python3 tests/static-webapp/docs-cross-ref.py
 
-  dual-pin-lint:
-    name: dual-pin-lint
-    # Phase 4 iteration 4.1 (decisions.md D9; security.md AP8). Asserts the
-    # dual-pin invariant (same repository AND same commit between a
-    # caller's outer `uses:` pin and the `library_ref` input passed to the
-    # SAME reusable-workflow call) against tests/dual-pin/caller-fixture.yml
-    # — the canonical, lint-owned example of a correctly dual-pinned caller.
-    # Pure static/textual check: GitHub Actions resolves a `uses:` ref's
-    # `@<ref>` at workflow-parse time, before any job runs, so there is no
-    # runtime introspection API this could instead be implemented against
-    # (see tests/dual-pin/lint.py's module docstring for the full reasoning).
+  library-self-sha-contract:
+    name: library-self-sha-contract
+    # Static contract for the v3 library self-checkout: the three CI
+    # workflows take no input naming the library commit, check their composite actions
+    # out into .hashira/ at a ref resolved at run time (never a caller input,
+    # never the caller's commit), and the docs no longer mention the input.
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
-      # actions/checkout v4.2.2
+      # actions/checkout v4.2.2. Full history so the test can find the
+      # merge base with main when it looks for newly added lib/ files.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      - name: Run dual-pin lint against the canonical fixture
+        with:
+          fetch-depth: 0
+      - name: Make main resolvable for the merge-base lookup
         shell: bash
         run: |
           set -euo pipefail
-          python3 tests/dual-pin/lint.py
+          git rev-parse --verify --quiet refs/heads/main >/dev/null \
+            || git branch main origin/main
+      - name: Verify python3 + pyyaml availability
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -c 'import yaml; print("pyyaml " + yaml.__version__)'
+      - name: Run the library self-SHA contract tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tests/library-self-sha/test_library_self_sha.py
 
-  dual-pin-lint-self-test:
-    name: dual-pin-lint-self-test
-    # Regression lock for the lint's negative-test fixtures (acceptance
-    # criterion, phase 4 iteration 4.1; extended passes 2-3 of review):
-    # proves the lint fails closed on a same-repository mismatch
-    # (fixtures/same-repo-mismatch.yml), a same-repository-different-commit
-    # mismatch (fixtures/same-repo-different-sha.yml — the actual AP8 attack
-    # path), and an asymmetric real-SHA-vs-not mismatch in EITHER direction
-    # (fixtures/non-pinned-library-ref*.yml for `main`/non-`main` branches;
-    # the mirror unpinned-`uses:` direction is covered in-memory by
-    # lint.py --self-test) — and that the canonical fixture stays clean.
-    # These fixtures deliberately retain `hashira-ops` / mismatched-commit /
-    # non-SHA content; excluded by construction from iteration 4.4's
-    # repo-wide naming-cleanup sweep.
-    runs-on: ubuntu-latest
+  library-self-sha-call:
+    name: library-self-sha-call
+    # Calls a consumer CI workflow for real, at this run's commit, against
+    # the in-repo .NET fixture. Its `library_sha` output is the commit the
+    # workflow actually checked its composite actions out at;
+    # library-self-sha-assert checks it equals the commit of the call.
+    uses: ./.github/workflows/nuget-package-ci.yml
+    # The called workflow can only narrow these grants.
     permissions:
       contents: read
+      # coverage-report's sticky PR comment, inside the called `test` job.
+      pull-requests: write
+      # scan-suite grants security-events:write for CodeQL when enabled.
+      security-events: write
+    with:
+      project_path: tests/run-tests-dotnet/Fixture.Tests.csproj
+      # The quality-gate job above already gates this pull request; running
+      # it again inside this call would only repeat the same check.
+      quality_gate: false
+
+  library-self-sha-assert:
+    name: library-self-sha-assert
+    needs: library-self-sha-call
+    runs-on: ubuntu-latest
+    permissions: {}
     steps:
-      # actions/checkout v4.2.2
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      - name: Run dual-pin lint --self-test
+      - name: Assert the checked-out library SHA equals the called SHA
         shell: bash
+        env:
+          # A local `./` call loads the called workflow from the same commit
+          # as this workflow, so that commit is the SHA it was called at.
+          CALLED_AT: ${{ github.workflow_sha }}
+          LIBRARY_SHA: ${{ needs.library-self-sha-call.outputs.library_sha }}
         run: |
           set -euo pipefail
-          python3 tests/dual-pin/lint.py --self-test
+          if [[ "${LIBRARY_SHA}" != "${CALLED_AT}" ]]; then
+            echo "::error::nuget-package-ci was called at ${CALLED_AT} but checked its composite actions out at '${LIBRARY_SHA}'."
+            exit 1
+          fi
+          echo "library self-SHA: called at ${CALLED_AT}, composite actions checked out at ${LIBRARY_SHA}" >> "${GITHUB_STEP_SUMMARY}"
 
   composite-shape-invariant-lint:
     name: composite-shape-invariant-lint
@@ -1315,3 +1418,375 @@ jobs:
         run: |
           set -euo pipefail
           python3 tests/shape-lints/gate-lints.py --self-test
+
+  template-identity-lint:
+    name: template-identity-lint
+    # Each templates/<flow>/ci.yml must be copied word for word into the
+    # first caller block of docs/flows/<flow>.md and into README.md, so the
+    # caller a consumer copies from the docs is the one that is tested.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Verify python3 + pyyaml availability
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -c 'import yaml; print("pyyaml " + yaml.__version__)'
+      - name: Run the template-identity lint
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tests/templates/identity-lint.py
+
+  template-identity-lint-self-test:
+    name: template-identity-lint-self-test
+    # Proves the lint fails, naming the file and the first differing line,
+    # on each negative fixture under tests/templates/fixtures/.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Verify python3 + pyyaml availability
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -c 'import yaml; print("pyyaml " + yaml.__version__)'
+      - name: Run the template-identity lint --self-test
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tests/templates/identity-lint.py --self-test
+
+  catalog-shape-validation:
+    name: catalog-shape-validation
+    # docs/catalog.md lists every reusable workflow and composite action;
+    # its input and output tables must match the YAML.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Verify python3 + pyyaml availability
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -c 'import yaml; print("pyyaml " + yaml.__version__)'
+      - name: Run the catalog shape-validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tests/catalog/shape-validate.py
+
+  catalog-shape-validation-self-test:
+    name: catalog-shape-validation-self-test
+    # Proves the catalog check fails on a removed or extra row, a wrong
+    # default or required flag, a missing section and an @main snippet.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Verify python3 + pyyaml availability
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -c 'import yaml; print("pyyaml " + yaml.__version__)'
+      - name: Run the catalog shape-validation --self-test
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tests/catalog/shape-validate.py --self-test
+
+  v3-callers-docs-contract:
+    name: v3-callers-docs-contract
+    # The rules for the v3 caller templates and docs: template shape and
+    # size, the identity lint's behavior, the README, the catalog, the
+    # migration guide, and no old repository or input names.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Verify python3 + pyyaml availability
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -c 'import yaml; print("pyyaml " + yaml.__version__)'
+      - name: Run the v3 callers and docs contract tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tests/v3-callers-docs/test_v3_callers_docs.py
+
+  fixture-diff-lint:
+    name: fixture-diff-lint
+    # Each fixture consumer's caller under tests/consumers/ must be its
+    # flow's templates/<flow>/ci.yml with only the differences the
+    # integration suite needs (fake registry, publish target, verification
+    # steps), so the fixtures test the caller consumers copy.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Verify python3 + pyyaml availability
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -c 'import yaml; print("pyyaml " + yaml.__version__)'
+      - name: Run the fixture-diff lint
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tests/shape-lints/fixture-diff.py
+
+  fixture-diff-lint-self-test:
+    name: fixture-diff-lint-self-test
+    # Proves the lint fails, for its own named reason, on each negative
+    # fixture under tests/shape-lints/fixtures/fixture-diff/, and accepts
+    # the allowed differences.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Verify python3 + pyyaml availability
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -c 'import yaml; print("pyyaml " + yaml.__version__)'
+      - name: Run the fixture-diff lint --self-test
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tests/shape-lints/fixture-diff.py --self-test
+
+  consumer-integration-unit-tests:
+    name: consumer-integration-unit-tests
+    # The consumer-integration job's helpers, against a local bare repo and
+    # a fake gh, plus the contract tests that read the job itself.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      # actions/setup-node v4.1.0. Node 20 is the oldest Node the helpers
+      # must keep working on.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '20'
+      - name: Run consumer-integration unit tests
+        shell: bash
+        # Files are listed by name: Node 20's `node --test` takes no globs.
+        run: |
+          set -euo pipefail
+          node --test tests/consumer-integration/plan.test.js tests/consumer-integration/integrate.test.js tests/consumer-integration/lock.test.js
+      - name: Run consumer-integration contract tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -c 'import yaml; print("pyyaml " + yaml.__version__)'
+          python3 tests/consumer-integration/test_consumer_integration.py
+
+  fixture-consumers-contract:
+    name: fixture-consumers-contract
+    # The fixture sources against their templates, the fixture-diff lint's
+    # negative cases, and the three public fixture repos (public, Pages on,
+    # environments without a required reviewer).
+    runs-on: ubuntu-latest
+    permissions:
+      # Read this repo, and the public fixture repos through the API.
+      contents: read
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Run fixture-consumers contract tests
+        shell: bash
+        env:
+          # gh needs a token even for public repos; this job's read-only one
+          # is enough, because every endpoint it reads is public.
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 -c 'import yaml; print("pyyaml " + yaml.__version__)'
+          python3 tests/fixture-consumers/test_fixture_consumers.py
+
+  consumer-integration:
+    name: consumer-integration (${{ matrix.flow }})
+    # Proves each flow works for a real consumer: for this commit S it pushes
+    # branch hashira/<S> to the flow's fixture repo with every skathio/hashira
+    # ref set to S, opens a PR there and waits for that PR's CI, then runs the
+    # release path on the same branch and checks the tag and Release (npm,
+    # NuGet) or the live Pages site (static, checked by the fixture's own
+    # deploy job). The npm fixture also gets hashira/<S>-gate, whose PR run
+    # must fail at the quality-gate job and nowhere earlier. The fixture
+    # sources are tests/consumers/<flow>/, reviewed here.
+    #
+    # It authenticates with a GitHub App installed only on the three fixture
+    # repos (secrets FIXTURE_APP_ID and FIXTURE_APP_PRIVATE_KEY). The App
+    # needs Contents, Pull requests, Actions and Workflows write on them. The
+    # same two secrets are also stored as Dependabot secrets, because a
+    # Dependabot PR (the weekly pin bump) gets only those and must pass too.
+    # On a PR from a fork those secrets are absent and this job fails: accepted.
+    runs-on: ubuntu-latest
+    # The sum of the step limits below, so a slow step fails with its own
+    # message and the always() cleanup still runs: lock wait 125, lock take
+    # 45, open 15, three fixture waits of 35 (each gives up after 30 minutes
+    # on its own, tests/consumer-integration/lib/plan.js), cleanup 20.
+    timeout-minutes: 315
+    # Runs against one fixture repo never overlap: they share its tags,
+    # Releases and Pages site. That is a lock branch in the fixture repo
+    # (tests/consumer-integration/lib/lock.js), not a concurrency group: a
+    # group keeps one pending job and cancels the older one when a third run
+    # queues, which would leave that PR red.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - flow: npm
+            repo: hashira-fixture-npm
+            source: tests/consumers/npm
+          - flow: nuget
+            repo: hashira-fixture-nuget
+            source: tests/consumers/nuget
+          - flow: static
+            repo: hashira-fixture-static
+            source: tests/consumers/static-webapp
+    permissions:
+      # Read the fixture sources from this repo. Everything done in the
+      # fixture repos uses the App token, not this job's GITHUB_TOKEN.
+      contents: read
+      # Read whether the hashira run holding a fixture repo's lock is still
+      # going, to tell a live lock from one a dead job left behind.
+      actions: read
+    env:
+      FIXTURE_FLOW: ${{ matrix.flow }}
+      FIXTURE_REPO: ${{ matrix.repo }}
+      FIXTURE_SOURCE: ${{ matrix.source }}
+      # The PR's head commit, not the merge commit: the fixture pins
+      # skathio/hashira at S, so S must be a commit on a hashira branch.
+      HASHIRA_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      # Only lock.js reads hashira's runs with it; fixture calls never see it.
+      HASHIRA_TOKEN: ${{ github.token }}
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      # actions/setup-node v4.1.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '20'
+      # Waits for another run's lock anonymously (the fixture repos are
+      # public), so no App token has to outlive a long wait.
+      - name: Wait for the fixture repo's integration lock
+        timeout-minutes: 125
+        shell: bash
+        run: node tests/consumer-integration/lib/integrate.js lock-wait
+      # actions/create-github-app-token v3.3.0. App tokens last an hour, so
+      # each phase mints its own; each is scoped to this leg's fixture repo.
+      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510
+        id: lock-token
+        with:
+          app-id: ${{ secrets.FIXTURE_APP_ID }}
+          private-key: ${{ secrets.FIXTURE_APP_PRIVATE_KEY }}
+          owner: skathio
+          repositories: ${{ matrix.repo }}
+          permission-contents: write
+      - name: Take the fixture repo's integration lock
+        timeout-minutes: 45
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.lock-token.outputs.token }}
+        run: node tests/consumer-integration/lib/integrate.js lock
+      # actions/create-github-app-token v3.3.0
+      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510
+        id: app-token
+        with:
+          app-id: ${{ secrets.FIXTURE_APP_ID }}
+          private-key: ${{ secrets.FIXTURE_APP_PRIVATE_KEY }}
+          owner: skathio
+          repositories: ${{ matrix.repo }}
+          permission-contents: write
+          permission-pull-requests: write
+          permission-actions: write
+          permission-workflows: write
+      - name: Push hashira/<S> to the fixture repo and open its PR
+        timeout-minutes: 15
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: node tests/consumer-integration/lib/integrate.js open
+      - name: Wait for the fixture PR run
+        timeout-minutes: 35
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: node tests/consumer-integration/lib/integrate.js pr-run
+      # actions/create-github-app-token v3.3.0. A fresh token: the PR wait
+      # above may have used most of the last one's hour.
+      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510
+        id: gate-token
+        if: matrix.flow == 'npm'
+        with:
+          app-id: ${{ secrets.FIXTURE_APP_ID }}
+          private-key: ${{ secrets.FIXTURE_APP_PRIVATE_KEY }}
+          owner: skathio
+          repositories: ${{ matrix.repo }}
+          permission-actions: read
+      - name: Check the quality gate negative case failed at the gate
+        if: matrix.flow == 'npm'
+        timeout-minutes: 35
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.gate-token.outputs.token }}
+        run: node tests/consumer-integration/lib/integrate.js gate-run
+      # actions/create-github-app-token v3.3.0
+      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510
+        id: release-token
+        with:
+          app-id: ${{ secrets.FIXTURE_APP_ID }}
+          private-key: ${{ secrets.FIXTURE_APP_PRIVATE_KEY }}
+          owner: skathio
+          repositories: ${{ matrix.repo }}
+          permission-contents: read
+          permission-actions: write
+      - name: Run the fixture release path
+        timeout-minutes: 35
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.release-token.outputs.token }}
+        run: node tests/consumer-integration/lib/integrate.js release
+      # actions/create-github-app-token v3.3.0. Cleanup runs on success,
+      # failure and cancellation, with a fresh token.
+      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510
+        id: cleanup-token
+        if: always()
+        with:
+          app-id: ${{ secrets.FIXTURE_APP_ID }}
+          private-key: ${{ secrets.FIXTURE_APP_PRIVATE_KEY }}
+          owner: skathio
+          repositories: ${{ matrix.repo }}
+          permission-contents: write
+          permission-pull-requests: write
+          permission-actions: write
+      - name: Clean up the fixture repo
+        if: always()
+        timeout-minutes: 20
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.cleanup-token.outputs.token }}
+        run: node tests/consumer-integration/lib/integrate.js cleanup

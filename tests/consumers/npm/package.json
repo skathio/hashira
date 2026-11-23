@@ -1,0 +1,18 @@
+{
+  "name": "hashira-fixture-npm",
+  "version": "0.0.0",
+  "description": "Fixture consumer of hashira's npm flow. Published only to a throwaway registry inside its own CI run.",
+  "main": "index.js",
+  "files": [
+    "index.js"
+  ],
+  "scripts": {
+    "pretest": "node -e \"require('fs').mkdirSync('coverage', { recursive: true })\"",
+    "test": "node --test --experimental-test-coverage --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/lcov.info"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/skathio/hashira-fixture-npm.git"
+  },
+  "license": "MIT"
+}

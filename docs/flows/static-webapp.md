@@ -6,10 +6,9 @@
 > Pages enablement note, input/permissions tables, `github-pages`
 > Environment setup, supported framework guidance, common failure modes.
 > **Status**: derived directly from `.github/workflows/static-webapp-ci.yml`
-> and `.github/actions/pages-deploy/action.yml` (v2 shape — the
-> `static-webapp-deploy.yml` reusable workflow this flow used in v1 is
-> deleted; `pages-deploy` is invoked directly from a `deploy` job in the
-> consumer's own caller file). No live Pages deploy from the library itself
+> and `.github/actions/pages-deploy/action.yml` (v3 shape: the v1 deploy
+> reusable workflow is deleted; `pages-deploy` is invoked directly from a
+> `deploy` job in the consumer's own caller file). No live Pages deploy from the library itself
 > (would conflict with the library's own purpose); A3's GitHub Pages
 > `deploy-pages`-in-a-composite-shape verification is research-based PASS,
 > not yet confirmed by a live deploy — see `progress.md`.
@@ -22,19 +21,18 @@ permissions baseline, OIDC trust onboarding narrative), see
 
 ## What changed from v1
 
-v1's Deploy half was a separate **reusable workflow**,
-`static-webapp-deploy.yml`, called via its own `uses:` line with its own
-`inputs:` block (`environment_name`, `library_ref`). **That file is
+v1's Deploy half was a separate **reusable workflow**, called via its own
+`uses:` line with its own `inputs:` block. **That file is
 deleted.** Its logic — invoke `actions/deploy-pages`, emit the deployed URL
 to the run summary — moved into the `pages-deploy` **composite action**,
 invoked directly from a `deploy` job in the consumer's own caller file,
 brought under the same CI-reusable-workflow + CD-composite-action shape
-every other flow uses (D2's architectural spine). `pages-deploy` takes no
-`library_ref` — composite actions invoked with a literal local path or a
-versioned `uses:` ref don't need the self-checkout mechanism the CI
+every other flow uses. Composite actions
+invoked with a literal local path or a versioned `uses:` ref don't need
+the self-checkout mechanism the CI
 reusable workflow uses to reach its own in-repo composite actions (D2's
 CD-composite-never-self-checks-out rule); pin `pages-deploy`'s own `uses:`
-ref the normal way (SHA or `@v2`).
+ref the normal way (SHA or `@v3`).
 
 Two security mechanisms also changed shape in this conversion:
 
@@ -49,132 +47,82 @@ Two security mechanisms also changed shape in this conversion:
   `id-token: write` + `pages: write`), but v2 states it explicitly rather
   than leaving it implicit.
 
-## 1. Main caller workflow template (push-to-main deploy)
+## 1. Main caller workflow template
 
-Copy this into `.github/workflows/deploy.yml` in your static webapp
-repo. Like the npm/NuGet flows, this is **one file with two jobs connected
-by `needs:`** — this keeps the Pages artifact handoff in the same workflow
-run rather than relying on `workflow_run` (the wrong primitive: default-branch
-context with default-branch secrets on PR-originating runs — see
-[`../usage.md`](../usage.md#not-workflow_run)).
+Copy this into `.github/workflows/ci.yml` in your static webapp repo. It is
+the whole caller: **one file with two jobs connected by `needs:`**, which
+keeps the Pages artifact handoff in the same workflow run rather than
+relying on `workflow_run` (the wrong primitive: default-branch context with
+default-branch secrets on PR-originating runs, see
+[`../usage.md`](../usage.md#not-workflow_run)). The same file is
+[`templates/static-webapp/ci.yml`](../../templates/static-webapp/ci.yml),
+and a lint keeps the two identical.
 
 ```yaml
-# .github/workflows/deploy.yml
-name: deploy
+# .github/workflows/ci.yml: the hashira static webapp flow (GitHub Pages).
+# Pull requests run CI only. Pushes to main and manual runs also deploy.
+name: ci
 on:
+  pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
 
-# Deny-all default; each job grants what it needs.
 permissions: {}
 
 jobs:
   ci:
-    # Pin to a SHA for reproducible builds (recommended), or @v2 for the
-    # rolling tag. NEVER pin to @main — see docs/usage.md "Pin policy".
-    uses: skathio/hashira/.github/workflows/static-webapp-ci.yml@<40-char-sha>
-    # Per-job grants MUST mirror the matrix in §6 — reusable workflows
-    # can only narrow the caller's grants, not broaden them.
+    uses: skathio/hashira/.github/workflows/static-webapp-ci.yml@v3
     permissions:
-      contents: read
-      id-token: write          # required by upload-pages-artifact
-      pages: write             # required by upload-pages-artifact
-      pull-requests: write     # coverage-report sticky comment
-      security-events: write   # CodeQL (when scan_disable enables it)
-    with:
-      node_version: '20'
-      build_command: 'npm run build'
-      # output_dir: 'dist'  # uncomment if autodetect doesn't match your framework
-      # test_command: 'npm test'
-      # coverage_path: 'coverage/lcov.info'
-      # scan_disable defaults to 'codeql,actionlint'. Pass '' to enable all.
-      library_ref: '<40-char-sha>'  # MUST be the SAME SHA as @<…> above.
+      contents: read # check out the repository
+      id-token: write # upload-pages-artifact authenticates to Pages
+      pages: write # upload-pages-artifact stores the site for deploy
+      pull-requests: write # coverage comment on the pull request
+      security-events: write # upload CodeQL results when CodeQL is enabled
   deploy:
-    # The needs: ci edge is what makes the same-run artifact handoff work.
-    # Without it, deploy starts before CI uploads the artifact and
-    # deploy-pages fails with "no artifact found".
     needs: ci
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
-    environment: github-pages   # single gate; configure >=1 required reviewer (see §7)
+    environment: github-pages
     permissions:
-      contents: read
-      pages: write             # required by deploy-pages
-      id-token: write          # required by deploy-pages for OIDC
+      id-token: write # deploy-pages authenticates to Pages with OIDC
+      pages: write # deploy-pages publishes the site
     steps:
-      # pages-deploy takes no library_ref/self-checkout (D2's
-      # CD-composite-never-self-checks-out rule) — pin its own uses: ref
-      # the normal way, same SHA convention as every other CD composite.
-      - uses: skathio/hashira/.github/actions/pages-deploy@<40-char-sha-or-v2>
+      - uses: skathio/hashira/.github/actions/pages-deploy@v3
 ```
 
-### Security callout — `library_ref` is an integrity control
+- **When it deploys.** Pull requests run CI only: `deploy` is skipped on
+  `pull_request`, and `pages-deploy` itself refuses that event (see §5).
+  Pushes to `main` and manual runs build, upload and deploy.
+- **Optional inputs.** Every CI input has a default (see §4): the build
+  runs `npm run build` and the output directory is autodetected. Add a
+  `with:` block to the `ci` job only for what you change, for example
+  `output_dir`.
+- **Permissions.** The `ci` job grants `id-token: write` and `pages: write`
+  because its `build-and-upload` job runs `upload-pages-artifact`; a
+  reusable workflow can only narrow the caller's grants, never widen them.
 
-`library_ref` (on the `ci` job only — `pages-deploy` doesn't take one) is
-NOT just a reproducibility hint. It is an **integrity control against
-library-repo compromise**. If an attacker compromises the
-`skathio/hashira` library repo and you are pinned to `main` (or any other
-moving ref), their code runs inside the `build-and-upload` job, which holds
-`id-token: write` and `pages: write`. With those scopes the attacker can:
+### Security callout — pin `uses:` to a SHA
+
+The `uses:` ref on the `ci` job is NOT just a reproducibility hint. It is an
+**integrity control against library-repo compromise**: the CI workflow
+checks its own composite actions out at the commit that ref resolved to (see
+[`../usage.md`](../usage.md#the-library-self-checkout)), so the ref decides
+all the library code the run executes. If an attacker compromises the
+`skathio/hashira` library repo and you follow a moving ref, their code runs
+inside the `build-and-upload` job, which holds `id-token: write` and
+`pages: write`. With those scopes the attacker can:
 
 - exfiltrate the GitHub OIDC token from `${ACTIONS_ID_TOKEN_REQUEST_TOKEN}`
   / `${ACTIONS_ID_TOKEN_REQUEST_URL}` (which any cloud federation you
   have configured against your repo's OIDC subject will accept), and
 - publish arbitrary content to your Pages site.
 
-**Use the same 40-character commit SHA** for both `ci`-job references on
-every consumer-side update:
-
-1. The `uses:` ref on the `ci` job (`@<40-char-sha>`).
-2. The `library_ref` input on the `ci` job.
-
-The `deploy` job's `pages-deploy` `uses:` ref is a separate, independent
-pin (it has no `library_ref` to keep in sync with it) — pin it to a SHA or
-`@v2` like any other composite action reference, but it is not part of the
-dual-pin invariant described in
-[`../usage.md`](../usage.md#the-library_ref-dual-pin-invariant) (that
-invariant is specific to reusable workflows that self-checkout via
-`library_ref`; `pages-deploy` is a composite action with no such
-mechanism).
-
-## 2. PR-only workflow template
-
-For pull-request CI without deploying, add a separate file:
-
-```yaml
-# .github/workflows/pr.yml
-name: pr
-on:
-  pull_request:
-
-permissions: {}
-
-jobs:
-  ci:
-    uses: skathio/hashira/.github/workflows/static-webapp-ci.yml@<40-char-sha>
-    permissions:
-      contents: read
-      id-token: write
-      pages: write
-      pull-requests: write
-      security-events: write
-    with:
-      node_version: '20'
-      build_command: 'npm run build'
-      library_ref: '<40-char-sha>'
-```
-
-> **Placeholder substitution callout**: replace **every** `<40-char-sha>`
-> occurrence above (on `uses:` lines AND in `library_ref:` inputs) with
-> the **same** 40-character commit SHA from the `hashira` release you're
-> pinning to. A `sed 's/<40-char-sha>/abc.../g'` substitution catches them
-> all — except `pages-deploy`'s own `uses:` ref in §1, which is a separate,
-> independent pin (see the security callout above).
-
-Do **not** add `push: branches: [main]` to this file — that runs on the
-same commits as `deploy.yml` and doubles your CI cost. Keep `pr.yml` as
-the PR-only file and `deploy.yml` as the main-push file. `pr.yml` must
-never call `pages-deploy` — see §8's `pull_request_target`/`pull_request`
-failure-mode entries for why.
+The template follows `@v3`, which moves with each v3 release. For the
+strongest guarantee, **pin the `ci` job's `uses:` ref to a 40-character
+commit SHA**, and never to `@main`. The `deploy` job's `pages-deploy`
+`uses:` ref is a separate, independent pin: pin it to a SHA or `@v3` like
+any other composite action reference.
 
 ## 3. GitHub Pages enablement (one-time consumer setup)
 
@@ -199,13 +147,20 @@ on.
 | `node_version` | string | `'20'` | Node major to install via `actions/setup-node`. Trusted input. |
 | `build_command` | string | `'npm run build'` | Shell command that builds the static site. Runs (via `eval`) in the same job that holds `id-token: write` + `pages: write` (D10d raw-shell sink). **MUST be a literal string set in your caller workflow — do NOT derive from PR titles, issue bodies, branch names, commit messages, fork-author-controlled tag names, or any other externally controlled context.** A consumer who violates this trust contract can have their GitHub OIDC token exfiltrated by attacker-controlled code; any cloud federation configured against this repo's OIDC subject is in the blast radius. |
 | `output_dir` | string | `''` | Directory containing the built site (passed through to `pages-upload`'s `path` input). Empty (default) triggers autodetect among `dist/`, `build/`, `out/`, `public/` (first found wins). **MUST be a workspace-relative directory without `..` segments or a leading `/`.** |
-| `test_command` | string | `'npm test'` | Shell command that runs the consumer's tests. Trusted input. |
-| `coverage_path` | string | `'coverage/lcov.info'` | Path to the lcov coverage file produced by `test_command`. Trusted input. |
+| `test_command` | string | `'npm test'` | Shell command that runs the consumer's tests. **Trusted input**: it runs as raw shell, so do NOT pass values derived from PR titles, issue bodies, branch names, or other externally controlled context. |
+| `coverage_path` | string | `''` | Path to the coverage file the tests write. Empty uses the flow's standard path: `coverage/lcov.info` for npm and static-webapp, `coverage/cobertura.xml` for NuGet. Consumed by `coverage-report`, which runs inside the `test` job. Trusted input. |
 | `scan_disable` | string | `'codeql,actionlint'` | Comma-separated list of scans to skip (D10c). Pass `''` to enable all. Values: `codeql`, `osv`, `gitleaks`, `dependency-review`, `actionlint`. |
-| `library_ref` | string | _(required, no default)_ | SHA, tag, or branch of `skathio/hashira` checked out into `.hashira/` for in-repo composite actions (D9/D14). **Required** — every caller must pin it explicitly. PIN TO A SHA — this is an integrity control, not just reproducibility. See the security callout in §1. |
+| `quality_gate` | boolean | `true` | Run SoMi's quality gate (the `quality-gate` job) on what a pull request changes. `false` skips the job. The gate runs only on `pull_request` events; on `push` and `workflow_dispatch` it passes and writes "skipped: quality gate runs on pull requests" to the job summary. |
+| `quality_level` | string | `'strict'` | SoMi quality level for the gate: exactly `'strict'`, `'standard'` or `'relaxed'`. Any other value, including `''`, fails the `setup` job with an error naming the three. |
 
 This workflow takes **no secrets** (static webapps build from public
 source; Pages deploy authenticates via OIDC).
+
+### CI output (`static-webapp-ci.yml`)
+
+| Output | Meaning |
+|--------|---------|
+| `library_sha` | The `skathio/hashira` commit this run checked its composite actions out at. The workflow resolves it itself from its own commit (`job.workflow_sha`), so it always equals the commit your `uses:` ref resolved to. There is no input to set it. |
 
 ### Deploy inputs (`pages-deploy` composite action)
 
@@ -213,9 +168,8 @@ source; Pages deploy authenticates via OIDC).
 |-------|------|---------|---------|
 | `artifact_name` | string | `'github-pages'` | Artifact name to deploy. Defaults to match `pages-upload`'s own default. Override only if you uploaded under a non-default name. |
 
-`pages-deploy` declares **no `library_ref` input** — unlike the CI
-reusable workflow, a composite action invoked via `uses:` doesn't need the
-self-checkout mechanism (no `workflow_call`-boundary `uses:`-expression
+Unlike the CI reusable workflow, the `pages-deploy` composite action
+invoked via `uses:` doesn't need the self-checkout mechanism (no `workflow_call`-boundary `uses:`-expression
 restriction applies to a composite action's own `uses:` line, which can
 carry an expression-free literal ref directly). See "What changed from v1"
 above.
@@ -233,15 +187,15 @@ This action takes **no secrets**. Deployment authenticates via OIDC
 
 `pages-deploy`'s **first step**, unconditionally, refuses to run when
 `github.event_name == 'pull_request'` — regardless of whether the caller
-already guards against it. This is folded in from the now-deleted
-`static-webapp-deploy.yml` reusable workflow's `preflight` job (the one
+already guards against it. This is folded in from the now-deleted v1
+deploy reusable workflow's `preflight` job (the one
 safety mechanism worth preserving across the reusable-workflow → composite
 conversion). Deploying on a `pull_request` event would run this action
 (and its `pages: write` + `id-token: write` grants) inside a job that may
 be triggered by a fork PR, exposing those scopes to PR-author-influenced
-code. The recommended caller shape (§1/§2) is a separate
-`push: branches: [main]`-only `deploy.yml` and a `pull_request`-triggered
-`pr.yml` that only calls `static-webapp-ci.yml`, never `pages-deploy`.
+code. The caller template (§1) skips its `deploy` job on
+`pull_request` (`if: github.event_name != 'pull_request'`), so a pull
+request runs only `static-webapp-ci.yml`, never `pages-deploy`.
 
 `static-webapp-ci.yml`'s own `build-and-upload` job (CI half) carries the
 analogous restriction as a **documentation prohibition** rather than a
@@ -449,9 +403,9 @@ route around it via `build_command` (the automatic install runs regardless, befo
   `pages-deploy`) on a `pull_request`-triggered workflow. Deploy on PR
   from a fork would expose `pages: write` + `id-token: write` to
   PR-author-influenced code, so `pages-deploy`'s first step fails loudly
-  regardless of caller wiring (§5). **Fix**: keep `deploy.yml` on
-  `push: branches: [main]` per §1; use a separate `pr.yml` (§2) that calls
-  only `static-webapp-ci.yml` for PR events. No deploy on PR.
+  regardless of caller wiring (§5). **Fix**: keep the §1 template's
+  `if: github.event_name != 'pull_request'` on the `deploy` job, so PR
+  events run only `static-webapp-ci.yml`. No deploy on PR.
 
 - **`pull_request_target` used on the CI half → forbidden, not just
   discouraged.** `static-webapp-ci.yml`'s `build-and-upload` job MUST be

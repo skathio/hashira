@@ -1,0 +1,347 @@
+# Catalog
+
+Every reusable workflow and composite action in `skathio/hashira`, with what
+it does, when a consumer would use it directly, its inputs (name, whether
+it is required, its default) and outputs, and a minimal `uses:` snippet.
+Most consumers need only a flow's caller (see the [README](../README.md));
+the actions below are the parts the flows are built from, and each one
+also works on its own.
+
+The snippets follow `@v3`. Pin a 40-character commit SHA instead for
+byte-exact runs, and never `@main` (see the
+[pin policy](usage.md#pin-policy)). The tables are checked against the
+YAML by `tests/catalog/shape-validate.py`.
+
+## Reusable workflows
+
+Called as a job with `uses:` at job level. Each one checks its own
+composite actions out at the commit your `uses:` ref resolved to.
+
+### npm-package-ci.yml
+
+CI for an npm package: commitlint, tests with coverage, the scan suite, SoMi's quality gate on pull requests, and on a release run the resolved version and the packed tarball `npm-release` publishes.
+
+**Use it directly**: As the `ci` job of an npm package repo's caller, `templates/npm/ci.yml`. Walk-through: [`flows/npm.md`](flows/npm.md).
+
+| Input | Required | Default |
+|-------|----------|---------|
+| `node_version` | no | `20` |
+| `test_command` | no | `npm test` |
+| `coverage_path` | no | `''` |
+| `scan_disable` | no | `codeql,actionlint` |
+| `bump` | no | `''` |
+| `seed_version` | no | `''` |
+| `quality_gate` | no | `true` |
+| `quality_level` | no | `strict` |
+
+| Output | Meaning |
+|--------|---------|
+| `resolved_version` | The resolved, validated bare semver string (e.g. '1.3.0', no 'v' prefix). Empty when 'bump' was not provided. The workflow's only version output: the CD side derives the tag form and bump kind itself. |
+| `library_sha` | The skathio/hashira commit this run checked its composite actions out at: the commit this workflow file was called at. |
+
+```yaml
+jobs:
+  ci:
+    uses: skathio/hashira/.github/workflows/npm-package-ci.yml@v3
+```
+
+### nuget-package-ci.yml
+
+CI for a NuGet package: restore and build, tests with coverage, the scan suite, SoMi's quality gate on pull requests, and on a release run the resolved version and the packed `.nupkg` `nuget-push` pushes.
+
+**Use it directly**: As the `ci` job of a NuGet package repo's caller, `templates/nuget/ci.yml`. Walk-through: [`flows/nuget.md`](flows/nuget.md).
+
+| Input | Required | Default |
+|-------|----------|---------|
+| `dotnet_version` | no | `8.0.x` |
+| `project_path` | no | `''` |
+| `test_filter` | no | `''` |
+| `coverage_path` | no | `''` |
+| `scan_disable` | no | `codeql,actionlint` |
+| `bump` | no | `''` |
+| `seed_version` | no | `''` |
+| `quality_gate` | no | `true` |
+| `quality_level` | no | `strict` |
+
+| Output | Meaning |
+|--------|---------|
+| `resolved_version` | The resolved, validated bare semver string (e.g. '1.3.0', no 'v' prefix). Empty when 'bump' was not provided. The workflow's only version output: the CD side derives the tag form and bump kind itself. |
+| `library_sha` | The skathio/hashira commit this run checked its composite actions out at: the commit this workflow file was called at. |
+
+```yaml
+jobs:
+  ci:
+    uses: skathio/hashira/.github/workflows/nuget-package-ci.yml@v3
+```
+
+### static-webapp-ci.yml
+
+CI for a static site on GitHub Pages: build, tests with coverage, the scan suite, SoMi's quality gate on pull requests, and the `github-pages` artifact `pages-deploy` deploys.
+
+**Use it directly**: As the `ci` job of a static site repo's caller, `templates/static-webapp/ci.yml`. Walk-through: [`flows/static-webapp.md`](flows/static-webapp.md).
+
+| Input | Required | Default |
+|-------|----------|---------|
+| `node_version` | no | `20` |
+| `build_command` | no | `npm run build` |
+| `output_dir` | no | `''` |
+| `test_command` | no | `npm test` |
+| `coverage_path` | no | `''` |
+| `scan_disable` | no | `codeql,actionlint` |
+| `quality_gate` | no | `true` |
+| `quality_level` | no | `strict` |
+
+| Output | Meaning |
+|--------|---------|
+| `library_sha` | The skathio/hashira commit this run checked its composite actions out at: the commit this workflow file was called at. |
+
+```yaml
+jobs:
+  ci:
+    uses: skathio/hashira/.github/workflows/static-webapp-ci.yml@v3
+```
+
+## Composite actions
+
+Called as a step with `uses:` inside a job of your own. A composite
+action cannot declare permissions: the job that runs it grants them.
+
+### npm-release
+
+Publishes the tarball the same run's CI packed (`npm publish`, auth `oidc`, `token` or `auto`), then creates the `v<version>` tag and GitHub Release.
+
+**Use it directly**: In the gated `publish` job of the npm caller. It must run in a job of your own workflow file, not inside a reusable workflow, so npm trusted publishing sees your `ci.yml`.
+
+| Input | Required | Default |
+|-------|----------|---------|
+| `version` | yes | — |
+| `node_version` | no | `24` |
+| `target` | no | `https://registry.npmjs.org` |
+| `auth` | no | `auto` |
+| `npm_token` | no | `''` |
+| `working_directory` | no | `.` |
+
+| Output | Meaning |
+|--------|---------|
+| `released` | 'true' if a publish was performed this run, else 'false' (dry-run). |
+| `version` | The published version (echo of the 'version' input) when released=='true', else empty. |
+
+```yaml
+- uses: skathio/hashira/.github/actions/npm-release@v3
+  with:
+    version: ${{ needs.ci.outputs.resolved_version }}
+```
+
+### nuget-push
+
+Pushes a `.nupkg` with `--skip-duplicate` (auth `oidc`, `token` or `auto`), then creates the `v<version>` tag and GitHub Release.
+
+**Use it directly**: In the gated `publish` job of the NuGet caller, after downloading the `nuget-package` artifact. It needs `dotnet` on the path and a checkout of your repository.
+
+| Input | Required | Default |
+|-------|----------|---------|
+| `nupkg_path` | yes | — |
+| `target` | no | `https://api.nuget.org/v3/index.json` |
+| `auth` | no | `auto` |
+| `api_key` | no | `''` |
+| `nuget_user` | no | `''` |
+| `version` | yes | — |
+| `skip_duplicate` | no | `true` |
+| `working_directory` | no | `.` |
+
+No outputs.
+
+```yaml
+- uses: skathio/hashira/.github/actions/nuget-push@v3
+  with:
+    nupkg_path: ${{ runner.temp }}/nupkg/*.nupkg
+    version: ${{ needs.ci.outputs.resolved_version }}
+```
+
+### pages-deploy
+
+Deploys the same run's `github-pages` artifact to GitHub Pages and writes the page URL to the run summary. It refuses `pull_request` events.
+
+**Use it directly**: In the gated `deploy` job of the static caller, in the `github-pages` Environment, with `pages: write` and `id-token: write`.
+
+| Input | Required | Default |
+|-------|----------|---------|
+| `artifact_name` | no | `github-pages` |
+
+| Output | Meaning |
+|--------|---------|
+| `page_url` | URL of the deployed page (passes through from actions/deploy-pages's `page_url` output). |
+
+```yaml
+- uses: skathio/hashira/.github/actions/pages-deploy@v3
+```
+
+### pages-upload
+
+Packages a static site directory as the `github-pages` artifact, autodetecting `dist/`, `build/`, `out/` or `public/` when no path is given.
+
+**Use it directly**: When you build the site in your own job instead of `static-webapp-ci.yml`, then deploy it with `pages-deploy`.
+
+| Input | Required | Default |
+|-------|----------|---------|
+| `path` | no | `''` |
+| `artifact_name` | no | `github-pages` |
+| `retention_days` | no | `1` |
+
+| Output | Meaning |
+|--------|---------|
+| `resolved_path` | The directory that was uploaded (either the explicit `path` input or the autodetected one). |
+| `detection_mode` | Either `explicit` (caller-provided path) or `autodetect` (search order matched). |
+
+```yaml
+- uses: skathio/hashira/.github/actions/pages-upload@v3
+```
+
+### scan-suite
+
+Runs the security scans (CodeQL, OSV-Scanner, gitleaks, dependency review, actionlint), each one switchable off.
+
+**Use it directly**: In any repository's own workflow, to get the same scans the CI workflows run without the rest of the flow.
+
+| Input | Required | Default |
+|-------|----------|---------|
+| `scan_disable` | no | `codeql,actionlint` |
+| `codeql_languages` | no | `''` |
+| `osv_paths` | no | `.` |
+| `gitleaks_config` | no | `''` |
+
+| Output | Meaning |
+|--------|---------|
+| `summary` | Multi-line summary: one '<name>\t<status>\t<details>' line per scan. |
+
+```yaml
+- uses: skathio/hashira/.github/actions/scan-suite@v3
+```
+
+### run-tests-js
+
+Runs a JavaScript test command and checks that it wrote its coverage file at the standard path.
+
+**Use it directly**: In your own job when you want hashira's test and coverage handoff for a JavaScript project outside the npm or static flow.
+
+| Input | Required | Default |
+|-------|----------|---------|
+| `command` | no | `npm test` |
+| `coverage_path` | no | `coverage/lcov.info` |
+| `working_directory` | no | `.` |
+
+| Output | Meaning |
+|--------|---------|
+| `coverage_path` | Absolute path to the coverage file produced by the test command. |
+
+```yaml
+- uses: skathio/hashira/.github/actions/run-tests-js@v3
+```
+
+### run-tests-dotnet
+
+Runs `dotnet test` with Coverlet and moves the cobertura coverage file to a standard path.
+
+**Use it directly**: In your own job when you want hashira's test and coverage handoff for a .NET project outside the NuGet flow.
+
+| Input | Required | Default |
+|-------|----------|---------|
+| `command` | no | `dotnet test --collect:"XPlat Code Coverage" --results-directory TestResults` |
+| `coverage_path` | no | `coverage/cobertura.xml` |
+| `results_directory` | no | `TestResults` |
+| `working_directory` | no | `.` |
+
+| Output | Meaning |
+|--------|---------|
+| `coverage_path` | Absolute path to the standardized cobertura coverage file. |
+
+```yaml
+- uses: skathio/hashira/.github/actions/run-tests-dotnet@v3
+```
+
+### coverage-report
+
+Parses an lcov, cobertura or opencover report and shows it as a sticky pull request comment, a step summary and an artifact.
+
+**Use it directly**: After your own test step, to report coverage the way the CI workflows do. Needs `pull-requests: write` for the comment.
+
+| Input | Required | Default |
+|-------|----------|---------|
+| `coverage_path` | yes | — |
+| `format` | no | `''` |
+| `artifact_name` | no | `coverage` |
+| `artifact_retention_days` | no | `30` |
+
+No outputs.
+
+```yaml
+- uses: skathio/hashira/.github/actions/coverage-report@v3
+  with:
+    coverage_path: coverage/lcov.info
+```
+
+### quality-gate
+
+Runs SoMi's quality check on what a pull request changes (`quality --scope pr`, against the base) and fails on a violation; outside a pull request it passes with a skip note.
+
+What it does not score is shown, never hidden. The job summary lists files SoMi skipped (generated, minified or in a skipped folder) and every limit a `somi-gate-allow` comment in the change waived, with its reason and expiry; each waived limit is also a warning annotation on its line. Neither fails the gate, so check them in review: an allow comment is written by the pull request's own author.
+
+**Use it directly**: In your own workflow to gate pull requests on SoMi's limits without the rest of a flow. Check the repository out and have `node` on the path first; the base commit is fetched when missing.
+
+| Input | Required | Default |
+|-------|----------|---------|
+| `level` | no | `strict` |
+
+No outputs.
+
+```yaml
+- uses: skathio/hashira/.github/actions/quality-gate@v3
+```
+
+### version-resolver
+
+Computes the next release version from the tag history and a bump kind, and outputs it as one bare semver string.
+
+**Use it directly**: In your own release job when you tag releases the way hashira does but publish some other way.
+
+| Input | Required | Default |
+|-------|----------|---------|
+| `tags` | no | `''` |
+| `bump` | yes | — |
+| `seed_version` | no | `''` |
+
+| Output | Meaning |
+|--------|---------|
+| `version` | The resolved, validated bare semver string (e.g. `1.3.0`, no `v` prefix). The action's only output. |
+
+```yaml
+- uses: skathio/hashira/.github/actions/version-resolver@v3
+  with:
+    bump: patch
+```
+
+### dotnet-pack-version
+
+Runs `dotnet pack` with MinVer versioning and outputs the version and the `.nupkg` path.
+
+**Use it directly**: In your own job to pack a .NET project with a MinVer-derived version outside the NuGet flow.
+
+| Input | Required | Default |
+|-------|----------|---------|
+| `project_path` | yes | — |
+| `prerelease_identifier` | no | `''` |
+| `version_increment` | no | `''` |
+| `version_override` | no | `''` |
+| `output_directory` | no | `./packages` |
+| `working_directory` | no | `.` |
+
+| Output | Meaning |
+|--------|---------|
+| `version` | Resolved package version (e.g. `1.2.3` or `1.2.3-alpha.0.4`). Empty if pack failed to produce a .nupkg. |
+| `nupkg_path` | Path to the first .nupkg produced (relative to working_directory). |
+
+```yaml
+- uses: skathio/hashira/.github/actions/dotnet-pack-version@v3
+  with:
+    project_path: src/MyLib/MyLib.csproj
+```
