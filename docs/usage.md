@@ -809,7 +809,10 @@ with:
 > put it, so every repo was taken for private without GHAS. Both scans now run
 > on public repos, where they are free, and on private repos with GHAS. A
 > repo with a vulnerable or disallowed dependency in a pull request's changes
-> therefore goes red too.
+> therefore goes red too. Dependency review needs the repository's
+> dependency graph (Settings → Security → Dependency graph). Where it is off,
+> the scan is skipped with the notice "dependency graph is off for this
+> repository" and does not fail the job; turn the graph on to get the scan.
 
 Every enabled scanner still runs, and the job summary lists each scanner's
 result before the job fails. A scanner whose tool cannot be installed, or

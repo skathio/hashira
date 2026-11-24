@@ -218,6 +218,11 @@ jobs:
         run: |
           set -euo pipefail
           node --test tests/scan-suite/visibility-detect.test.js
+      - name: Run dependency-graph probe unit tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --test tests/scan-suite/dependency-graph.test.js
 
   # Runs scan-suite's real steps and scanner sub-composites with a small local
   # runner (only the third-party tools are stubbed), so it needs node, bash and
