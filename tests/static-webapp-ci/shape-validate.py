@@ -17,11 +17,17 @@ Acceptance checks per phase 4.2:
   (d) Workflow-level `permissions:` is `{}` (NF6 deny-all baseline).
   (e) Per-job permissions match the design (build-and-upload has
       id-token:write + pages:write; scan-suite has security-events:write
-      + pull-requests:read; test has pull-requests:write for the
-      coverage-report sticky comment, run as the last step of that job).
+      + pull-requests:read; passed has pull-requests:write for the one CI
+      summary comment, and no other job does).
+  (f) The aggregate `passed` job, checked by tests/shape-lints/passed_job.py:
+      it needs every other job, runs with `if: always()`, checks hashira out
+      at its own commit and renders through ci-summary; `test` turns the
+      coverage comment off.
 
 Run from repo root: python3 tests/static-webapp-ci/shape-validate.py
-Exits 0 on success; non-zero with a clear error otherwise.
+                    python3 tests/static-webapp-ci/shape-validate.py --self-test
+Exits 0 on success; non-zero with a clear error otherwise. `--self-test`
+checks that check (f) fails on broken copies of the real workflow.
 
 Note: this duplicates ~40 lines from the npm/NuGet shape shims
 intentionally — rule-of-three has now been hit (this is the third CI-side
@@ -37,6 +43,9 @@ import sys
 
 import yaml
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "shape-lints"))
+import passed_job  # noqa: E402  (shared checks for the aggregate `passed` job)
+
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 WORKFLOW_PATH = os.path.join(REPO_ROOT, ".github", "workflows", "static-webapp-ci.yml")
 
@@ -47,6 +56,7 @@ DOCUMENTED_INPUTS = [
     "test_command",
     "coverage_path",
     "scan_disable",
+    "scan_fail_on_findings",
     "quality_gate",
     "quality_level",
 ]
@@ -56,10 +66,9 @@ DOCUMENTED_INPUTS = [
 REQUIRED_PERMISSIONS = {
     "build-and-upload": {"id-token": "write", "pages": "write"},
     "scan-suite": {"security-events": "write", "pull-requests": "read"},
-    # coverage-report runs as the last step of `test` (job collapse — see
-    # "Coverage report handoff" in static-webapp-ci.yml's header), not as
-    # its own job; pull-requests:write moved here with it.
-    "test": {"pull-requests": "write"},
+    # The one CI summary comment on the pull request; passed_job.check also
+    # holds every other job to no pull-requests:write.
+    "passed": {"pull-requests": "write"},
     # The SoMi gate reads the tree and writes only summary and annotations.
     "quality-gate": {"contents": "read"},
 }
@@ -187,6 +196,10 @@ def main():
                     f"expected '{level}', got {actual!r}"
                 )
 
+    # Check (f): the aggregate `passed` job.
+    if not passed_job.report_check(doc, sys.stderr):
+        return 1
+
     # Check (a): every `uses:` ref is valid.
     uses_refs = []
     collect_uses(jobs, uses_refs)
@@ -214,5 +227,22 @@ def main():
     return 0
 
 
+def run_self_test():
+    """`--self-test`: check (f) passes the real workflow and fails each
+    broken copy of it (passed_job.self_test lists the mutations)."""
+    with open(WORKFLOW_PATH, "r", encoding="utf-8") as f:
+        doc = yaml.safe_load(f.read())
+    ok, messages = passed_job.self_test(doc)
+    for message in messages:
+        print(f"shape-validate --self-test: passed job: {message}")
+    if not ok:
+        print("shape-validate --self-test: FAIL: a broken `passed` job passed the check", file=sys.stderr)
+        return 1
+    print(f"shape-validate --self-test: PASS ({len(messages)} broken copies failed closed)")
+    return 0
+
+
 if __name__ == "__main__":
+    if "--self-test" in sys.argv[1:]:
+        sys.exit(run_self_test())
     sys.exit(main())

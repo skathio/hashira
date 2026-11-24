@@ -77,7 +77,7 @@ jobs:
       contents: read # check out the repository
       id-token: write # upload-pages-artifact authenticates to Pages
       pages: write # upload-pages-artifact stores the site for deploy
-      pull-requests: write # coverage comment on the pull request
+      pull-requests: write # CI summary comment on the pull request
       security-events: write # upload CodeQL results when CodeQL is enabled
   deploy:
     needs: ci
@@ -101,6 +101,12 @@ jobs:
 - **Permissions.** The `ci` job grants `id-token: write` and `pages: write`
   because its `build-and-upload` job runs `upload-pages-artifact`; a
   reusable workflow can only narrow the caller's grants, never widen them.
+- **Required check.** The CI workflow's last job, `passed`, reports as
+  `ci / passed`: it fails when any other CI job failed, was cancelled or
+  was skipped without a documented reason (`quality-gate` turned off). Require that one check in a
+  branch ruleset. On a pull request it also keeps one CI summary comment,
+  edited in place (see
+  [`../usage.md`](../usage.md#the-ci--passed-check)).
 
 ### Security callout — pin `uses:` to a SHA
 
@@ -150,6 +156,7 @@ on.
 | `test_command` | string | `'npm test'` | Shell command that runs the consumer's tests. **Trusted input**: it runs as raw shell, so do NOT pass values derived from PR titles, issue bodies, branch names, or other externally controlled context. |
 | `coverage_path` | string | `''` | Path to the coverage file the tests write. Empty uses the flow's standard path: `coverage/lcov.info` for npm and static-webapp, `coverage/cobertura.xml` for NuGet. Consumed by `coverage-report`, which runs inside the `test` job. Trusted input. |
 | `scan_disable` | string | `'codeql,actionlint'` | Comma-separated list of scans to skip (D10c). Pass `''` to enable all. Values: `codeql`, `osv`, `gitleaks`, `dependency-review`, `actionlint`. |
+| `scan_fail_on_findings` | boolean | `true` | Fail the `scan-suite` job, and so the `ci / passed` check, when a scanner reports findings or an error. `false` keeps every enabled scanner running and reported as fail in the job summary and the CI summary comment, without failing the job. A scanner turned off with `scan_disable` does not run at all. |
 | `quality_gate` | boolean | `true` | Run SoMi's quality gate (the `quality-gate` job) on what a pull request changes. `false` skips the job. The gate runs only on `pull_request` events; on `push` and `workflow_dispatch` it passes and writes "skipped: quality gate runs on pull requests" to the job summary. |
 | `quality_level` | string | `'strict'` | SoMi quality level for the gate: exactly `'strict'`, `'standard'` or `'relaxed'`. Any other value, including `''`, fails the `setup` job with an error naming the three. |
 
@@ -225,9 +232,10 @@ Why each is needed (and what breaks without it):
   step fails with a permission error.
 - **`pages: write` on `ci`** — also required by
   `actions/upload-pages-artifact`. Without it, the upload step fails.
-- **`pull-requests: write` on `ci`** — for the `coverage-report` sticky
-  comment on PRs. Optional if you don't want coverage comments; the
-  job will degrade gracefully.
+- **`pull-requests: write` on `ci`** — for the one CI summary comment on
+  the pull request, written by the `passed` job (the only job holding
+  it). Required: a called job cannot hold more than the caller grants,
+  so without it the workflow fails to start.
 - **`security-events: write` on `ci`** — for CodeQL when enabled via
   `scan_disable`. Unused under the default
   `scan_disable='codeql,actionlint'` but granted so consumers who flip

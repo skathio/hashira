@@ -111,3 +111,39 @@ test('gate verdict: an earlier failure or a passing gate is not the negative cas
   assert.equal(plan.gateVerdict([{ name: 'ci / not-quality-gate', conclusion: 'failure' }]).ok, false);
   assert.equal(plan.gateVerdict(undefined).ok, false);
 });
+
+test('gate verdict: a failed ci / passed is not an unexpected failure', () => {
+  const verdict = plan.gateVerdict([
+    { name: 'ci / quality-gate', conclusion: 'failure' },
+    { name: 'ci / passed', conclusion: 'failure' },
+  ]);
+  assert.equal(verdict.ok, true);
+});
+
+test('passed verdict: the ci / passed job must exist and conclude as expected', () => {
+  const jobs = (conclusion) => [{ name: 'ci / test', conclusion: 'success' }, { name: 'ci / passed', conclusion }];
+  assert.equal(plan.passedVerdict(jobs('success'), 'success').ok, true);
+  assert.equal(plan.passedVerdict(jobs('failure'), 'failure').ok, true);
+  assert.match(plan.passedVerdict(jobs('skipped'), 'success').reason, /concluded skipped, expected success/);
+  assert.match(plan.passedVerdict(jobs('success'), 'failure').reason, /concluded success, expected failure/);
+  // Only the exact check name counts; another workflow's `passed` is not it.
+  assert.equal(plan.passedVerdict([{ name: 'other / passed', conclusion: 'success' }], 'success').ok, false);
+  assert.match(plan.passedVerdict(undefined, 'success').reason, /no job named 'ci \/ passed'/);
+});
+
+test('summary comment verdict: exactly one bot comment that starts with the marker and links the head', () => {
+  const { MARKER } = require('../../.github/actions/ci-summary/lib/body.js');
+  const head = 'd'.repeat(40);
+  const bot = (sha, extra) => ({ user: { login: 'github-actions[bot]' }, body: `${MARKER}\n[x](https://g/commit/${sha}).`, ...extra });
+  const user = { user: { login: 'someone' }, body: `${MARKER}\n[x](https://g/commit/${head}).` };
+  assert.equal(plan.summaryCommentVerdict([bot(head)], head).ok, true);
+  assert.equal(plan.summaryCommentVerdict([user, bot(head)], head).ok, true);
+  assert.equal(plan.summaryCommentVerdict([user], head).ok, false);
+  assert.equal(plan.summaryCommentVerdict([], head).ok, false);
+  assert.equal(plan.summaryCommentVerdict(undefined, head).ok, false);
+  assert.equal(plan.summaryCommentVerdict([bot(head), bot(head)], head).ok, false);
+  assert.equal(plan.summaryCommentVerdict([bot('e'.repeat(40))], head).ok, false);
+  assert.equal(plan.summaryCommentVerdict([bot(head, { body: `note\n${MARKER} https://g/commit/${head})` })], head).ok, false);
+  assert.equal(plan.summaryCommentVerdict([bot(head, { body: null })], head).ok, false);
+  assert.throws(() => plan.summaryCommentVerdict([bot(head)], 'not-a-sha'), /not a 40-character commit/);
+});

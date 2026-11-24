@@ -16,7 +16,11 @@ description: actionlint workflow YAML linter (off by default; opt-in via scan_di
 runs:
   using: composite
   steps:
+    # continue-on-error: a failed download or checksum is recorded as this
+    # scanner's error, so scan-suite still writes its summary before it fails.
     - name: Install actionlint (pinned v1.7.7)
+      id: install
+      continue-on-error: true
       shell: bash
       run: |
         set -euo pipefail
@@ -36,8 +40,18 @@ runs:
         install -m 0755 "${tmp}/actionlint" /usr/local/bin/actionlint
         actionlint -version
 
+    - name: Record a failed install
+      if: steps.install.outcome != 'success'
+      shell: bash
+      run: |
+        set -euo pipefail
+        printf 'actionlint\terror\tinstall failed\n' >> "${RUNNER_TEMP}/scan-suite-results.tsv"
+        echo "- actionlint: error (install failed)" >> "${GITHUB_STEP_SUMMARY}"
+        printf '%s\t%s\n' actionlint fail >> "${RUNNER_TEMP}/scan-suite-verdicts.tsv"
+
     - name: Run actionlint
       id: run
+      if: steps.install.outcome == 'success'
       shell: bash
       run: |
         set -euo pipefail
@@ -47,6 +61,7 @@ runs:
           msg="no .github/workflows/ directory"
           printf 'actionlint\tskipped\t%s\n' "${msg}" >> "${RUNNER_TEMP}/scan-suite-results.tsv"
           echo "- actionlint: skipped (${msg})" >> "${GITHUB_STEP_SUMMARY}"
+          printf '%s\t%s\n' actionlint skipped >> "${RUNNER_TEMP}/scan-suite-verdicts.tsv"
           exit 0
         fi
         set +e
@@ -66,9 +81,11 @@ runs:
           0)
             printf 'actionlint\tran\tno findings\n' >> "${RUNNER_TEMP}/scan-suite-results.tsv"
             echo "- actionlint: ran (no findings)" >> "${GITHUB_STEP_SUMMARY}"
+            printf '%s\t%s\n' actionlint pass >> "${RUNNER_TEMP}/scan-suite-verdicts.tsv"
             ;;
           *)
             printf 'actionlint\tran\tfindings reported (exit=%s)\n' "${RC}" >> "${RUNNER_TEMP}/scan-suite-results.tsv"
             echo "- actionlint: ran (findings reported; exit=${RC})" >> "${GITHUB_STEP_SUMMARY}"
+            printf '%s\t%s\n' actionlint fail >> "${RUNNER_TEMP}/scan-suite-verdicts.tsv"
             ;;
         esac

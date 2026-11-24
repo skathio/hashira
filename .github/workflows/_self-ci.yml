@@ -94,6 +94,13 @@ jobs:
         run: |
           set -euo pipefail
           node --test tests/coverage-report/parse-coverage.test.js
+      # The `comment` input and the coverage outputs, run through the
+      # action's real parse step (needs PyYAML, preinstalled on the runner).
+      - name: Run coverage-report comment input tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tests/coverage-report/test_comment_input.py
 
   actions-smoke:
     name: actions-smoke
@@ -212,6 +219,35 @@ jobs:
           set -euo pipefail
           node --test tests/scan-suite/visibility-detect.test.js
 
+  # Runs scan-suite's real steps and scanner sub-composites with a small local
+  # runner (only the third-party tools are stubbed), so it needs node, bash and
+  # PyYAML.
+  scan-suite-fail-on-findings:
+    name: scan-suite-fail-on-findings
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      # actions/setup-node v4.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: '20'
+      - name: Verify python3 + pyyaml availability
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -c 'import yaml; print("pyyaml " + yaml.__version__)'
+      - name: Run the scan-suite fail_on_findings tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tests/scan-suite/test_fail_on_findings.py
+          python3 tests/scan-suite/test_fail_on_findings_guards.py
+          python3 tests/scan-suite/test_verdicts_output.py
+          python3 tests/scan-suite/test_osv_no_lockfiles.py
+
   quality-gate-unit-tests:
     name: quality-gate-unit-tests
     runs-on: ubuntu-latest
@@ -231,6 +267,27 @@ jobs:
         run: |
           set -euo pipefail
           node --test tests/quality-gate/contract.test.js tests/quality-gate/report.test.js tests/quality-gate/run-gate.test.js
+
+  ci-summary-unit-tests:
+    name: ci-summary-unit-tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      # actions/setup-node v4.1.0. Node 20 is the oldest Node the lib/ code
+      # must keep working on.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: '20'
+      - name: Run ci-summary unit tests
+        shell: bash
+        # Files are listed by name: Node 20's `node --test` takes no globs.
+        run: |
+          set -euo pipefail
+          node --test tests/ci-summary/verdict.test.js tests/ci-summary/verdict-edges.test.js tests/ci-summary/comment.test.js tests/ci-summary/comment-edges.test.js tests/ci-summary/render.test.js
+
 
   quality-gate:
     name: quality-gate
@@ -634,6 +691,8 @@ jobs:
         run: |
           set -euo pipefail
           python3 tests/npm-package-ci/shape-validate.py
+          # Broken copies of the `passed` job must fail the check.
+          python3 tests/npm-package-ci/shape-validate.py --self-test
 
   scan-suite-codeql-skip-notice:
     name: scan-suite-codeql-skip-notice
@@ -790,6 +849,8 @@ jobs:
         run: |
           set -euo pipefail
           python3 tests/nuget-package-ci/shape-validate.py
+          # Broken copies of the `passed` job must fail the check.
+          python3 tests/nuget-package-ci/shape-validate.py --self-test
 
   nuget-push-smoke:
     name: nuget-push-smoke
@@ -1194,6 +1255,8 @@ jobs:
         run: |
           set -euo pipefail
           python3 tests/static-webapp-ci/shape-validate.py
+          # Broken copies of the `passed` job must fail the check.
+          python3 tests/static-webapp-ci/shape-validate.py --self-test
 
   static-webapp-docs-cross-reference:
     name: static-webapp docs cross-reference
@@ -1462,6 +1525,109 @@ jobs:
           set -euo pipefail
           python3 tests/templates/identity-lint.py --self-test
 
+  # Runs after the template-identity lint's jobs on purpose: the v3 caller-docs
+  # test finds that lint as the first _self-ci command over templates/,
+  # docs/flows/ and the README, and this file names all three.
+  # The aggregate `passed` job in the three CI workflows, what it reads from
+  # the other jobs, and the callers and docs that describe it.
+  ci-summary-passed-job:
+    name: ci-summary-passed-job
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Verify python3 + pyyaml availability
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -c 'import yaml; print("pyyaml " + yaml.__version__)'
+      - name: Run the passed job contract tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tests/ci-summary/test_passed_job.py
+
+  # Edges of the same contract, run through the real code: the comment's size
+  # cap, npm's commitlint step against hostile commit messages, and a CodeQL
+  # error. Needs node, bash and PyYAML.
+  ci-summary-request-edges:
+    name: ci-summary-request-edges
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      # actions/setup-node v4.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: '20'
+      - name: Verify python3 + pyyaml availability
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -c 'import yaml; print("pyyaml " + yaml.__version__)'
+      - name: Run the passed job edge tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tests/ci-summary/test_request_edges.py
+
+  # Where the same contract must fail closed: a scanner whose install or
+  # visibility detection breaks, the ci-summary action called with no job
+  # results, and the size of the needs value under any JSON writer. Needs
+  # node, bash and PyYAML.
+  ci-summary-fail-closed-edges:
+    name: ci-summary-fail-closed-edges
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      # actions/setup-node v4.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: '20'
+      - name: Verify python3 + pyyaml availability
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -c 'import yaml; print("pyyaml " + yaml.__version__)'
+      - name: Run the fail-closed edge tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tests/ci-summary/test_fail_closed_edges.py
+
+  # Hardening of the passed check: an unreadable event payload never turns a
+  # skipped version job into a documented skip, and the passed job keeps its
+  # timeout and runs no setup-node. Needs node and PyYAML.
+  ci-summary-hardening:
+    name: ci-summary-hardening
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      # actions/setup-node v4.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: '20'
+      - name: Verify python3 + pyyaml availability
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -c 'import yaml; print("pyyaml " + yaml.__version__)'
+      - name: Run the hardening tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tests/ci-summary/test_hardening.py
+
   catalog-shape-validation:
     name: catalog-shape-validation
     # docs/catalog.md lists every reusable workflow and composite action;
@@ -1591,7 +1757,7 @@ jobs:
         # Files are listed by name: Node 20's `node --test` takes no globs.
         run: |
           set -euo pipefail
-          node --test tests/consumer-integration/plan.test.js tests/consumer-integration/integrate.test.js tests/consumer-integration/lock.test.js
+          node --test tests/consumer-integration/plan.test.js tests/consumer-integration/integrate.test.js tests/consumer-integration/lock.test.js tests/consumer-integration/passed-check.test.js
       - name: Run consumer-integration contract tests
         shell: bash
         run: |

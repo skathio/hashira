@@ -11,6 +11,19 @@ JS shim (`.github/actions/scan-suite/lib/visibility-detect.js`).
   private-enabled, private-no-field, private-disabled, forced override,
   forced=0 (no override), and missing-input defaults.
 
+- `test_fail_on_findings.py` — runs the real `action.yml` steps and scanner
+  sub-composites with a small local runner, stubbing only the third-party
+  tools. Covers `fail_on_findings`: findings and errors fail the action after
+  every enabled scanner ran and the summary was written; skips never fail it;
+  the three CI workflows pass `'true'`.
+- `test_fail_on_findings_guards.py` — a value other than `'true'`/`'false'`
+  fails before any scanner runs, and the final check fails for a scanner that
+  recorded no verdict.
+
+Each scanner writes a `<name>\t<pass|fail|skipped>` line to
+`${RUNNER_TEMP}/scan-suite-verdicts.tsv` next to its results row; the final
+`Fail on findings` step reads that file.
+
 ## What's NOT tested here, and why
 
 Each scan sub-composite under

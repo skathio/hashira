@@ -44,11 +44,13 @@ function fakeCli(body) {
 const prints = (rep, code) => `process.stdout.write(${JSON.stringify(JSON.stringify(rep))}); process.exitCode = ${code};`;
 
 function runCheck(cli, over = {}) {
-  const summary = path.join(tmp, `summary-${fakes}-${Math.random().toString(36).slice(2)}.md`);
+  const stem = path.join(tmp, `summary-${fakes}-${Math.random().toString(36).slice(2)}`);
+  const summary = `${stem}.md`;
+  const output = `${stem}.out`;
   const logged = [];
-  const code = gate.check({ env: { GITHUB_STEP_SUMMARY: summary }, cli, cwd: repo, base: BASE, level: 'strict', log: (l) => logged.push(l), ...over });
-  const text = fs.existsSync(summary) ? fs.readFileSync(summary, 'utf8') : '';
-  return { code, summary: text, logged };
+  const code = gate.check({ env: { GITHUB_STEP_SUMMARY: summary, GITHUB_OUTPUT: output }, cli, cwd: repo, base: BASE, level: 'strict', log: (l) => logged.push(l), ...over });
+  const read = (f) => (fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : '');
+  return { code, summary: read(summary), output: read(output), logged };
 }
 
 function eventEnv(name) {
@@ -63,7 +65,7 @@ for (const name of ['push', 'workflow_dispatch']) {
   test(`a ${name} run is skipped with the skip line in the summary`, () => {
     const r = eventEnv(name);
     assert.equal(r.summary, 'skipped: quality gate runs on pull requests\n');
-    assert.equal(r.output, 'run=false\n');
+    assert.equal(r.output, 'result=skipped\nviolations=0\nrun=false\n');
   });
 }
 
@@ -147,4 +149,30 @@ for (const level of ['', 'loose', 'Strict', undefined]) {
 
 test('main refuses an unknown command', () => {
   assert.throws(() => gate.main(['nope'], {}), /takes event or check/);
+});
+
+// The action's `result` and `violations` outputs, read by the CI summary.
+test('a clean change outputs result pass with 0 violations', () => {
+  const r = runCheck(fakeCli(prints({ ok: true, violations: [], unanalyzed: [] }, 0)).cli);
+  assert.equal(r.output, 'result=pass\nviolations=0\n');
+});
+
+test('reported violations output result fail with their count', () => {
+  const v = (line) => ({ rule: 'lines', file: 'a.js', line, value: 70, limit: 60 });
+  const r = runCheck(fakeCli(prints({ ok: false, violations: [v(1), v(2), v(3)], unanalyzed: [] }, 1)).cli);
+  assert.equal(r.output, 'result=fail\nviolations=3\n');
+});
+
+test('a crash with no report outputs result fail with 0 violations', () => {
+  const r = runCheck(fakeCli('process.exit(70);').cli);
+  assert.equal(r.output, 'result=fail\nviolations=0\n');
+});
+
+test('a refused check outputs result fail', () => {
+  const r = runCheck(fakeCli(prints({ ok: true, violations: [] }, 0)).cli, { level: 'loose' });
+  assert.equal(r.output, 'result=fail\nviolations=0\n');
+});
+
+test('a pull_request event writes no result before the check runs', () => {
+  assert.doesNotMatch(eventEnv('pull_request').output, /result=/);
 });

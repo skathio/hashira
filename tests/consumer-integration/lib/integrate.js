@@ -4,9 +4,12 @@
 //   node integrate.js lock      take that lock
 //   node integrate.js open      push hashira/<S> (and, for npm, hashira/<S>-gate)
 //                               to the fixture repo and open a PR for each
-//   node integrate.js pr-run    wait for the hashira/<S> PR's fixture CI
+//   node integrate.js pr-run    wait for the hashira/<S> PR's fixture CI; check
+//                               `ci / passed` succeeded and the PR has one
+//                               hashira summary comment naming the head
 //   node integrate.js gate-run  wait for the -gate PR's run and check it
-//                               failed at the quality-gate job only
+//                               failed at the quality-gate job only and
+//                               `ci / passed` failed
 //   node integrate.js release   dispatch the release path on hashira/<S>,
 //                               wait for it, and check the tag and Release
 //   node integrate.js cleanup   if this run took the lock: cancel leftover
@@ -140,6 +143,18 @@ function runJobs(ctx, deps, run) {
   return (page && page.jobs) || [];
 }
 
+// The issue comments of the open PR from `branch`. A fixture PR carries a
+// handful, so one page of 100 holds them all.
+function pullComments(ctx, deps, branch) {
+  const pull = openPulls(ctx, deps, branch)[0];
+  if (!pull) throw new Error(`${ctx.repo} has no open PR from ${branch}`);
+  return ghJson(deps, ['api', `repos/${ctx.repo}/issues/${pull.number}/comments?per_page=100`]) || [];
+}
+
+function assertVerdict(ctx, run, verdict) {
+  if (!verdict.ok) throw new Error(`${ctx.repo} run ${run.id}: ${verdict.reason}`);
+}
+
 // --- commands --------------------------------------------------------------
 
 function open(ctx, deps) {
@@ -165,15 +180,21 @@ function prRun(ctx, deps) {
   const run = waitForRun(ctx, deps, 'pull_request', heads.main);
   summary(ctx, plan.summaryLine(ctx.repo, 'fixture CI', run));
   if (run.conclusion !== 'success') throw new Error(`${ctx.repo} run ${run.id} concluded ${run.conclusion}`);
+  assertVerdict(ctx, run, plan.passedVerdict(runJobs(ctx, deps, run), 'success'));
+  const comments = pullComments(ctx, deps, plan.branchNames(ctx.sha).main);
+  assertVerdict(ctx, run, plan.summaryCommentVerdict(comments, heads.main));
+  summary(ctx, `- ${ctx.repo}: ci / passed succeeded, one summary comment names ${heads.main}\n`);
 }
 
 function gateRun(ctx, deps) {
   const heads = pushedHeads(ctx);
   if (!heads.gate) throw new Error(`${ctx.repo} has no quality gate branch: only the npm fixture runs the gate case`);
   const run = waitForRun(ctx, deps, 'pull_request', heads.gate);
-  const verdict = plan.gateVerdict(runJobs(ctx, deps, run));
+  const jobs = runJobs(ctx, deps, run);
+  const verdict = plan.gateVerdict(jobs);
   summary(ctx, plan.summaryLine(ctx.repo, `quality gate negative case (${verdict.reason})`, run));
-  if (!verdict.ok) throw new Error(`${ctx.repo} run ${run.id}: ${verdict.reason}`);
+  assertVerdict(ctx, run, verdict);
+  assertVerdict(ctx, run, plan.passedVerdict(jobs, 'failure'));
 }
 
 function lockWait(ctx, deps) {

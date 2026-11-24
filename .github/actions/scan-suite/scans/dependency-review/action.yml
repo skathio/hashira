@@ -14,9 +14,12 @@ description: actions/dependency-review-action wrapper (PR-only, visibility-adapt
 runs:
   using: composite
   steps:
+    # continue-on-error: a detection that breaks is recorded as this scanner's
+    # error, never as a skip, and the scanners after it still run.
     - name: Detect visibility / GHAS
       id: detect
       if: github.event_name == 'pull_request'
+      continue-on-error: true
       shell: bash
       env:
         GH_CONTEXT: ${{ toJSON(github) }}
@@ -55,9 +58,10 @@ runs:
         echo "::notice::scan-suite/dependency-review skipped: ${msg}"
         printf 'dependency-review\tskipped\t%s\n' "${msg}" >> "${RUNNER_TEMP}/scan-suite-results.tsv"
         echo "- dependency-review: skipped (${msg})" >> "${GITHUB_STEP_SUMMARY}"
+        printf '%s\t%s\n' dependency-review skipped >> "${RUNNER_TEMP}/scan-suite-verdicts.tsv"
 
     - name: Skip (private + no GHAS)
-      if: github.event_name == 'pull_request' && steps.detect.outputs.has_ghas != 'true'
+      if: github.event_name == 'pull_request' && steps.detect.outcome == 'success' && steps.detect.outputs.has_ghas != 'true'
       shell: bash
       run: |
         set -euo pipefail
@@ -65,6 +69,7 @@ runs:
         echo "::notice::scan-suite/dependency-review skipped: ${msg}"
         printf 'dependency-review\tskipped\t%s\n' "${msg}" >> "${RUNNER_TEMP}/scan-suite-results.tsv"
         echo "- dependency-review: skipped (${msg})" >> "${GITHUB_STEP_SUMMARY}"
+        printf '%s\t%s\n' dependency-review skipped >> "${RUNNER_TEMP}/scan-suite-verdicts.tsv"
 
     # actions/dependency-review-action v4.5.0
     - name: Run dependency-review
@@ -74,23 +79,33 @@ runs:
       continue-on-error: true
 
     - name: Record ran-status
-      if: github.event_name == 'pull_request' && steps.detect.outputs.has_ghas == 'true'
+      if: github.event_name == 'pull_request' && (steps.detect.outcome != 'success' || steps.detect.outputs.has_ghas == 'true')
       shell: bash
       env:
+        DETECT_OUTCOME: ${{ steps.detect.outcome }}
         OUTCOME: ${{ steps.run.outcome }}
       run: |
         set -euo pipefail
+        if [ "${DETECT_OUTCOME}" != "success" ]; then
+          printf 'dependency-review\terror\tvisibility detection failed\n' >> "${RUNNER_TEMP}/scan-suite-results.tsv"
+          echo "- dependency-review: error (visibility detection failed)" >> "${GITHUB_STEP_SUMMARY}"
+          printf '%s\t%s\n' dependency-review fail >> "${RUNNER_TEMP}/scan-suite-verdicts.tsv"
+          exit 0
+        fi
         case "${OUTCOME}" in
           success)
             printf 'dependency-review\tran\tno problematic deps\n' >> "${RUNNER_TEMP}/scan-suite-results.tsv"
             echo "- dependency-review: ran (no problematic deps)" >> "${GITHUB_STEP_SUMMARY}"
+            printf '%s\t%s\n' dependency-review pass >> "${RUNNER_TEMP}/scan-suite-verdicts.tsv"
             ;;
           failure)
             printf 'dependency-review\tran\tproblematic deps found (see job log)\n' >> "${RUNNER_TEMP}/scan-suite-results.tsv"
             echo "- dependency-review: ran (problematic deps found; see job log)" >> "${GITHUB_STEP_SUMMARY}"
+            printf '%s\t%s\n' dependency-review fail >> "${RUNNER_TEMP}/scan-suite-verdicts.tsv"
             ;;
           *)
             printf 'dependency-review\terror\toutcome=%s\n' "${OUTCOME}" >> "${RUNNER_TEMP}/scan-suite-results.tsv"
             echo "- dependency-review: error (outcome=${OUTCOME})" >> "${GITHUB_STEP_SUMMARY}"
+            printf '%s\t%s\n' dependency-review fail >> "${RUNNER_TEMP}/scan-suite-verdicts.tsv"
             ;;
         esac

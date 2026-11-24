@@ -16,7 +16,7 @@ jobs:
       contents: read # check out the repository
       id-token: write # upload-pages-artifact authenticates to Pages
       pages: write # upload-pages-artifact stores the site for deploy
-      pull-requests: write # coverage comment on the pull request
+      pull-requests: write # CI summary comment on the pull request
       security-events: write # upload CodeQL results when CodeQL is enabled
   deploy:
     needs: ci

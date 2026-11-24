@@ -25,6 +25,11 @@ Acceptance check per phase 2.2 (+ iter-2.3 D14 update):
       `id` must exist in that job's `steps:` list. A typo'd job id, job
       output name, or step id fails this check closed instead of silently
       producing an empty output at runtime.
+  (e) The aggregate `passed` job, checked by tests/shape-lints/passed_job.py:
+      it needs every other job, runs with `if: always()`, is the only job
+      with pull-requests:write, checks hashira out at its own commit and
+      renders through ci-summary; `test` turns the coverage comment off.
+      `--self-test` also checks that broken copies of it fail.
 
 Run from repo root: python3 tests/npm-package-ci/shape-validate.py
 Exits 0 on success; non-zero with a clear error otherwise.
@@ -39,6 +44,9 @@ import sys
 
 import yaml
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "shape-lints"))
+import passed_job  # noqa: E402  (shared checks for the aggregate `passed` job)
+
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 WORKFLOW_PATH = os.path.join(REPO_ROOT, ".github", "workflows", "npm-package-ci.yml")
 
@@ -50,6 +58,7 @@ DOCUMENTED_INPUTS = [
     "test_command",
     "coverage_path",
     "scan_disable",
+    "scan_fail_on_findings",
     "bump",
     "seed_version",
     "quality_gate",
@@ -338,6 +347,10 @@ def main():
             print(f"shape-validate: FAIL: {err}", file=sys.stderr)
         return 1
 
+    # Check: the aggregate `passed` job (tests/shape-lints/passed_job.py).
+    if not passed_job.report_check(doc, sys.stderr):
+        return 1
+
     # Check workflow-level permissions deny-all baseline (NF6).
     perms = doc.get("permissions")
     if perms != {} and perms != "{}":
@@ -442,6 +455,9 @@ def run_self_test():
     if failures:
         for f_ in failures:
             print(f"shape-validate --self-test: FAIL: {f_}", file=sys.stderr)
+        return 1
+
+    if not passed_job.report_self_test(doc, sys.stdout, sys.stderr):
         return 1
 
     print(f"shape-validate --self-test: PASS ({len(cases)}/{len(cases)} typo-injection cases failed closed)")

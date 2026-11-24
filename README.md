@@ -64,7 +64,7 @@ jobs:
     uses: skathio/hashira/.github/workflows/npm-package-ci.yml@v3
     permissions:
       contents: read # check out the repository
-      pull-requests: write # commitlint and coverage comments on the pull request
+      pull-requests: write # CI summary comment on the pull request
       security-events: write # upload CodeQL results when CodeQL is enabled
   publish:
     needs: ci
@@ -120,7 +120,7 @@ jobs:
     uses: skathio/hashira/.github/workflows/nuget-package-ci.yml@v3
     permissions:
       contents: read # check out the repository
-      pull-requests: write # coverage comment on the pull request
+      pull-requests: write # CI summary comment on the pull request
       security-events: write # upload CodeQL results when CodeQL is enabled
   publish:
     needs: ci
@@ -179,7 +179,7 @@ jobs:
       contents: read # check out the repository
       id-token: write # upload-pages-artifact authenticates to Pages
       pages: write # upload-pages-artifact stores the site for deploy
-      pull-requests: write # coverage comment on the pull request
+      pull-requests: write # CI summary comment on the pull request
       security-events: write # upload CodeQL results when CodeQL is enabled
   deploy:
     needs: ci
@@ -200,9 +200,12 @@ Walk-through: [`docs/flows/static-webapp.md`](docs/flows/static-webapp.md)
 
 The three CI workflows are built from composite actions you can also use on
 their own: `scan-suite`, `run-tests-js`, `run-tests-dotnet`,
-`coverage-report`, `quality-gate`, `version-resolver`,
+`coverage-report`, `quality-gate`, `ci-summary`, `version-resolver`,
 `dotnet-pack-version`, `pages-upload`, and the publish and deploy actions
-`npm-release`, `nuget-push` and `pages-deploy`. The
+`npm-release`, `nuget-push` and `pages-deploy`. Each CI workflow ends with
+the job `passed`, which reports as the one check to require in a branch
+ruleset, `ci / passed`, and keeps one CI summary comment on the pull
+request ([details](docs/usage.md#the-ci--passed-check)). The
 [catalog](docs/catalog.md) lists every workflow and action with what it
 does, when to use it directly, its inputs and outputs, and a `uses:`
 snippet.
@@ -223,6 +226,7 @@ snippet.
   [Environment checklist](docs/usage.md#environment-configuration-adoption-checklist),
   [OIDC trust onboarding](docs/usage.md#oidc-trust-onboarding),
   [scan-suite toggles](docs/usage.md#scan-suite-toggles),
+  [the `ci / passed` check](docs/usage.md#the-ci--passed-check),
   [coverage reporting](docs/usage.md#coverage-reporting).
 - **[`docs/flows/`](docs/flows/)**: one walk-through per flow, with the
   input, permissions and secret tables and common failure modes.
