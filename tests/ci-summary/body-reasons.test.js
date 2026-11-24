@@ -31,79 +31,94 @@ function needs({ scan = {}, test: testOutputs = { lines_pct: '80.0', branches_pc
 }
 
 const body = (n) => renderBody({ needs: n, inputs: { quality_gate: true }, event: EVENT, runUrl: 'https://github.com/o/r/actions/runs/1' });
-const line = (text, name) => text.split('\n').find((l) => l.startsWith(`  - ${name}:`));
+const row = (text, name) => text.split('\n').find((l) => l.includes(`| **${name}** |`));
+const skippedLine = (text) => text.split('\n').find((l) => l.startsWith('⏭️ **Skipped:**'));
 
-test('a scanner skipped by scan_disable says so', () => {
-  assert.equal(line(body(needs()), 'codeql'), '  - codeql: skipped — disabled by scan_disable');
+test('scanners skipped by scan_disable are grouped on the skipped line', () => {
+  assert.ok(skippedLine(body(needs())).includes('CodeQL, actionlint (disabled by `scan_disable`)'), body(needs()));
 });
 
 test('a scanner skipped for another reason gives that reason', () => {
-  assert.equal(line(body(needs()), 'dependency-review'),
-    '  - dependency-review: skipped — dependency-review requires GHAS on private repos');
+  assert.ok(skippedLine(body(needs())).includes('Dependency review (dependency-review requires GHAS on private repos)'));
+});
+
+test('a skipped scanner has no table row', () => {
+  assert.equal(row(body(needs()), 'CodeQL'), undefined);
 });
 
 test('a failed scanner gives its details', () => {
-  assert.equal(line(body(needs()), 'osv'), '  - osv: fail — vulnerabilities found (see job log)');
+  assert.equal(row(body(needs()), 'OSV'), '| ❌ | **OSV** | Failed · vulnerabilities found (see job log) |');
 });
 
-test('a passing scanner shows no details', () => {
-  assert.equal(line(body(needs()), 'gitleaks'), '  - gitleaks: pass');
+test('a passing scanner shows only Passed', () => {
+  assert.equal(row(body(needs()), 'gitleaks'), '| ✅ | **gitleaks** | Passed |');
 });
 
 test('without scan_summary the status stands alone', () => {
   const text = body(needs({ scan: { scan_summary: '' } }));
-  assert.equal(line(text, 'codeql'), '  - codeql: skipped');
-  assert.equal(line(text, 'osv'), '  - osv: fail');
+  assert.ok(skippedLine(text).includes('CodeQL, Dependency review, actionlint'), text);
+  assert.ok(!skippedLine(text).includes('('), text);
+  assert.equal(row(text, 'OSV'), '| ❌ | **OSV** | Failed |');
 });
 
 test('a reason is stripped of control characters, escaped and cut at 100 characters', () => {
   const hostile = `osv\tran\t<img src=x>|\`x\`\u0007${'y'.repeat(200)}`;
-  const text = line(body(needs({ scan: { scan_summary: hostile } })), 'osv');
-  assert.ok(!/[<>|`\u0007]/.test(text.replace('  - osv: fail — ', '')), text);
-  assert.ok(text.includes('&lt;img src=x&gt;&#124;&#96;x&#96;'), text);
-  assert.ok(text.endsWith('...'), text);
-  const reason = '<img src=x>|`x` ' + 'y'.repeat(100 - 16);
-  assert.ok(text.length < `  - osv: fail — ${reason}...`.length + 40, text);
+  const text = row(body(needs({ scan: { scan_summary: hostile } })), 'OSV');
+  const detail = text.replace('| ❌ | **OSV** | Failed · ', '').replace(/ \|$/, '');
+  assert.ok(!/[<>|`\u0007]/.test(detail), text);
+  assert.ok(detail.includes('&lt;img src=x&gt;&#124;&#96;x&#96;'), text);
+  assert.ok(detail.endsWith('...'), text);
 });
 
 test('a reason exactly 100 characters long is not cut', () => {
   const reason = 'r'.repeat(100);
-  assert.equal(line(body(needs({ scan: { scan_summary: `osv\tran\t${reason}` } })), 'osv'), `  - osv: fail — ${reason}`);
+  assert.equal(row(body(needs({ scan: { scan_summary: `osv\tran\t${reason}` } })), 'OSV'), `| ❌ | **OSV** | Failed · ${reason} |`);
 });
 
 test('a reason 101 characters long is cut', () => {
-  const text = line(body(needs({ scan: { scan_summary: `osv\tran\t${'r'.repeat(101)}` } })), 'osv');
-  assert.equal(text, `  - osv: fail — ${'r'.repeat(100)}...`);
+  assert.equal(row(body(needs({ scan: { scan_summary: `osv\tran\t${'r'.repeat(101)}` } })), 'OSV'),
+    `| ❌ | **OSV** | Failed · ${'r'.repeat(100)}... |`);
 });
 
 test('an unknown scanner name in scan_summary is ignored', () => {
-  const text = body(needs({ scan: { scan_summary: 'evil\tran\tinjected' } }));
-  assert.ok(!text.includes('injected'));
+  assert.ok(!body(needs({ scan: { scan_summary: 'evil\tran\tinjected' } })).includes('injected'));
 });
 
 test('a coverage report that measured no file says no coverage data', () => {
   const text = body(needs({ test: { lines_pct: '0.0', branches_pct: '0.0', coverage_files: '0' } }));
-  assert.ok(text.includes('- test: pass, no coverage data'), text);
+  assert.equal(row(text, 'Tests'), '| ✅ | **Tests** | Passed · no coverage data |');
   assert.ok(!text.includes('0.0%'), text);
 });
 
 test('a coverage report that measured files shows the percentages', () => {
   const text = body(needs({ test: { lines_pct: '0.0', branches_pct: '0.0', coverage_files: '3' } }));
-  assert.ok(text.includes('- test: pass, line coverage 0.0%, branch coverage 0.0%'), text);
+  assert.equal(row(text, 'Tests'), '| ✅ | **Tests** | Passed · 0.0% lines · 0.0% branches |');
 });
 
 test('without coverage_files the percentages still show', () => {
-  assert.ok(body(needs()).includes('- test: pass, line coverage 80.0%, branch coverage 75.0%'));
+  assert.equal(row(body(needs()), 'Tests'), '| ✅ | **Tests** | Passed · 80.0% lines · 75.0% branches |');
 });
 
 test('the failing header names only the jobs, not their results', () => {
   const text = body(needs({ gate: 'failure' }));
-  assert.ok(text.includes('\n\nFailing: quality-gate\n'), text);
-  assert.ok(!text.includes('Failing: quality-gate: failure'), text);
+  assert.ok(text.includes('### ❌ hashira CI failed\n\n**Failing:** `quality-gate`\n'), text);
 });
 
 test('several failing jobs are listed comma-separated', () => {
   const n = needs({ gate: 'failure' });
   n.test = { result: 'failure', outputs: {} };
-  assert.ok(body(n).includes('\n\nFailing: quality-gate, test\n'));
+  assert.ok(body(n).includes('**Failing:** `quality-gate`, `test`\n'));
+});
+
+test('failed rows come before passed rows', () => {
+  const lines = body(needs({ gate: 'failure' })).split('\n').filter((l) => l.startsWith('| ') && !l.startsWith('| |'));
+  const firstPass = lines.findIndex((l) => l.startsWith('| ✅'));
+  const lastFail = lines.map((l) => l.startsWith('| ❌')).lastIndexOf(true);
+  assert.ok(lastFail < firstPass, lines.join('\n'));
+});
+
+test('a passing run has the passed headline and no failing line', () => {
+  const text = body(needs());
+  assert.ok(text.includes('### ✅ hashira CI passed\n'), text);
+  assert.ok(!text.includes('**Failing:**'), text);
 });

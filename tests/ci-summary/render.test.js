@@ -95,7 +95,7 @@ test('lib_dir points at the directory holding comment.js', () => {
 test('an unreadable event file leaves the event empty and still renders', () => {
   const { result } = render({ over: { GITHUB_EVENT_PATH: path.join(os.tmpdir(), 'no-such-event.json') } });
   assert.equal(result.conclusion, 'success');
-  assert.match(result.body, /Head commit unknown/);
+  assert.match(result.body, /commit unknown/);
 });
 
 test('needs left out is an empty object: nothing failed, nothing listed', () => {
@@ -115,5 +115,5 @@ for (const [what, text] of [['not JSON', '{oops'], ['an array', '[]'], ['a strin
 
 test('without a run URL the body still renders', () => {
   const { result } = render({ over: { GITHUB_RUN_ID: '' } });
-  assert.match(result.body, /workflow run: unknown/);
+  assert.match(result.body, /run unknown/);
 });

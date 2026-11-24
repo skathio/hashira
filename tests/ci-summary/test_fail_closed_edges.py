@@ -214,7 +214,7 @@ GATE_LINE = """
 const { renderBody } = require('./body.js');
 const input = JSON.parse(require('fs').readFileSync(0, 'utf8'));
 const needs = { 'quality-gate': { result: 'failure', outputs: { result: 'fail', violations: input.count } } };
-console.log(JSON.stringify(renderBody({ needs }).split('\\n').find((line) => line.startsWith('- quality-gate:'))));
+console.log(JSON.stringify(renderBody({ needs }).split('\\n').find((line) => line.includes('**Quality gate**'))));
 """
 
 
@@ -223,7 +223,7 @@ class ViolationCountReadsAsEnglish(unittest.TestCase):
         for count, words in (("1", "1 violation"), ("0", "0 violations"), ("2", "2 violations"),
                              ("11", "11 violations"), ("01", "01 violations")):
             with self.subTest(count=count):
-                self.assertEqual(node(GATE_LINE, {"count": count}), "- quality-gate: fail, " + words)
+                self.assertEqual(node(GATE_LINE, {"count": count}), "| ❌ | **Quality gate** | Failed · " + words + " |")
 
 
 # --- the maintainer checklist and self-CI ------------------------------------

@@ -91,7 +91,9 @@ function lineWith(body, pattern) {
   return found.join('\n');
 }
 
-const scannerPattern = (name) => new RegExp(`(^|[^a-z-])${name}([^a-z-]|$)`, 'i');
+// The table shows each scanner by its display name.
+const SCANNER_NAMES = { codeql: 'CodeQL', osv: 'OSV', gitleaks: 'gitleaks', 'dependency-review': 'Dependency review', actionlint: 'actionlint' };
+const scannerPattern = (name) => new RegExp(`(^|[^a-z-])${SCANNER_NAMES[name]}([^a-z-]|$)`, 'i');
 
 // --- the marker --------------------------------------------------------------
 

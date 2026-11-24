@@ -129,7 +129,7 @@ class VerdictOverAnyJobId(unittest.TestCase):
                 out = node(EVALUATE, {"needs": needs})
                 self.assertEqual(out["verdict"]["conclusion"], "failure")
                 self.assertEqual(out["verdict"]["lines"], ["FAIL %s: skipped" % job])
-                self.assertIn("hashira CI: fail", out["body"])
+                self.assertIn("### ❌ hashira CI failed", out["body"])
 
     def test_a_successful_job_named_like_a_built_in_property_passes(self):
         out = node(EVALUATE, {"needs": {"constructor": {"result": "success"}}})

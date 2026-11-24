@@ -105,11 +105,11 @@ jobs:
   actions-smoke:
     name: actions-smoke
     runs-on: ubuntu-latest
-    # PR comment write needed so coverage-report's sticky-comment branch
-    # can be exercised on PR events; contents:read for checkout.
+    # contents:read for checkout. The coverage-report steps below pass
+    # comment: 'false', so no step posts on the pull request: a smoke
+    # comment there read as a second hashira comment beside the CI summary.
     permissions:
       contents: read
-      pull-requests: write
     steps:
       # actions/checkout v4.2.2
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -135,16 +135,19 @@ jobs:
         with:
           coverage_path: tests/fixtures/coverage-samples/lcov.info
           artifact_name: coverage-smoke-lcov
+          comment: 'false'
       - name: coverage-report — cobertura fixture
         uses: ./.hashira/.github/actions/coverage-report
         with:
           coverage_path: tests/fixtures/coverage-samples/cobertura.xml
           artifact_name: coverage-smoke-cobertura
+          comment: 'false'
       - name: coverage-report — opencover fixture
         uses: ./.hashira/.github/actions/coverage-report
         with:
           coverage_path: tests/fixtures/coverage-samples/opencover.xml
           artifact_name: coverage-smoke-opencover
+          comment: 'false'
       - name: Assert coverage-report summaries are present
         shell: bash
         run: |

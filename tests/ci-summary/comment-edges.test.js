@@ -32,36 +32,36 @@ function needs(overrides = {}) {
 const render = (n, extra = {}) => renderBody({ needs: n, inputs: {}, event: EVENT, runUrl: 'https://github.com/acme/widget/actions/runs/1', ...extra });
 
 test('a scanner missing from the verdicts shows not run', () => {
-  assert.match(render(needs()), /osv: not run/);
+  assert.match(render(needs()), /\| ⚪ \| \*\*OSV\*\* \| Not run · no result \|/);
 });
 
 test('an unknown scanner status or name is not rendered', () => {
   const body = render(needs({ 'scan-suite': { result: 'success', outputs: { verdicts: 'codeql\t<b>x</b>\nevil\tpass' } } }));
-  assert.match(body, /codeql: not run/);
+  assert.match(body, /\| ⚪ \| \*\*CodeQL\*\* \| Not run/);
   assert.doesNotMatch(body, /<b>|evil/);
 });
 
 test('a coverage value that is not a percentage renders as n/a', () => {
   const body = render(needs({ test: { result: 'success', outputs: { lines_pct: '](javascript:x)', branches_pct: '1000' } } }));
-  assert.match(body, /line coverage n\/a, branch coverage n\/a/);
+  assert.match(body, /\*\*Tests\*\* \| Passed · coverage n\/a \|/);
   assert.doesNotMatch(body, /javascript/);
 });
 
 test('a violation count that is not an integer is left out', () => {
   const body = render(needs({ 'quality-gate': { result: 'failure', outputs: { result: 'fail', violations: '3; rm' } } }));
-  assert.match(body, /- quality-gate: fail\n/);
+  assert.match(body, /\| ❌ \| \*\*Quality gate\*\* \| Failed \|\n/);
   assert.doesNotMatch(body, /rm/);
 });
 
 test('a skipped test job shows not run, not pass', () => {
-  assert.match(render(needs({ test: { result: 'skipped', outputs: {} } })), /- test: not run \(job skipped\)/);
+  assert.match(render(needs({ test: { result: 'skipped', outputs: {} } })), /\| ⚪ \| \*\*Tests\*\* \| Not run · job skipped \|/);
 });
 
 test('a commitlint report with a code fence cannot close the block it sits in', () => {
   const report = 'bad\n```\n# injected heading\n````';
   const body = render(needs({ lint: { result: 'success', outputs: { commitlint_result: 'findings', commitlint_report: report } } }));
   assert.ok(body.includes('`````\nbad\n'), body);
-  assert.ok(body.trimEnd().endsWith('`````'), body);
+  assert.ok(body.trimEnd().endsWith('`````\n\n</details>'), body);
 });
 
 test('control characters in the report are replaced, newlines kept', () => {
@@ -71,13 +71,13 @@ test('control characters in the report are replaced, newlines kept', () => {
 });
 
 test('lint with no commitlint result says so', () => {
-  assert.match(render(needs({ lint: { result: 'failure', outputs: {} } })), /commitlint: no result/);
+  assert.match(render(needs({ lint: { result: 'failure', outputs: {} } })), /\*\*commitlint\*\* \| Not run · no result \|/);
 });
 
 test('a head SHA that is not a SHA, and a run URL that is not https, are not linked', () => {
   const body = renderBody({ needs: needs(), inputs: {}, event: { pull_request: { head: { sha: 'x)(y' } } }, runUrl: 'javascript:alert(1)' });
   assert.ok(body.startsWith(MARKER));
-  assert.match(body, /Head commit unknown, workflow run: unknown\./);
+  assert.match(body, /<sub>commit unknown · run unknown<\/sub>/);
   assert.doesNotMatch(body, /javascript|x\)\(y/);
 });
 
