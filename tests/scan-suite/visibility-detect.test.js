@@ -25,9 +25,10 @@ test('public repo with no security_and_analysis field → hasGHAS true', () => {
   assert.equal(r.forced, false);
 });
 
-test('public repo with advanced_security.status=disabled → hasGHAS false', () => {
-  // Edge case: public repo where the owner has explicitly disabled GHAS
-  // features (unusual but possible). We honor the explicit marker.
+test('public repo with advanced_security.status=disabled → hasGHAS true', () => {
+  // The payload says 'disabled' on a public repo without a GHAS purchase,
+  // yet CodeQL and dependency review are free there. Honoring the field
+  // skipped both scans on every public consumer.
   const r = detect({
     ghContext: {
       payload: {
@@ -40,6 +41,29 @@ test('public repo with advanced_security.status=disabled → hasGHAS false', () 
     env: {},
   });
   assert.equal(r.visibility, 'public');
+  assert.equal(r.hasGHAS, true);
+});
+
+for (const status of ['not_set', '', null, 42]) {
+  test(`public repo with advanced_security.status=${JSON.stringify(status)} → hasGHAS true`, () => {
+    const r = detect({
+      ghContext: {
+        payload: { repository: { visibility: 'public', security_and_analysis: { advanced_security: { status } } } },
+      },
+      env: {},
+    });
+    assert.equal(r.hasGHAS, true);
+  });
+}
+
+test('private repo with advanced_security.status=disabled → hasGHAS false', () => {
+  const r = detect({
+    ghContext: {
+      payload: { repository: { visibility: 'private', security_and_analysis: { advanced_security: { status: 'disabled' } } } },
+    },
+    env: {},
+  });
+  assert.equal(r.visibility, 'private');
   assert.equal(r.hasGHAS, false);
 });
 

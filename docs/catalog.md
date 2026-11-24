@@ -282,6 +282,7 @@ Parses an lcov, cobertura or opencover report and shows it as a sticky pull requ
 |--------|---------|
 | `lines_pct` | Line coverage in percent, one decimal (e.g. `87.5`). |
 | `branches_pct` | Branch coverage in percent, one decimal (e.g. `62.0`). |
+| `files` | How many source files the report measured. `0` means the report held no coverage data, and the percentages are not a measurement. |
 
 ```yaml
 - uses: skathio/hashira/.github/actions/coverage-report@v3
@@ -314,7 +315,7 @@ What it does not score is shown, never hidden. The job summary lists files SoMi 
 
 `ci-summary` judges the results of a CI workflow's jobs for the aggregate `passed` job (the `ci / passed` check), writes one line per job to the job summary, keeps one CI summary comment on the pull request (marker `<!-- hashira:ci-summary -->`, by `github-actions[bot]`, edited in place), and fails when the verdict is failure. A job passes when it succeeded; a skip passes only for `version` with no bump and `quality-gate` with `quality_gate: false`. A fork or Dependabot pull request, or any comment API error, puts the comment body in the job summary instead and never changes the verdict. Called with a `needs` value that holds no job, the action fails: a check that judged nothing is not a pass.
 
-**Use it directly**: As the last job of your own workflow, with `needs` on every other job and `if: always()`, to get one required check and one summary comment. Needs `pull-requests: write` for the comment, and `node` on the path. The comment reads the job outputs the hashira CI workflows set (`lines_pct`, `branches_pct`, `verdicts`, `result`, `violations`, `commitlint_result`, `commitlint_report`); jobs without them show as not run.
+**Use it directly**: As the last job of your own workflow, with `needs` on every other job and `if: always()`, to get one required check and one summary comment. Needs `pull-requests: write` for the comment, and `node` on the path. The comment reads the job outputs the hashira CI workflows set (`lines_pct`, `branches_pct`, `coverage_files`, `verdicts`, `scan_summary`, `result`, `violations`, `commitlint_result`, `commitlint_report`); jobs without them show as not run.
 
 | Input | Required | Default |
 |-------|----------|---------|

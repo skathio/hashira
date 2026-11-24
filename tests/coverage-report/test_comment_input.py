@@ -86,14 +86,16 @@ class CoverageOutputs(unittest.TestCase):
     def test_parse_step_writes_the_totals_with_one_decimal(self):
         rc, outputs, out = run_parse("false")
         self.assertEqual(rc, 0, out)
-        # The lcov fixture holds 8/10 lines and 3/4 branches.
+        # The lcov fixture holds 8/10 lines and 3/4 branches over two files.
         self.assertEqual(outputs.get("lines_pct"), "80.0")
         self.assertEqual(outputs.get("branches_pct"), "75.0")
+        self.assertEqual(outputs.get("files"), "2")  # two SF: records
 
     def test_action_maps_the_parse_step_outputs(self):
         outputs = spec()["outputs"]
         self.assertIn("steps.parse.outputs.lines_pct", outputs["lines_pct"]["value"])
         self.assertIn("steps.parse.outputs.branches_pct", outputs["branches_pct"]["value"])
+        self.assertIn("steps.parse.outputs.files", outputs["files"]["value"])
 
 
 if __name__ == "__main__":

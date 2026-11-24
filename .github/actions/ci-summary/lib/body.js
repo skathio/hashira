@@ -2,9 +2,9 @@
 // function: comment.js writes it.
 //
 // `needs` is `toJSON(needs)` as verdict.js takes it. The fields come from the
-// job outputs: quality-gate `result` and `violations`, scan-suite `verdicts`,
-// test `lines_pct` and `branches_pct`, and npm's lint `commitlint_result` and
-// `commitlint_report`.
+// job outputs: quality-gate `result` and `violations`, scan-suite `verdicts`
+// and `scan_summary`, test `lines_pct`, `branches_pct` and `coverage_files`,
+// and npm's lint `commitlint_result` and `commitlint_report`.
 'use strict';
 
 const { evaluate } = require('./verdict');
@@ -15,6 +15,7 @@ const MARKER = '<!-- hashira:ci-summary -->';
 const MAX_BODY = 60000;
 const SCANNERS = ['codeql', 'osv', 'gitleaks', 'dependency-review', 'actionlint'];
 const STATUSES = new Set(['pass', 'fail', 'skipped']);
+const MAX_REASON = 100;
 const TRUNCATED = '\n_The commitlint report was truncated to fit the 60,000-character comment limit._\n';
 
 // Every value below comes from job outputs, and the commitlint report holds
@@ -42,8 +43,10 @@ function runLink(runUrl) {
 function verdictLine(needs, inputs, event) {
   const { conclusion, lines } = evaluate({ needs, inputs, event });
   if (conclusion === 'success') return '### hashira CI: pass';
-  const failing = lines.filter((line) => line.startsWith('FAIL ')).map((line) => escapeHtml(line.slice(5)));
-  return `### hashira CI: fail\n\nFailing: ${failing.join('; ')}`;
+  // Only the job names: the list below already gives each job's result.
+  const failing = lines.filter((line) => line.startsWith('FAIL '))
+    .map((line) => escapeHtml(line.slice(5).split(':')[0]));
+  return `### hashira CI: fail\n\nFailing: ${failing.join(', ')}`;
 }
 
 // "skipped" is the gate turned off by its input or reporting a skip itself;
@@ -58,18 +61,41 @@ function gateLine(needs, inputs) {
   return `- quality-gate: ${result}, ${count} violation${count === '1' ? '' : 's'}`;
 }
 
+// The scanner's own details from scan-suite's summary rows, so a skip or a
+// failure says why. The text is the action's own, but it travels through a
+// job output, so it is stripped, escaped and cut like any untrusted value.
+function scannerReasons(needs) {
+  const reasons = new Map();
+  for (const line of outputOf(needs, 'scan-suite', 'scan_summary').split('\n')) {
+    const [name, , ...rest] = line.split('\t');
+    if (!SCANNERS.includes(name) || reasons.has(name)) continue;
+    const text = rest.join(' ').replace(/[\u0000-\u001f\u007f]/g, ' ').trim();
+    if (!text) continue;
+    const reason = text === 'consumer disabled' ? 'disabled by scan_disable' : text;
+    reasons.set(name, escapeHtml(reason.length > MAX_REASON ? `${cut(reason, MAX_REASON)}...` : reason));
+  }
+  return reasons;
+}
+
 function scannerLines(needs) {
   const found = new Map();
   for (const line of outputOf(needs, 'scan-suite', 'verdicts').split('\n')) {
     const [name, status] = line.trim().split('\t');
     if (SCANNERS.includes(name) && STATUSES.has(status)) found.set(name, status);
   }
-  return SCANNERS.map((name) => `  - ${name}: ${found.get(name) ?? 'not run'}`);
+  const reasons = scannerReasons(needs);
+  return SCANNERS.map((name) => {
+    const status = found.get(name) ?? 'not run';
+    const why = status !== 'pass' && reasons.get(name);
+    return `  - ${name}: ${status}${why ? ` — ${why}` : ''}`;
+  });
 }
 
 function testLine(needs) {
   const result = needs.test?.result;
   const status = result === 'success' ? 'pass' : result === 'failure' ? 'fail' : `not run (job ${escapeHtml(result ?? 'missing')})`;
+  // A report that measured no file gives 0.0%, which is not a measurement.
+  if (outputOf(needs, 'test', 'coverage_files') === '0') return `- test: ${status}, no coverage data`;
   const lines = percent(outputOf(needs, 'test', 'lines_pct'));
   const branches = percent(outputOf(needs, 'test', 'branches_pct'));
   return `- test: ${status}, line coverage ${lines}, branch coverage ${branches}`;

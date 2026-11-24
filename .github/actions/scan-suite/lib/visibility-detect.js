@@ -27,9 +27,11 @@
 //   reserved namespace — consumer workflows must not set this env var.
 //
 // GHAS detection rules:
-//   - Public repos: GHAS features are effectively unlimited for public repos
-//     (CodeQL, dependency-review run for free). If the field is missing on a
-//     public repo, return `hasGHAS: true`.
+//   - Public repos: `hasGHAS: true`, always. GitHub runs CodeQL and
+//     dependency review free on every public repo, whatever
+//     `advanced_security.status` says: the event payload reports 'disabled'
+//     for a public repo that never bought GHAS, and honoring it skipped both
+//     scans on every public consumer.
 //   - Private repos with `security_and_analysis.advanced_security.status ===
 //     'enabled'`: `hasGHAS: true`.
 //   - Private repos with the field missing or any value other than 'enabled':
@@ -52,12 +54,8 @@ function detect({ ghContext, env } = {}) {
   let hasGHAS;
   const saa = repo.security_and_analysis;
   if (visibility === 'public') {
-    // GHAS-gated features are free on public repos; missing field = enabled.
-    if (saa && saa.advanced_security && typeof saa.advanced_security.status === 'string') {
-      hasGHAS = saa.advanced_security.status === 'enabled';
-    } else {
-      hasGHAS = true;
-    }
+    // Free on public repos; advanced_security.status does not gate them.
+    hasGHAS = true;
   } else {
     // Private: require explicit 'enabled' marker.
     if (saa && saa.advanced_security && saa.advanced_security.status === 'enabled') {

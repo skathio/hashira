@@ -286,7 +286,7 @@ jobs:
         # Files are listed by name: Node 20's `node --test` takes no globs.
         run: |
           set -euo pipefail
-          node --test tests/ci-summary/verdict.test.js tests/ci-summary/verdict-edges.test.js tests/ci-summary/comment.test.js tests/ci-summary/comment-edges.test.js tests/ci-summary/render.test.js
+          node --test tests/ci-summary/verdict.test.js tests/ci-summary/verdict-edges.test.js tests/ci-summary/comment.test.js tests/ci-summary/comment-edges.test.js tests/ci-summary/render.test.js tests/ci-summary/body-reasons.test.js
 
 
   quality-gate:

@@ -580,6 +580,9 @@ jobs:
       # Coverage totals for the CI summary comment the passed job writes.
       lines_pct: ${{ steps.coverage.outputs.lines_pct }}
       branches_pct: ${{ steps.coverage.outputs.branches_pct }}
+      # '0' when the report measured no file: the comment then says so
+      # instead of showing 0.0% as if it were a measurement.
+      coverage_files: ${{ steps.coverage.outputs.files }}
     steps:
       # actions/checkout v4.2.2 — consumer's tree.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -640,6 +643,9 @@ jobs:
       # One '<name>\t<pass|fail|skipped>' line per scanner, for the CI
       # summary comment.
       verdicts: ${{ steps.scan.outputs.verdicts }}
+      # The '<name>\t<status>\t<details>' rows, so the comment can say why a
+      # scanner was skipped or failed.
+      scan_summary: ${{ steps.scan.outputs.summary }}
     steps:
       # actions/checkout v4.2.2 — consumer's tree.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1

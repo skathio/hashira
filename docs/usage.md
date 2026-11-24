@@ -802,6 +802,14 @@ with:
 > review, actionlint findings) or ends in an error now **fails the
 > `scan-suite` job**. Before v3.1.0 the findings were advisory. A repo with
 > existing findings goes red when it picks up v3.1.0.
+>
+> **Also fixed in v3.1.0.** Dependency review (and CodeQL, when you enable it)
+> was skipped on public repos with the notice "requires GHAS on private
+> repos", because the visibility check trusted the event payload's
+> `advanced_security.status`, which reads `disabled` on a public repo without
+> a GHAS purchase. Both scans are free on every public repo, so they now run
+> there. A public repo with a vulnerable or disallowed dependency in a pull
+> request's changes therefore goes red too.
 
 Every enabled scanner still runs, and the job summary lists each scanner's
 result before the job fails. A scanner whose tool cannot be installed, or

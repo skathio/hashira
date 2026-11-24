@@ -71,7 +71,7 @@ function main() {
   // The totals as step outputs, for a caller that reports them itself.
   const outputPath = process.env.GITHUB_OUTPUT;
   if (outputPath) {
-    fs.appendFileSync(outputPath, `lines_pct=${result.lines_pct.toFixed(1)}\nbranches_pct=${result.branches_pct.toFixed(1)}\n`);
+    fs.appendFileSync(outputPath, `lines_pct=${result.lines_pct.toFixed(1)}\nbranches_pct=${result.branches_pct.toFixed(1)}\nfiles=${result.files.length}\n`);
   }
 
   const outFile = process.env.COVERAGE_OUTPUT_FILE;

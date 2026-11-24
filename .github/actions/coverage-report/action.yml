@@ -52,6 +52,9 @@ outputs:
   branches_pct:
     description: "Branch coverage in percent, one decimal (e.g. '62.0')."
     value: ${{ steps.parse.outputs.branches_pct }}
+  files:
+    description: "How many source files the report measured. '0' means the report held no coverage data, and the percentages are not a measurement."
+    value: ${{ steps.parse.outputs.files }}
 
 runs:
   using: composite
