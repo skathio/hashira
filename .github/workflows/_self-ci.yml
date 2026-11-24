@@ -86,7 +86,7 @@ jobs:
       # actions/setup-node v4.1.0 — needed only for a recent enough node
       # to have `node --test` (>= 18). Default ubuntu-latest node would
       # also work but pinning makes the matrix explicit.
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: '20'
       - name: Run coverage parser unit tests
@@ -118,7 +118,7 @@ jobs:
       # binary on PATH for its parser shim. Run setup-node BEFORE invoking
       # coverage-report so the dependency is explicit in the self-CI shape
       # (rather than relying on the preinstalled ubuntu-latest Node).
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: '20'
 
@@ -176,7 +176,7 @@ jobs:
       # actions/setup-dotnet v4.1.0 — ubuntu-latest images ship SDKs but
       # pinning the action ensures a deterministic 8.x version for the
       # fixture's <TargetFramework>net8.0</TargetFramework>.
-      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73
         with:
           dotnet-version: '8.0.x'
       - name: run-tests-dotnet — fixture project
@@ -203,7 +203,7 @@ jobs:
       # actions/checkout v4.2.2
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       # actions/setup-node v4.1.0
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: '20'
       - name: Run visibility-detect unit tests
@@ -222,7 +222,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       # actions/setup-node v4.1.0. Node 20 is the oldest Node the lib/ code
       # must keep working on.
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: '20'
       - name: Run quality-gate unit and contract tests
@@ -251,7 +251,7 @@ jobs:
           persist-credentials: false
       # actions/setup-node v4.1.0. The gate installs and runs SoMi with
       # npm/node; Node 20 is the oldest Node the consumer workflows default to.
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: '20'
       - name: Run the SoMi quality gate
@@ -272,7 +272,7 @@ jobs:
       # actions/checkout v4.2.2
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       # actions/setup-node v4.1.0
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: '20'
       - name: Verify python3 + pyyaml availability
@@ -306,7 +306,7 @@ jobs:
           path: .hashira
           persist-credentials: false
       # actions/setup-node v4.1.0 (for visibility-detect shim invocations).
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: '20'
       - name: Run scan-suite with default scan_disable
@@ -346,7 +346,7 @@ jobs:
           path: .hashira
           persist-credentials: false
       # actions/setup-node v4.1.0
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: '20'
       - name: Run scan-suite with gitleaks also disabled
@@ -402,7 +402,7 @@ jobs:
           path: .hashira
           persist-credentials: false
       # actions/setup-node v4.1.0
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: '24'
       - name: Pack the dry-run fixture into a real .tgz
@@ -420,7 +420,7 @@ jobs:
       - name: Upload fixture tarball as 'npm-tarball' (same artifact name the real CI version job uses)
         # actions/upload-artifact v4.4.3 — same pin already verified and in
         # use at npm-package-ci.yml / nuget-package-ci.yml / coverage-report.
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: npm-tarball
           path: ${{ runner.temp }}/npm-release-dry-run-pack-output/*.tgz
@@ -464,7 +464,7 @@ jobs:
           path: .hashira
           persist-credentials: false
       # actions/setup-node v4.1.0
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: '24'
       - name: Pack the dry-run fixture into a real .tgz
@@ -475,7 +475,7 @@ jobs:
           npm pack --pack-destination "${RUNNER_TEMP}/npm-release-dry-run-pack-output" \
             ./tests/npm-release/dry-run-fixture
       - name: Upload fixture tarball as 'npm-tarball'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: npm-tarball
           path: ${{ runner.temp }}/npm-release-dry-run-pack-output/*.tgz
@@ -527,7 +527,7 @@ jobs:
           path: .hashira
           persist-credentials: false
       # actions/setup-node v4.1.0
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: '24'
       - name: Pack a real (unique-named) tarball — never actually reaches the registry
@@ -560,7 +560,7 @@ jobs:
           npm pack --pack-destination "${RUNNER_TEMP}/npm-release-oidc-test-pack-output" \
             "${RUNNER_TEMP}/npm-release-oidc-test-pkg"
       - name: Upload fixture tarball as 'npm-tarball'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: npm-tarball
           path: ${{ runner.temp }}/npm-release-oidc-test-pack-output/*.tgz
@@ -657,7 +657,7 @@ jobs:
           path: .hashira
           persist-credentials: false
       # actions/setup-node v4.1.0
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: '20'
       - name: Run scan-suite with only actionlint disabled (codeql enabled)
@@ -683,7 +683,7 @@ jobs:
       # actions/checkout v4.2.2
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       # actions/setup-node v4.1.0
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: '20'
       - name: Run parse-nupkg-version unit tests
@@ -709,11 +709,11 @@ jobs:
           persist-credentials: false
       # actions/setup-node v4.1.0 (the action's MinVer-detect step shells
       # out to `node` against the shim).
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: '20'
       # actions/setup-dotnet v4.1.0 — reuses iter-1.2-verified pin per D11.
-      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73
         with:
           dotnet-version: '8.0.x'
 
@@ -1583,7 +1583,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       # actions/setup-node v4.1.0. Node 20 is the oldest Node the helpers
       # must keep working on.
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: '20'
       - name: Run consumer-integration unit tests
@@ -1687,7 +1687,7 @@ jobs:
         with:
           persist-credentials: false
       # actions/setup-node v4.1.0
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: '20'
       # Waits for another run's lock anonymously (the fixture repos are
@@ -1698,7 +1698,7 @@ jobs:
         run: node tests/consumer-integration/lib/integrate.js lock-wait
       # actions/create-github-app-token v3.3.0. App tokens last an hour, so
       # each phase mints its own; each is scoped to this leg's fixture repo.
-      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510
+      - uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc
         id: lock-token
         with:
           app-id: ${{ secrets.FIXTURE_APP_ID }}
@@ -1713,7 +1713,7 @@ jobs:
           GH_TOKEN: ${{ steps.lock-token.outputs.token }}
         run: node tests/consumer-integration/lib/integrate.js lock
       # actions/create-github-app-token v3.3.0
-      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510
+      - uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc
         id: app-token
         with:
           app-id: ${{ secrets.FIXTURE_APP_ID }}
@@ -1738,7 +1738,7 @@ jobs:
         run: node tests/consumer-integration/lib/integrate.js pr-run
       # actions/create-github-app-token v3.3.0. A fresh token: the PR wait
       # above may have used most of the last one's hour.
-      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510
+      - uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc
         id: gate-token
         if: matrix.flow == 'npm'
         with:
@@ -1755,7 +1755,7 @@ jobs:
           GH_TOKEN: ${{ steps.gate-token.outputs.token }}
         run: node tests/consumer-integration/lib/integrate.js gate-run
       # actions/create-github-app-token v3.3.0
-      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510
+      - uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc
         id: release-token
         with:
           app-id: ${{ secrets.FIXTURE_APP_ID }}
@@ -1772,7 +1772,7 @@ jobs:
         run: node tests/consumer-integration/lib/integrate.js release
       # actions/create-github-app-token v3.3.0. Cleanup runs on success,
       # failure and cancellation, with a fresh token.
-      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510
+      - uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc
         id: cleanup-token
         if: always()
         with:

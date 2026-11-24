@@ -231,7 +231,7 @@ jobs:
       # actions/checkout v4.2.2 — consumer's tree.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       # actions/setup-dotnet v4.1.0
-      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73
         with:
           dotnet-version: ${{ inputs.dotnet_version }}
       - name: Secret preflight (no-op for CI half)
@@ -376,12 +376,12 @@ jobs:
           path: .hashira
           persist-credentials: false
       # actions/setup-dotnet v4.1.0 — needed for `dotnet pack` below.
-      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73
         with:
           dotnet-version: ${{ inputs.dotnet_version }}
       # actions/setup-node v4.1.0 — version-resolver's shim shells out to
       # `node` (D8's resolver action; same precedent as npm-package-ci.yml).
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: '20'
       - name: Gather tag list
@@ -489,7 +489,7 @@ jobs:
         # use at .github/actions/coverage-report/action.yml and
         # npm-package-ci.yml's iter-2.2 `version` job; reused here rather
         # than introducing a new pin to the verified-pin set.
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           # Stable, documented name: Phase 3's CD job downloads this exact
           # name to publish "the same-run artifact" (sdd.md §8's open item).
@@ -544,7 +544,7 @@ jobs:
       # actions/checkout v4.2.2 — consumer's tree.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       # actions/setup-dotnet v4.1.0
-      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73
         with:
           dotnet-version: ${{ inputs.dotnet_version }}
       - name: Restore + build
@@ -581,7 +581,7 @@ jobs:
       # actions/checkout v4.2.2 — consumer's tree.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       # actions/setup-dotnet v4.1.0
-      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73
         with:
           dotnet-version: ${{ inputs.dotnet_version }}
       # Library self-checkout at this workflow's own commit (see header).
@@ -615,7 +615,7 @@ jobs:
       # actions/setup-node v4.1.0 — coverage-report's parser shim needs a
       # `node` binary on PATH. ubuntu-latest ships one, but pin it explicitly
       # so the dependency is visible (mirrors _self-ci.yml's actions-smoke job).
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: '20'
       # Report coverage IN THIS JOB: run-tests-dotnet just standardized the
@@ -679,7 +679,7 @@ jobs:
       # actions/setup-node v4.1.0 — the gate installs and runs SoMi with
       # npm/node. This flow has no node_version input, so it pins Node 20
       # like its other node steps.
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: '20'
       # Library self-checkout at this workflow's own commit (see header).
