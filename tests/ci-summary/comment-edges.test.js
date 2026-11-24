@@ -77,7 +77,7 @@ test('lint with no commitlint result says so', () => {
 test('a head SHA that is not a SHA, and a run URL that is not https, are not linked', () => {
   const body = renderBody({ needs: needs(), inputs: {}, event: { pull_request: { head: { sha: 'x)(y' } } }, runUrl: 'javascript:alert(1)' });
   assert.ok(body.startsWith(MARKER));
-  assert.match(body, /<sub>commit unknown · run unknown<\/sub>/);
+  assert.match(body, /^Commit unknown · run link unavailable$/m);
   assert.doesNotMatch(body, /javascript|x\)\(y/);
 });
 

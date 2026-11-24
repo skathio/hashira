@@ -56,14 +56,14 @@ function cut(text, length) {
 
 function headLink(event) {
   const sha = String(event.pull_request?.head?.sha ?? '');
-  if (!/^[0-9a-f]{40}$/.test(sha)) return 'commit unknown';
+  if (!/^[0-9a-f]{40}$/.test(sha)) return 'unknown';
   const repoUrl = String(event.repository?.html_url ?? '');
   const short = `\`${sha.slice(0, 7)}\``;
   return /^https:\/\/[^\s()<>]+$/.test(repoUrl) ? `[${short}](${repoUrl}/commit/${sha})` : short;
 }
 
 function runLink(runUrl) {
-  return /^https:\/\/[^\s()<>]+$/.test(String(runUrl ?? '')) ? `[View run](${runUrl})` : 'run unknown';
+  return /^https:\/\/[^\s()<>]+$/.test(String(runUrl ?? '')) ? `[View run](${runUrl})` : 'run link unavailable';
 }
 
 const jobState = (result) => (result === 'success' ? 'pass' : result === 'failure' ? 'fail' : 'notrun');
@@ -205,7 +205,7 @@ function renderBody(args) {
     MARKER,
     ...headline(needs, inputs, event),
     '',
-    `<sub>${headLink(event)} · ${runLink(runUrl)}</sub>`,
+    `Commit ${headLink(event)} · ${runLink(runUrl)}`,
     '',
     ...table(all.filter((row) => !row.skipped)),
     ...skippedLine(all.filter((row) => row.skipped)),
