@@ -31,8 +31,18 @@ runs:
       uses: google/osv-scanner-action/osv-scanner-action@9a498708959aeaef5ef730655706c5a1df1edbc2
       continue-on-error: true
       with:
+        # `.hashira` is hashira's own checkout in the consumer's workspace.
+        # Its lockfiles are not the consumer's dependencies, and an advisory
+        # against one would fail every consumer's CI with nothing for them
+        # to fix.
+        # `--allow-no-lockfiles`: a repo with no lockfile left after that
+        # exclusion (a .csproj without packages.lock.json) has nothing for
+        # OSV to scan. That is not a finding, but osv-scanner exits 128 for
+        # it, which fail_on_findings would turn into a red CI on every run.
         scan-args: |-
           --recursive
+          --experimental-exclude=.hashira
+          --allow-no-lockfiles
           ${{ inputs.paths }}
 
     - name: Record result
@@ -48,13 +58,16 @@ runs:
           success)
             printf 'osv\tran\tno vulnerabilities found\n' >> "${RUNNER_TEMP}/scan-suite-results.tsv"
             echo "- osv: ran (no vulnerabilities found)" >> "${GITHUB_STEP_SUMMARY}"
+            printf '%s\t%s\n' osv pass >> "${RUNNER_TEMP}/scan-suite-verdicts.tsv"
             ;;
           failure)
             printf 'osv\tran\tvulnerabilities found (see job log)\n' >> "${RUNNER_TEMP}/scan-suite-results.tsv"
             echo "- osv: ran (vulnerabilities found; see job log)" >> "${GITHUB_STEP_SUMMARY}"
+            printf '%s\t%s\n' osv fail >> "${RUNNER_TEMP}/scan-suite-verdicts.tsv"
             ;;
           *)
             printf 'osv\terror\toutcome=%s\n' "${OSV_OUTCOME}" >> "${RUNNER_TEMP}/scan-suite-results.tsv"
             echo "- osv: error (outcome=${OSV_OUTCOME})" >> "${GITHUB_STEP_SUMMARY}"
+            printf '%s\t%s\n' osv fail >> "${RUNNER_TEMP}/scan-suite-verdicts.tsv"
             ;;
         esac

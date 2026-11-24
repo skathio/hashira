@@ -31,7 +31,7 @@ jobs:
     uses: skathio/hashira/.github/workflows/npm-package-ci.yml@v3
     permissions:
       contents: read # check out the repository
-      pull-requests: write # commitlint and coverage comments on the pull request
+      pull-requests: write # CI summary comment on the pull request
       security-events: write # upload CodeQL results when CodeQL is enabled
   publish:
     needs: ci

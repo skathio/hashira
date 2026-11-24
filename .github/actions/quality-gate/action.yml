@@ -30,6 +30,14 @@ inputs:
     required: false
     default: "strict"
 
+outputs:
+  result:
+    description: "'pass', 'fail' or 'skipped' (not a pull_request event)."
+    value: ${{ steps.check.outputs.result || steps.install.outputs.result || steps.event.outputs.result }}
+  violations:
+    description: "The number of violations SoMi reported: an integer, 0 when skipped or when SoMi gave no report."
+    value: ${{ steps.check.outputs.violations || steps.install.outputs.violations || steps.event.outputs.violations }}
+
 runs:
   using: composite
   steps:
@@ -51,11 +59,13 @@ runs:
         if ! npm ci --ignore-scripts --no-audit --no-fund --prefix "${GATE_DIR}"; then
           printf '## SoMi quality gate\n\n**Failed:** failed install: npm ci could not install the pinned SoMi\n' >> "${GITHUB_STEP_SUMMARY}"
           echo "::error title=quality-gate::failed install: npm ci could not install the pinned SoMi"
+          printf 'result=fail\nviolations=0\n' >> "${GITHUB_OUTPUT}"
           exit 1
         fi
         echo "cli=${GATE_DIR}/node_modules/@skathio/somi/scripts/somi.mjs" >> "${GITHUB_OUTPUT}"
 
     - name: Run SoMi on the pull request's changes
+      id: check
       if: ${{ steps.event.outputs.run == 'true' }}
       shell: bash
       env:

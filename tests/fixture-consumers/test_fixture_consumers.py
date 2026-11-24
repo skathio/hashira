@@ -163,8 +163,14 @@ def is_fixture_lint(rel):
 
 
 def find_fixture_lint():
-    found = [m.groups() for m in map(LINT_CMD.search, self_ci_commands()) if m]
-    return next(((runner, rel) for runner, rel in found if is_fixture_lint(rel)), (None, None))
+    # Only a lint counts: every lint has a --self-test mode that _self-ci runs,
+    # so a unit test that merely reads the fixtures and templates is not taken
+    # for the fixture lint.
+    commands = list(self_ci_commands())
+    found = [m.groups() for m in map(LINT_CMD.search, commands) if m]
+    self_tested = {rel for _, rel in found if any(f"{rel} --self-test" in c for c in commands)}
+    return next(((runner, rel) for runner, rel in found
+                 if rel in self_tested and is_fixture_lint(rel)), (None, None))
 
 
 def job_bounds(lines, job):

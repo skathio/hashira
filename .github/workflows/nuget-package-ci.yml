@@ -67,11 +67,13 @@
 #   - version        : contents:read (resolver + pack/stamp; no
 #                      working-tree write)
 #   - restore-build  : contents:read
-#   - test           : contents:read, pull-requests:write (coverage runs
-#                      here now and posts the sticky comment — see below)
+#   - test           : contents:read
 #   - scan-suite     : contents:read, security-events:write (CodeQL),
 #                      pull-requests:read (dependency-review on PR)
 #   - quality-gate   : contents:read
+#   - passed         : contents:read, pull-requests:write (the one CI
+#                      summary comment on the pull request; the only job
+#                      with this grant)
 #
 # Reusable workflows can only NARROW the caller's grants, never broaden.
 # Consumers must mirror this matrix at their caller job's `permissions:`
@@ -177,6 +179,16 @@ on:
         required: false
         type: string
         default: "codeql,actionlint"
+      scan_fail_on_findings:
+        description: "Fail the scan-suite job, and so the ci / passed check, when a scanner reports findings or an error. Default true. false keeps every enabled scanner running and reported as fail in the job summary and the CI summary comment, without failing the job. A scanner turned off with scan_disable does not run at all."
+        required: false
+        type: boolean
+        default: true
+      summary_comment:
+        description: "Keep one CI summary comment on the pull request, written by the passed job. Default true. false writes the same summary to the passed job's summary instead and posts no comment; the passed job keeps pull-requests: write either way, so the caller's grant is unchanged."
+        required: false
+        type: boolean
+        default: true
       bump:
         description: "One of 'patch', 'minor' or 'major'. Empty (default) falls back to the caller's workflow_dispatch input 'bump'; a value passed here wins. When neither is set, as on routine pull_request and push runs, no release is cut. When set, the version job resolves the next version, shows it in the run summary and stamps it into the packed release artifact, never into the checked-out tree."
         required: false
@@ -574,9 +586,13 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      # coverage-report (run as the last step of this job) posts a sticky PR
-      # comment via actions/github-script on pull_request events.
-      pull-requests: write
+    outputs:
+      # Coverage totals for the CI summary comment the passed job writes.
+      lines_pct: ${{ steps.coverage.outputs.lines_pct }}
+      branches_pct: ${{ steps.coverage.outputs.branches_pct }}
+      # '0' when the report measured no file: the comment then says so
+      # instead of showing 0.0% as if it were a measurement.
+      coverage_files: ${{ steps.coverage.outputs.files }}
     steps:
       # actions/checkout v4.2.2 — consumer's tree.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -622,10 +638,14 @@ jobs:
       # cobertura file at `coverage_path` in this workspace, so it is present
       # here. (The former separate coverage-report job ran on a fresh runner
       # with no artifact handoff and always failed "file not found".)
+      # No coverage comment here: the totals go to the passed job's one CI
+      # summary comment, and the per-file table stays in this job's summary.
       - name: Report coverage
+        id: coverage
         uses: ./.hashira/.github/actions/coverage-report
         with:
           coverage_path: ${{ inputs.coverage_path || 'coverage/cobertura.xml' }}
+          comment: 'false'
 
   scan-suite:
     name: scan-suite
@@ -640,6 +660,13 @@ jobs:
       security-events: write
       # dependency-review on PR events reads PR metadata.
       pull-requests: read
+    outputs:
+      # One '<name>\t<pass|fail|skipped>' line per scanner, for the CI
+      # summary comment.
+      verdicts: ${{ steps.scan.outputs.verdicts }}
+      # The '<name>\t<status>\t<details>' rows, so the comment can say why a
+      # scanner was skipped or failed.
+      scan_summary: ${{ steps.scan.outputs.summary }}
     steps:
       # actions/checkout v4.2.2 — consumer's tree.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -653,9 +680,13 @@ jobs:
           path: .hashira
           persist-credentials: false
       - name: Run scan-suite
+        id: scan
         uses: ./.hashira/.github/actions/scan-suite
         with:
           scan_disable: ${{ inputs.scan_disable }}
+          # Findings or a scanner error fail this job; a consumer who can't
+          # act on one scanner's findings turns it off with scan_disable.
+          fail_on_findings: ${{ inputs.scan_fail_on_findings && 'true' || 'false' }}
 
   # SoMi's quality check on what a pull request changes. On by default;
   # `quality_gate: false` skips this job. On push and workflow_dispatch the
@@ -669,6 +700,10 @@ jobs:
       # Read the consumer's tree. Violations go to the job summary and to
       # annotations, which need no grant.
       contents: read
+    outputs:
+      # The gate's result and violation count, for the CI summary comment.
+      result: ${{ steps.gate.outputs.result }}
+      violations: ${{ steps.gate.outputs.violations }}
     steps:
       # actions/checkout v4.2.2 — consumer's tree. Full history so the pull
       # request's base commit is present without a credentialed fetch.
@@ -692,6 +727,61 @@ jobs:
           path: .hashira
           persist-credentials: false
       - name: Run the SoMi quality gate
+        id: gate
         uses: ./.hashira/.github/actions/quality-gate
         with:
           level: ${{ inputs.quality_level }}
+
+  # The one stable check for every repo type. Called as job `ci`, this job
+  # reports as `ci / passed`, the check a branch ruleset requires. It runs
+  # with always(), so it reports even when setup fails or the run is
+  # cancelled, and it fails unless every needed job succeeded or was skipped
+  # by a documented input (see ci-summary's lib/verdict.js). On
+  # pull_request events it also keeps the one hashira summary comment on
+  # the pull request.
+  passed:
+    name: passed
+    needs: [setup, version, restore-build, test, scan-suite, quality-gate]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    # A hung comment API call must not hold the required check open for the
+    # runner's six-hour default. ci-summary runs on the runner's own node, so
+    # the job needs no setup-node download either.
+    timeout-minutes: 10
+    permissions:
+      # Check out hashira's ci-summary action.
+      contents: read
+      # Write, and edit in place, the one CI summary comment on the pull
+      # request. No other job in this workflow holds this grant.
+      pull-requests: write
+    steps:
+      # Resolve hashira's own commit here rather than read it from setup, so
+      # this job still reports when setup failed (see "Runtime contract" in
+      # the header).
+      - name: Resolve hashira's own commit
+        id: self
+        shell: bash
+        env:
+          # The called workflow file's commit, never the caller's.
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${WORKFLOW_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::nuget-package-ci: job.workflow_sha is '${WORKFLOW_SHA}', not a 40-character commit SHA, so hashira's ci-summary action cannot be checked out."
+            exit 1
+          fi
+          echo "sha=${WORKFLOW_SHA}" >> "${GITHUB_OUTPUT}"
+      - name: Checkout hashira library at its own commit
+        # actions/checkout v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: skathio/hashira
+          ref: ${{ steps.self.outputs.sha }}
+          path: .hashira
+          persist-credentials: false
+      - name: Judge the jobs and write the CI summary
+        uses: ./.hashira/.github/actions/ci-summary
+        with:
+          needs: ${{ toJSON(needs) }}
+          workflow_inputs: ${{ toJSON(inputs) }}
+          comment: ${{ inputs.summary_comment && 'true' || 'false' }}

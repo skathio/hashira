@@ -26,7 +26,12 @@ inputs:
 runs:
   using: composite
   steps:
+    # continue-on-error: a failed download or checksum is recorded as this
+    # scanner's error, so the scanners after it still run and scan-suite
+    # fails once its summary is written.
     - name: Install gitleaks (pinned v8.21.2)
+      id: install
+      continue-on-error: true
       shell: bash
       run: |
         set -euo pipefail
@@ -44,6 +49,7 @@ runs:
 
     - name: Run gitleaks detect
       id: run
+      if: steps.install.outcome == 'success'
       shell: bash
       env:
         CFG: ${{ inputs.config_path }}
@@ -65,19 +71,29 @@ runs:
       shell: bash
       env:
         RC: ${{ steps.run.outputs.rc }}
+        INSTALL_OUTCOME: ${{ steps.install.outcome }}
       run: |
         set -euo pipefail
+        if [ "${INSTALL_OUTCOME}" != "success" ]; then
+          printf 'gitleaks\terror\tinstall failed\n' >> "${RUNNER_TEMP}/scan-suite-results.tsv"
+          echo "- gitleaks: error (install failed)" >> "${GITHUB_STEP_SUMMARY}"
+          printf '%s\t%s\n' gitleaks fail >> "${RUNNER_TEMP}/scan-suite-verdicts.tsv"
+          exit 0
+        fi
         case "${RC}" in
           0)
             printf 'gitleaks\tran\tno leaks found\n' >> "${RUNNER_TEMP}/scan-suite-results.tsv"
             echo "- gitleaks: ran (no leaks found)" >> "${GITHUB_STEP_SUMMARY}"
+            printf '%s\t%s\n' gitleaks pass >> "${RUNNER_TEMP}/scan-suite-verdicts.tsv"
             ;;
           1)
             printf 'gitleaks\tran\tleaks found (see gitleaks-report.json)\n' >> "${RUNNER_TEMP}/scan-suite-results.tsv"
             echo "- gitleaks: ran (leaks found; see gitleaks-report.json artifact)" >> "${GITHUB_STEP_SUMMARY}"
+            printf '%s\t%s\n' gitleaks fail >> "${RUNNER_TEMP}/scan-suite-verdicts.tsv"
             ;;
           *)
             printf 'gitleaks\terror\texit=%s\n' "${RC}" >> "${RUNNER_TEMP}/scan-suite-results.tsv"
             echo "- gitleaks: error (exit=${RC})" >> "${GITHUB_STEP_SUMMARY}"
+            printf '%s\t%s\n' gitleaks fail >> "${RUNNER_TEMP}/scan-suite-verdicts.tsv"
             ;;
         esac

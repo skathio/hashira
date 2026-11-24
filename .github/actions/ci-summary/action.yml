@@ -1,0 +1,79 @@
+# Composite action: ci-summary
+#
+# The body of the aggregate `passed` job in the three CI workflows. It judges
+# every needed job's result, writes one line per job to the job summary, and
+# on pull_request events writes the one hashira summary comment on the pull
+# request, edited in place on later runs. Then it fails when the verdict is
+# failure.
+#
+# - A needed job passes when its result is `success`. A `skipped` result
+#   passes only for the documented skips: `version` when no bump is set, and
+#   `quality-gate` when `inputs.quality_gate` is false. Anything else fails.
+# - The comment is a report, not a check: a fork PR, a Dependabot PR or any
+#   comment API error writes the body to the job summary instead, and no
+#   comment outcome changes the verdict.
+# - The comment is found by the marker `<!-- hashira:ci-summary -->` on a
+#   comment by github-actions[bot]; nobody else's comment is edited.
+#
+# Requires: `node` on PATH, and `pull-requests: write` on the job for the
+# comment. Logic lives in lib/ (verdict.js, body.js, comment.js, render.js).
+name: ci-summary
+description: Judge a CI workflow's job results, summarize them, and keep one summary comment on the pull request.
+
+inputs:
+  needs:
+    description: "The calling job's needs context as JSON. Pass toJSON(needs) in an expression. A value with no job in it fails the action."
+    required: true
+  workflow_inputs:
+    description: "The calling workflow's inputs context as JSON, read for the documented skips. Pass toJSON(inputs) in an expression."
+    required: false
+    default: "{}"
+  comment:
+    description: "'true' (default) keeps the one summary comment on a pull request; 'false' writes the same body to the job summary instead and posts nothing. Any other value fails the action."
+    required: false
+    default: "true"
+
+outputs:
+  conclusion:
+    description: "'success' or 'failure': the verdict over the needed jobs."
+    value: ${{ steps.render.outputs.conclusion }}
+
+runs:
+  using: composite
+  steps:
+    - name: Judge the needed jobs and write the job summary
+      id: render
+      shell: bash
+      env:
+        CI_SUMMARY_NEEDS: ${{ inputs.needs }}
+        CI_SUMMARY_INPUTS: ${{ inputs.workflow_inputs }}
+        CI_SUMMARY_COMMENT: ${{ inputs.comment }}
+      run: node "${GITHUB_ACTION_PATH}/lib/render.js"
+
+    # continue-on-error: the comment never changes the verdict. comment.js
+    # already catches every API error; this also covers the script itself.
+    - name: Write the pull request comment
+      if: ${{ github.event_name == 'pull_request' && inputs.comment == 'true' }}
+      continue-on-error: true
+      # actions/github-script v7.0.1
+      uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea
+      env:
+        CI_SUMMARY_LIB: ${{ steps.render.outputs.lib_dir }}
+        CI_SUMMARY_BODY: ${{ steps.render.outputs.body_file }}
+      with:
+        script: |
+          const fs = require('fs');
+          const { writeComment } = require(`${process.env.CI_SUMMARY_LIB}/comment.js`);
+          const body = fs.readFileSync(process.env.CI_SUMMARY_BODY, 'utf8');
+          await writeComment({ github, context, core, body });
+
+    - name: Conclude
+      shell: bash
+      env:
+        CONCLUSION: ${{ steps.render.outputs.conclusion }}
+      run: |
+        set -euo pipefail
+        if [[ "${CONCLUSION}" != "success" ]]; then
+          echo "::error title=passed::a needed job failed, was cancelled or was skipped without a documented reason (see the job summary)"
+          exit 1
+        fi

@@ -29,6 +29,8 @@ CI for an npm package: commitlint, tests with coverage, the scan suite, SoMi's q
 | `test_command` | no | `npm test` |
 | `coverage_path` | no | `''` |
 | `scan_disable` | no | `codeql,actionlint` |
+| `scan_fail_on_findings` | no | `true` |
+| `summary_comment` | no | `true` |
 | `bump` | no | `''` |
 | `seed_version` | no | `''` |
 | `quality_gate` | no | `true` |
@@ -58,6 +60,8 @@ CI for a NuGet package: restore and build, tests with coverage, the scan suite, 
 | `test_filter` | no | `''` |
 | `coverage_path` | no | `''` |
 | `scan_disable` | no | `codeql,actionlint` |
+| `scan_fail_on_findings` | no | `true` |
+| `summary_comment` | no | `true` |
 | `bump` | no | `''` |
 | `seed_version` | no | `''` |
 | `quality_gate` | no | `true` |
@@ -88,6 +92,8 @@ CI for a static site on GitHub Pages: build, tests with coverage, the scan suite
 | `test_command` | no | `npm test` |
 | `coverage_path` | no | `''` |
 | `scan_disable` | no | `codeql,actionlint` |
+| `scan_fail_on_findings` | no | `true` |
+| `summary_comment` | no | `true` |
 | `quality_gate` | no | `true` |
 | `quality_level` | no | `strict` |
 
@@ -209,10 +215,12 @@ Runs the security scans (CodeQL, OSV-Scanner, gitleaks, dependency review, actio
 | `codeql_languages` | no | `''` |
 | `osv_paths` | no | `.` |
 | `gitleaks_config` | no | `''` |
+| `fail_on_findings` | no | `false` |
 
 | Output | Meaning |
 |--------|---------|
 | `summary` | Multi-line summary: one '<name>\t<status>\t<details>' line per scan. |
+| `verdicts` | One '<name>\t<pass\|fail\|skipped>' line per scanner, in the order the scanners ran. |
 
 ```yaml
 - uses: skathio/hashira/.github/actions/scan-suite@v3
@@ -261,9 +269,9 @@ Runs `dotnet test` with Coverlet and moves the cobertura coverage file to a stan
 
 ### coverage-report
 
-Parses an lcov, cobertura or opencover report and shows it as a sticky pull request comment, a step summary and an artifact.
+Parses an lcov, cobertura or opencover report and shows it as a sticky pull request comment, a step summary and an artifact, and outputs the line and branch totals.
 
-**Use it directly**: After your own test step, to report coverage the way the CI workflows do. Needs `pull-requests: write` for the comment.
+**Use it directly**: After your own test step, to report coverage the way the CI workflows do. Needs `pull-requests: write` for the comment; `comment: 'false'` turns the comment off (the CI workflows do, and show the totals in their CI summary comment instead).
 
 | Input | Required | Default |
 |-------|----------|---------|
@@ -271,8 +279,13 @@ Parses an lcov, cobertura or opencover report and shows it as a sticky pull requ
 | `format` | no | `''` |
 | `artifact_name` | no | `coverage` |
 | `artifact_retention_days` | no | `30` |
+| `comment` | no | `true` |
 
-No outputs.
+| Output | Meaning |
+|--------|---------|
+| `lines_pct` | Line coverage in percent, one decimal (e.g. `87.5`). |
+| `branches_pct` | Branch coverage in percent, one decimal (e.g. `62.0`). |
+| `files` | How many source files the report measured. `0` means the report held no coverage data, and the percentages are not a measurement. |
 
 ```yaml
 - uses: skathio/hashira/.github/actions/coverage-report@v3
@@ -292,10 +305,36 @@ What it does not score is shown, never hidden. The job summary lists files SoMi 
 |-------|----------|---------|
 | `level` | no | `strict` |
 
-No outputs.
+| Output | Meaning |
+|--------|---------|
+| `result` | `pass`, `fail` or `skipped` (not a pull_request event). |
+| `violations` | The number of violations SoMi reported: an integer, `0` when skipped or when SoMi gave no report. |
 
 ```yaml
 - uses: skathio/hashira/.github/actions/quality-gate@v3
+```
+
+### ci-summary
+
+`ci-summary` judges the results of a CI workflow's jobs for the aggregate `passed` job (the `ci / passed` check), writes one line per job to the job summary, keeps one CI summary comment on the pull request (marker `<!-- hashira:ci-summary -->`, by `github-actions[bot]`, edited in place), and fails when the verdict is failure. A job passes when it succeeded; a skip passes only for `version` with no bump and `quality-gate` with `quality_gate: false`. A fork or Dependabot pull request, or any comment API error, puts the comment body in the job summary instead and never changes the verdict. Called with a `needs` value that holds no job, the action fails: a check that judged nothing is not a pass.
+
+**Use it directly**: As the last job of your own workflow, with `needs` on every other job and `if: always()`, to get one required check and one summary comment. Needs `pull-requests: write` for the comment, and `node` on the path. The comment reads the job outputs the hashira CI workflows set (`lines_pct`, `branches_pct`, `coverage_files`, `verdicts`, `scan_summary`, `result`, `violations`, `commitlint_result`, `commitlint_report`); jobs without them show as not run.
+
+| Input | Required | Default |
+|-------|----------|---------|
+| `needs` | yes | — |
+| `workflow_inputs` | no | `{}` |
+| `comment` | no | `true` |
+
+| Output | Meaning |
+|--------|---------|
+| `conclusion` | `success` or `failure`: the verdict over the needed jobs. |
+
+```yaml
+- uses: skathio/hashira/.github/actions/ci-summary@v3
+  with:
+    needs: ${{ toJSON(needs) }}
+    workflow_inputs: ${{ toJSON(inputs) }}
 ```
 
 ### version-resolver

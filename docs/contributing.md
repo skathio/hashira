@@ -81,13 +81,23 @@ doesn't conclude the maintainer axis is the only supported extension path.
    `inputs:`/`outputs:`/caller-permissions (composite action) entry in the
    matching `docs/flows/<flow>.md` page, and in a `### <name>` section of
    [`catalog.md`](./catalog.md) (`tests/catalog/shape-validate.py` checks it).
-4. Write the flow's caller as `templates/<flow>/ci.yml` (at most 45
+4. Give the workflow a job with id and name `passed` as its last job: it
+   `needs` every other job, runs with `if: always()`, checks hashira out
+   itself at `job.workflow_sha` (not through `setup`, so it still runs when
+   `setup` failed) and calls the `ci-summary` action with `toJSON(needs)`
+   and `toJSON(inputs)`. It is the one job with `pull-requests: write`, and
+   consumers require it as `ci / passed`. A new job goes into its `needs`;
+   a job that an input may skip gets a documented skip in
+   `.github/actions/ci-summary/lib/verdict.js`, or the skip fails the
+   check. `tests/shape-lints/passed_job.py` holds the shape; call it from
+   the flow's `shape-validate.py`.
+5. Write the flow's caller as `templates/<flow>/ci.yml` (at most 45
    non-blank, non-comment lines) and copy it word for word as the first
    caller block of `docs/flows/<flow>.md` and as the flow's caller in
    `README.md`. `tests/templates/identity-lint.py` fails, naming the file
    and the first differing line, when a copy drifts; change the template and
    both copies in the same PR.
-5. Update the flow's fixture caller, `tests/consumers/<flow>/.github/workflows/ci.yml`,
+6. Update the flow's fixture caller, `tests/consumers/<flow>/.github/workflows/ci.yml`,
    in the same PR. It must equal the template except for the fake registry,
    the publish target and the verification steps after the CD action;
    `tests/shape-lints/fixture-diff.py` names the first key that differs.

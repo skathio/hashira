@@ -455,6 +455,11 @@ composite cannot hold its own `permissions:` block).
 | `static-webapp-ci.yml` | CI reusable workflow | `contents: read`, `id-token: write`, `pages: write`, `pull-requests: write`, `security-events: write` |
 | `pages-deploy` (consumer's own `deploy` job) | CD composite action | `pages: write`, `id-token: write` (no `contents: write` — `deploy-pages` reads the artifact, not the repo) |
 
+**`pull-requests: write` on a CI caller job** is for the one CI summary
+comment on the pull request. Inside each CI workflow only the `passed` job
+holds it (see [The `ci / passed` check](#the-ci--passed-check)); `test` and
+npm's `lint` run with `contents: read`.
+
 **`pull-requests: read`, not `write`, on the publish/deploy job**: both
 `nuget-push` and `npm-release`'s `gh release create --generate-notes` step
 only **reads** merged-PR metadata to compose the Release notes — it does
@@ -551,6 +556,65 @@ the actual `on:`/`if:` conditions of all 34 jobs, not assumed. If a future
 job in this file ever gains a `paths:`/path-conditional `if:`, re-audit
 this section — the structural guarantee that makes "no change needed" true
 today would no longer hold.
+
+## The `ci / passed` check
+
+Each CI workflow ends with a job named `passed`. Called as job `ci`, as the
+templates do, it reports as the check **`ci / passed`**: the same name for
+npm, NuGet and static-webapp repos, so a branch ruleset can require that one
+check and nothing else. It is the aggregating required check the section
+above recommends.
+
+- It `needs` every other job of the workflow and runs with `if: always()`,
+  so it reports on every event the workflow runs on (`pull_request`, `push`,
+  `workflow_dispatch`), also when `setup` fails and when the run is
+  cancelled. A cancelled run concludes `failure`, because its cancelled
+  jobs fail the verdict. Only a run cancelled before `passed` itself
+  starts leaves no `ci / passed` result.
+- It fails when any needed job's result is `failure` or `cancelled`, and
+  when any needed job is `skipped`, except two documented skips: `version`
+  when no bump is set (neither the `bump` input nor a `workflow_dispatch`
+  input `bump`), and `quality-gate` when `quality_gate` is `false`. Any
+  other skip fails, for example NuGet's `test` skipped because
+  `restore-build` failed. Otherwise it passes.
+- Its job summary has one line per needed job: the job, its result, and for
+  a documented skip the input that caused it.
+- A scanner's findings fail `scan-suite` (see
+  [Findings fail the scan-suite job](#findings-fail-the-scan-suite-job)),
+  so they fail `ci / passed` too.
+
+`passed` checks hashira out at `job.workflow_sha` itself, not through
+`setup`'s output, so it still reports when `setup` failed. It renders
+through the `ci-summary` composite action.
+
+### The CI summary comment
+
+On `pull_request` events `passed` keeps exactly one hashira comment on the
+pull request and edits it in place on every later run. It shows the head
+commit it describes, a link to the run, the overall verdict, the
+quality-gate result with its violation count, each scanner's result
+(codeql, osv, gitleaks, dependency-review, actionlint), the test result with
+line and branch coverage, and on npm the commitlint result (warn-only).
+
+- The comment starts with the hidden marker `<!-- hashira:ci-summary -->`
+  and is written by `github-actions[bot]`. A comment by anyone else that
+  contains the marker is never edited or deleted. If there is more than one
+  bot-owned marker comment, the oldest is updated and the others deleted.
+- Before writing, `passed` reads the pull request's current head. When a
+  newer push exists, it writes nothing and says so in its job summary.
+- On a fork pull request or a Dependabot pull request, where the token
+  cannot write comments, the comment body goes to the job summary instead.
+- `summary_comment: false` turns the comment off: the body goes to the
+  `passed` job's summary and nothing is posted. A comment an earlier run
+  already posted stays as it was; delete it by hand if it should go.
+  Any comment API error does the same, with a warning. No comment outcome
+  changes the conclusion of `ci / passed`.
+- Other events write no comment.
+
+The comment replaces the coverage comment and npm's commitlint comment from
+before v3.1.0: `test` passes `comment: 'false'` to `coverage-report`, and
+`lint` writes no comment. Comments those older versions left on open pull
+requests stay as they are.
 
 ## Additive-only v1.x evolution rule
 
@@ -732,6 +796,52 @@ with:
   scan_disable: 'codeql,actionlint,osv'    # also skip OSV-Scanner
 ```
 
+### Findings fail the scan-suite job
+
+> **Changed in v3.1.0.** The three CI workflows now call `scan-suite` with
+> `fail_on_findings` set from their `scan_fail_on_findings` input, which
+> defaults to `true`. A scanner that reports findings (OSV
+> vulnerabilities, gitleaks leaks, problematic dependencies from dependency
+> review, actionlint findings) or ends in an error now **fails the
+> `scan-suite` job**. Before v3.1.0 the findings were advisory. A repo with
+> existing findings goes red when it picks up v3.1.0.
+>
+> **Also fixed in v3.1.0.** Dependency review (and CodeQL, when you enable it)
+> was skipped on every repo with the notice "requires GHAS on private repos":
+> the visibility check looked for the repository where the scan actions never
+> put it, so every repo was taken for private without GHAS. Both scans now run
+> on public repos, where they are free, and on private repos with GHAS. A
+> repo with a vulnerable or disallowed dependency in a pull request's changes
+> therefore goes red too. Dependency review needs the repository's
+> dependency graph (Settings → Security → Dependency graph). Where it is off,
+> the scan is skipped with the notice "dependency graph is off for this
+> repository" and does not fail the job; turn the graph on to get the scan.
+
+Every enabled scanner still runs, and the job summary lists each scanner's
+result before the job fails. A scanner whose tool cannot be installed, or
+whose repo-visibility check breaks, counts as an error. A scanner skipped by `scan_disable`, or skipped
+because the repo is private without GHAS, never fails the job. To unblock a
+repo while you fix what a scanner found, add that scanner to `scan_disable`
+(keep the defaults in the list):
+
+```yaml
+with:
+  scan_disable: 'codeql,actionlint,osv'    # OSV findings no longer fail CI
+```
+
+To keep every scanner running and reported but stop findings from failing
+CI, set `scan_fail_on_findings: false`. Each scanner with findings still
+shows as fail in the job summary and in the CI summary comment; only the
+`scan-suite` job, and so `ci / passed`, stays green:
+
+```yaml
+with:
+  scan_fail_on_findings: false    # findings are reported, not blocking
+```
+
+Using the `scan-suite` action directly, `fail_on_findings` defaults to
+`'false'`, so findings stay advisory unless you pass `'true'`.
+
 ### Permissions asymmetry note
 
 The `scan-suite` job grants `security-events: write` even under the default
@@ -745,9 +855,12 @@ workflow (`npm-package-ci.yml`, `nuget-package-ci.yml`,
 ## Coverage reporting
 
 The CI half of every package/webapp flow ends its `test` job with a
-`coverage-report` step that parses the consumer's coverage file and renders
-a sticky PR comment with per-file coverage percentages and a delta against
-the PR's base.
+`coverage-report` step that parses the consumer's coverage file and writes
+the per-file coverage table to the job summary. Since v3.1.0 the CI
+workflows pass `comment: 'false'`: the line and branch totals go to the CI
+summary comment (see [The CI summary comment](#the-ci-summary-comment))
+through the action's `lines_pct` and `branches_pct` outputs. Used on its
+own, `coverage-report` still posts its sticky comment by default.
 
 ### Supported formats
 
@@ -780,7 +893,8 @@ informational, not a gate.
 
 ### Sticky comment mechanism
 
-The sticky comment uses a **hidden HTML anchor** embedded in the comment
+This applies to `coverage-report` used on its own with `comment` left at
+`'true'`. The sticky comment uses a **hidden HTML anchor** embedded in the comment
 body (not a marker comment) to identify itself across consecutive runs. On
 subsequent CI runs on the same PR, the `actions/github-script`-based step
 finds the existing comment by anchor and **updates it in place** rather than

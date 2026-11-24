@@ -2,7 +2,8 @@
 #
 # Wraps actions/dependency-review-action. Only meaningfully runs on
 # pull_request events. Visibility-adaptive per D7: skip-with-notice on
-# private+no-GHAS; also skip-with-notice on non-PR events.
+# private+no-GHAS; also skip-with-notice on non-PR events and when the
+# repository's dependency graph is off (lib/dependency-graph.js).
 #
 # Writes one TAB-separated line to `${RUNNER_TEMP}/scan-suite-results.tsv`:
 #   dependency-review<TAB><status><TAB><details>
@@ -14,9 +15,12 @@ description: actions/dependency-review-action wrapper (PR-only, visibility-adapt
 runs:
   using: composite
   steps:
+    # continue-on-error: a detection that breaks is recorded as this scanner's
+    # error, never as a skip, and the scanners after it still run.
     - name: Detect visibility / GHAS
       id: detect
       if: github.event_name == 'pull_request'
+      continue-on-error: true
       shell: bash
       env:
         GH_CONTEXT: ${{ toJSON(github) }}
@@ -55,9 +59,10 @@ runs:
         echo "::notice::scan-suite/dependency-review skipped: ${msg}"
         printf 'dependency-review\tskipped\t%s\n' "${msg}" >> "${RUNNER_TEMP}/scan-suite-results.tsv"
         echo "- dependency-review: skipped (${msg})" >> "${GITHUB_STEP_SUMMARY}"
+        printf '%s\t%s\n' dependency-review skipped >> "${RUNNER_TEMP}/scan-suite-verdicts.tsv"
 
     - name: Skip (private + no GHAS)
-      if: github.event_name == 'pull_request' && steps.detect.outputs.has_ghas != 'true'
+      if: github.event_name == 'pull_request' && steps.detect.outcome == 'success' && steps.detect.outputs.has_ghas != 'true'
       shell: bash
       run: |
         set -euo pipefail
@@ -65,32 +70,65 @@ runs:
         echo "::notice::scan-suite/dependency-review skipped: ${msg}"
         printf 'dependency-review\tskipped\t%s\n' "${msg}" >> "${RUNNER_TEMP}/scan-suite-results.tsv"
         echo "- dependency-review: skipped (${msg})" >> "${GITHUB_STEP_SUMMARY}"
+        printf '%s\t%s\n' dependency-review skipped >> "${RUNNER_TEMP}/scan-suite-verdicts.tsv"
+
+    # A probe that fails to answer gives 'unknown', and the action then runs.
+    - name: Check the dependency graph
+      id: graph
+      if: github.event_name == 'pull_request' && steps.detect.outputs.has_ghas == 'true'
+      shell: bash
+      env:
+        DR_TOKEN: ${{ github.token }}
+        DR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        DR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      run: node "${GITHUB_WORKSPACE}/.hashira/.github/actions/scan-suite/lib/dependency-graph.js"
+
+    - name: Skip (dependency graph off)
+      if: steps.graph.outputs.graph == 'off'
+      shell: bash
+      run: |
+        set -euo pipefail
+        msg="dependency graph is off for this repository"
+        echo "::notice::scan-suite/dependency-review skipped: ${msg}"
+        printf 'dependency-review\tskipped\t%s\n' "${msg}" >> "${RUNNER_TEMP}/scan-suite-results.tsv"
+        echo "- dependency-review: skipped (${msg})" >> "${GITHUB_STEP_SUMMARY}"
+        printf '%s\t%s\n' dependency-review skipped >> "${RUNNER_TEMP}/scan-suite-verdicts.tsv"
 
     # actions/dependency-review-action v4.5.0
     - name: Run dependency-review
       id: run
-      if: github.event_name == 'pull_request' && steps.detect.outputs.has_ghas == 'true'
+      if: github.event_name == 'pull_request' && steps.detect.outputs.has_ghas == 'true' && steps.graph.outputs.graph != 'off'
       uses: actions/dependency-review-action@3b139cfc5fae8b618d3eae3675e383bb1769c019
       continue-on-error: true
 
     - name: Record ran-status
-      if: github.event_name == 'pull_request' && steps.detect.outputs.has_ghas == 'true'
+      if: github.event_name == 'pull_request' && (steps.detect.outcome != 'success' || (steps.detect.outputs.has_ghas == 'true' && steps.graph.outputs.graph != 'off'))
       shell: bash
       env:
+        DETECT_OUTCOME: ${{ steps.detect.outcome }}
         OUTCOME: ${{ steps.run.outcome }}
       run: |
         set -euo pipefail
+        if [ "${DETECT_OUTCOME}" != "success" ]; then
+          printf 'dependency-review\terror\tvisibility detection failed\n' >> "${RUNNER_TEMP}/scan-suite-results.tsv"
+          echo "- dependency-review: error (visibility detection failed)" >> "${GITHUB_STEP_SUMMARY}"
+          printf '%s\t%s\n' dependency-review fail >> "${RUNNER_TEMP}/scan-suite-verdicts.tsv"
+          exit 0
+        fi
         case "${OUTCOME}" in
           success)
             printf 'dependency-review\tran\tno problematic deps\n' >> "${RUNNER_TEMP}/scan-suite-results.tsv"
             echo "- dependency-review: ran (no problematic deps)" >> "${GITHUB_STEP_SUMMARY}"
+            printf '%s\t%s\n' dependency-review pass >> "${RUNNER_TEMP}/scan-suite-verdicts.tsv"
             ;;
           failure)
             printf 'dependency-review\tran\tproblematic deps found (see job log)\n' >> "${RUNNER_TEMP}/scan-suite-results.tsv"
             echo "- dependency-review: ran (problematic deps found; see job log)" >> "${GITHUB_STEP_SUMMARY}"
+            printf '%s\t%s\n' dependency-review fail >> "${RUNNER_TEMP}/scan-suite-verdicts.tsv"
             ;;
           *)
             printf 'dependency-review\terror\toutcome=%s\n' "${OUTCOME}" >> "${RUNNER_TEMP}/scan-suite-results.tsv"
             echo "- dependency-review: error (outcome=${OUTCOME})" >> "${GITHUB_STEP_SUMMARY}"
+            printf '%s\t%s\n' dependency-review fail >> "${RUNNER_TEMP}/scan-suite-verdicts.tsv"
             ;;
         esac

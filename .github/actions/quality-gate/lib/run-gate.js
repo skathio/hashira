@@ -23,10 +23,18 @@ function appendSummary(env, text) {
   if (env.GITHUB_STEP_SUMMARY) fs.appendFileSync(env.GITHUB_STEP_SUMMARY, text);
 }
 
+// The action's `result` (pass, fail or skipped) and `violations` outputs.
+function writeResult(env, result, violations) {
+  if (env.GITHUB_OUTPUT) fs.appendFileSync(env.GITHUB_OUTPUT, `result=${result}\nviolations=${violations}\n`);
+}
+
 /** true when the event is a pull_request; otherwise writes the skip line. */
 function decideEvent(env) {
   const gated = env.GITHUB_EVENT_NAME === 'pull_request';
-  if (!gated) appendSummary(env, `${SKIP_MESSAGE}\n`);
+  if (!gated) {
+    appendSummary(env, `${SKIP_MESSAGE}\n`);
+    writeResult(env, 'skipped', 0);
+  }
   if (env.GITHUB_OUTPUT) fs.appendFileSync(env.GITHUB_OUTPUT, `run=${gated}\n`);
   return gated;
 }
@@ -73,6 +81,7 @@ function check(options) {
   const problem = precheck(settings);
   const verdict = problem ? { passed: false, cause: problem, report: null } : interpret(runSomi(settings));
   appendSummary(env, renderSummary(verdict, settings));
+  writeResult(env, verdict.passed ? 'pass' : 'fail', verdict.report ? verdict.report.violations.length : 0);
   for (const line of annotations(verdict.report)) log(line);
   log(`quality-gate: ${verdict.passed ? 'passed' : 'failed'}: ${escapeData(verdict.cause)}`);
   return verdict.passed ? 0 : 1;

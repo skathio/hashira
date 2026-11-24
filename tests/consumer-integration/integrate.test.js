@@ -13,6 +13,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const integrate = require('./lib/integrate.js');
+const { MARKER } = require('../../.github/actions/ci-summary/lib/body.js');
 
 const S = 'c'.repeat(40);
 const REPO = 'skathio/hashira-fixture-npm';
@@ -123,14 +124,59 @@ function prRunsContext(name, heads) {
 
 const MAIN = 'd'.repeat(40);
 const GATE = 'e'.repeat(40);
-const gateJobs = { jobs: [{ name: 'ci / setup', conclusion: 'success' }, { name: 'ci / quality-gate', conclusion: 'failure' }] };
+const gateJobs = { jobs: [{ name: 'ci / setup', conclusion: 'success' }, { name: 'ci / quality-gate', conclusion: 'failure' },
+  { name: 'ci / passed', conclusion: 'failure' }] };
 
-test('pr-run waits for the PR run and passes it', () => {
+const BOT = 'github-actions[bot]';
+const summaryComment = (sha, login = BOT) =>
+  ({ id: 1, user: { login }, body: `${MARKER}\n### hashira CI: pass\n\nHead commit [x](https://github.com/${REPO}/commit/${sha}).\n` });
+const passedJobs = (conclusion) => ({ jobs: [{ name: 'ci / test', conclusion: 'success' }, { name: 'ci / passed', conclusion }] });
+
+// The PR run's routes: the run, its jobs, the open PR from hashira/<S> (#7)
+// and that PR's comments.
+function prRunRoutes({ jobs = passedJobs('success'), comments = [summaryComment(MAIN)] } = {}) {
+  return [
+    [new RegExp(`head_sha=${MAIN}`), (n) => ({ workflow_runs: n < 3 ? [] : [run(1, { head_sha: MAIN })] })],
+    [/runs\/1\/jobs/, jobs],
+    [new RegExp(`pulls\\?head=skathio:hashira/${S}&`), [{ number: 7, html_url: `https://github.com/${REPO}/pull/7` }]],
+    [/issues\/7\/comments/, comments],
+  ];
+}
+
+test('pr-run waits for the PR run and passes it with ci / passed green and one summary comment', () => {
   const ctx = prRunsContext('pr-ok', { main: MAIN, gate: GATE });
-  const deps = fakeDeps([[new RegExp(`head_sha=${MAIN}`), (n) => ({ workflow_runs: n < 3 ? [] : [run(1, { head_sha: MAIN })] })]]);
+  const deps = fakeDeps(prRunRoutes());
   integrate.prRun(ctx, deps);
   assert.match(summaryOf(ctx), /fixture CI: \[skathio\/hashira-fixture-npm run 1\]\(https:\/\/github.com\/\S+\/runs\/1\) success/);
+  assert.match(summaryOf(ctx), /ci \/ passed succeeded, one summary comment names d{40}/);
   assert.ok(!deps.calls.some((c) => c.includes(GATE)), 'pr-run must not wait for the gate run');
+});
+
+test('pr-run fails when ci / passed is missing or did not succeed', () => {
+  const missing = fakeDeps(prRunRoutes({ jobs: { jobs: [{ name: 'ci / test', conclusion: 'success' }] } }));
+  assert.throws(() => integrate.prRun(prRunsContext('pr-nopassed', { main: MAIN }), missing),
+    /run 1: the run has no job named 'ci \/ passed'/);
+  const red = fakeDeps(prRunRoutes({ jobs: passedJobs('failure') }));
+  assert.throws(() => integrate.prRun(prRunsContext('pr-redpassed', { main: MAIN }), red),
+    /run 1: ci \/ passed concluded failure, expected success/);
+});
+
+test('pr-run fails unless exactly one bot summary comment names the head', () => {
+  const cases = [
+    ['pr-nocomment', [], /0 github-actions\[bot\] summary comments, expected exactly 1/],
+    ['pr-twocomments', [summaryComment(MAIN), summaryComment(MAIN)], /2 github-actions\[bot\] summary comments/],
+    ['pr-usercomment', [summaryComment(MAIN, 'someone')], /0 github-actions\[bot\] summary comments/],
+    ['pr-stalecomment', [summaryComment(GATE)], /does not name head commit d{40}/],
+  ];
+  for (const [name, comments, message] of cases) {
+    assert.throws(() => integrate.prRun(prRunsContext(name, { main: MAIN }), fakeDeps(prRunRoutes({ comments }))), message, name);
+  }
+});
+
+test('pr-run fails when no PR is open from hashira/<S>', () => {
+  const routes = prRunRoutes().map(([re, reply]) => [re, re.source.includes('pulls') ? [] : reply]);
+  assert.throws(() => integrate.prRun(prRunsContext('pr-nopull', { main: MAIN }), fakeDeps(routes)),
+    /has no open PR from hashira\/c{40}$/);
 });
 
 test('pr-run fails when the fixture CI fails', () => {
@@ -156,6 +202,20 @@ test('gate-run fails when the quality-gate job passed', () => {
     [/runs\/2\/jobs/, { jobs: [{ name: 'ci / quality-gate', conclusion: 'success' }] }],
   ]);
   assert.throws(() => integrate.gateRun(ctx, deps), /run 2: the quality-gate job did not fail/);
+});
+
+test('gate-run fails when ci / passed did not fail or is missing', () => {
+  const gateRoutes = (jobs) => [
+    [new RegExp(`head_sha=${GATE}`), { workflow_runs: [run(2, { head_sha: GATE, conclusion: 'failure' })] }],
+    [/runs\/2\/jobs/, { jobs }],
+  ];
+  const [setup, gate] = gateJobs.jobs;
+  const green = fakeDeps(gateRoutes([setup, gate, { name: 'ci / passed', conclusion: 'success' }]));
+  assert.throws(() => integrate.gateRun(prRunsContext('gate-greenpassed', { main: MAIN, gate: GATE }), green),
+    /run 2: ci \/ passed concluded success, expected failure/);
+  const missing = fakeDeps(gateRoutes([setup, gate]));
+  assert.throws(() => integrate.gateRun(prRunsContext('gate-nopassed', { main: MAIN, gate: GATE }), missing),
+    /run 2: the run has no job named 'ci \/ passed'/);
 });
 
 test('gate-run refuses a fixture with no gate branch', () => {

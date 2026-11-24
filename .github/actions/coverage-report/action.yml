@@ -4,9 +4,11 @@
 #   - parses lcov / cobertura / opencover with a Node stdlib-only shim
 #     (no `npm install` mid-action)
 #   - writes a 1-line summary + per-file table into $GITHUB_STEP_SUMMARY
-#   - posts a sticky PR comment (only on pull_request events) via
-#     actions/github-script (lighter than a third-party sticky-comment
-#     action — one fewer pin to maintain)
+#   - posts a sticky PR comment (only on pull_request events, and only
+#     while `comment` is 'true') via actions/github-script (lighter than a
+#     third-party sticky-comment action — one fewer pin to maintain)
+#   - outputs the line and branch totals, for a caller that reports them
+#     itself (the CI workflows' ci-summary comment)
 #   - uploads the raw coverage file as a workflow artifact
 #
 # Per NF1: ≤ ~80 lines. The parsing logic lives in lib/parse-coverage.js
@@ -38,6 +40,21 @@ inputs:
     description: "Retention in days for the uploaded artifact."
     required: false
     default: "30"
+  comment:
+    description: "'true' (default) posts the sticky coverage comment on pull_request events; 'false' skips it. Any other value fails the action."
+    required: false
+    default: "true"
+
+outputs:
+  lines_pct:
+    description: "Line coverage in percent, one decimal (e.g. '87.5')."
+    value: ${{ steps.parse.outputs.lines_pct }}
+  branches_pct:
+    description: "Branch coverage in percent, one decimal (e.g. '62.0')."
+    value: ${{ steps.parse.outputs.branches_pct }}
+  files:
+    description: "How many source files the report measured. '0' means the report held no coverage data, and the percentages are not a measurement."
+    value: ${{ steps.parse.outputs.files }}
 
 runs:
   using: composite
@@ -49,13 +66,18 @@ runs:
         COVERAGE_INPUT_PATH: ${{ inputs.coverage_path }}
         COVERAGE_INPUT_FORMAT: ${{ inputs.format }}
         COVERAGE_OUTPUT_FILE: ${{ runner.temp }}/coverage-comment.md
+        COVERAGE_COMMENT: ${{ inputs.comment }}
       run: |
         set -euo pipefail
+        case "${COVERAGE_COMMENT}" in
+          true|false) ;;
+          *) echo "::error::coverage-report: comment must be 'true' or 'false'"; exit 1 ;;
+        esac
         node "${GITHUB_ACTION_PATH}/lib/render-summary.js"
         echo "comment_file=${COVERAGE_OUTPUT_FILE}" >> "${GITHUB_OUTPUT}"
 
     - name: Post sticky PR comment
-      if: ${{ github.event_name == 'pull_request' }}
+      if: ${{ github.event_name == 'pull_request' && inputs.comment == 'true' }}
       # actions/github-script v7.0.1
       uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea
       with:

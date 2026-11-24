@@ -88,7 +88,7 @@ jobs:
     uses: skathio/hashira/.github/workflows/npm-package-ci.yml@v3
     permissions:
       contents: read # check out the repository
-      pull-requests: write # commitlint and coverage comments on the pull request
+      pull-requests: write # CI summary comment on the pull request
       security-events: write # upload CodeQL results when CodeQL is enabled
   publish:
     needs: ci
@@ -121,6 +121,13 @@ jobs:
 - **Optional inputs.** Every CI input has a default (see §3). Add a `with:`
   block to the `ci` job only for what you change, for example
   `coverage_path` or `quality_level`.
+- **Required check.** The CI workflow's last job, `passed`, reports as
+  `ci / passed`: it fails when any other CI job failed, was cancelled or
+  was skipped without a documented reason (`version` with no bump, `quality-gate`
+  turned off). Require that one check in a
+  branch ruleset. On a pull request it also keeps one CI summary comment,
+  edited in place (see
+  [`../usage.md`](../usage.md#the-ci--passed-check)).
 
 ## 2. Why publish is a job in your own file
 
@@ -166,6 +173,8 @@ field-by-field against the actual shipped YAML.
 | `test_command` | string | `"npm test"` | Shell command that runs the consumer's tests. **Trusted input**: it runs as raw shell, so do NOT pass values derived from PR titles, issue bodies, branch names, or other externally controlled context. |
 | `coverage_path` | string | `""` | Path to the coverage file the tests write. Empty uses the flow's standard path: `coverage/lcov.info` for npm and static-webapp, `coverage/cobertura.xml` for NuGet. Consumed by `coverage-report`, which runs inside the `test` job. Trusted input. |
 | `scan_disable` | string | `"codeql,actionlint"` | Comma-separated list of scans to skip (D10c). Pass `""` to enable everything. Values: `codeql`, `osv`, `gitleaks`, `dependency-review`, `actionlint`. |
+| `scan_fail_on_findings` | boolean | `true` | Fail the `scan-suite` job, and so the `ci / passed` check, when a scanner reports findings or an error. `false` keeps every enabled scanner running and reported as fail in the job summary and the CI summary comment, without failing the job. A scanner turned off with `scan_disable` does not run at all. |
+| `summary_comment` | boolean | `true` | Keep one CI summary comment on the pull request, written by the `passed` job. `false` writes the same summary to the `passed` job's summary instead and posts no comment. The `passed` job keeps `pull-requests: write` either way, so the caller's grant does not change. |
 | `bump` | string | `""` | One of `patch`\|`minor`\|`major`. Empty falls back to the caller's `workflow_dispatch` input `bump`; a value passed with `with:` wins. When neither is set, as on routine pull_request and push runs, no release is cut. When set, the `version` job resolves the next version, shows it in the run summary and stamps it into the packed release artifact, never into the checked-out tree. |
 | `seed_version` | string | `""` | Bare semver baseline (e.g. `"0.0.0"`) for a first release with no prior stable tag. Empty falls back to the caller's `workflow_dispatch` input `seed_version`; a value passed with `with:` wins. Passed to `version-resolver` unchanged; ignored when a stable tag already exists or no bump is set. The bump still applies **on top of** the seed: the seed itself is not published. |
 | `quality_gate` | boolean | `true` | Run SoMi's quality gate (the `quality-gate` job) on what a pull request changes. `false` skips the job. The gate runs only on `pull_request` events; on `push` and `workflow_dispatch` it passes and writes "skipped: quality gate runs on pull requests" to the job summary. |
@@ -226,7 +235,7 @@ for that on a composite action) — the grant lives entirely on the
 
 | Caller job calls | `contents` | `pull-requests` | `security-events` | Why |
 |-------------------|------------|------------------|---------------------|-----|
-| `npm-package-ci.yml` | `read` | `write` | `write` | `pull-requests:write` for the commitlint sticky comment (D11) + coverage-report sticky comment. `security-events:write` for CodeQL when enabled via `scan_disable`. `contents:read` for checkout. The `version` job (when `bump` is set) needs only `contents: read` — it never writes to the working tree (D1 stamp-only). |
+| `npm-package-ci.yml` | `read` | `write` | `write` | `pull-requests:write` for the one CI summary comment on the pull request, written by the `passed` job (the only job holding it); it carries the coverage totals and the commitlint result. `security-events:write` for CodeQL when enabled via `scan_disable`. `contents:read` for checkout. The `version` job (when `bump` is set) needs only `contents: read` — it never writes to the working tree (it only stamps the version). |
 
 ### Publish permissions
 

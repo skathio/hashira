@@ -56,12 +56,13 @@
 # Workflow-level `permissions: {}` (deny-all). Each job grants the minimum
 # it needs:
 #   - version : contents:read (resolver + pack/stamp; no working-tree write)
-#   - lint  : contents:read, pull-requests:write   (commitlint sticky-comment)
-#   - test  : contents:read, pull-requests:write (coverage-report sticky
-#             comment, run as the last step of this job — see below)
+#   - lint  : contents:read
+#   - test  : contents:read
 #   - scan-suite : contents:read, security-events:write (CodeQL),
 #                  pull-requests:read (dependency-review on PR)
 #   - quality-gate : contents:read
+#   - passed : contents:read, pull-requests:write (the one CI summary
+#              comment on the pull request; the only job with this grant)
 #
 # Reusable workflows can only NARROW the caller's grants, never broaden.
 # Consumers must mirror this matrix at their caller job's `permissions:`
@@ -70,8 +71,9 @@
 # ## Inline commitlint (D11, non-blocking)
 #
 # On pull_request events the `lint` job runs `npx commitlint` over the PR
-# range. Findings post a sticky PR comment via actions/github-script using
-# the marker pattern that coverage-report established. The step is
+# range. Findings go to the job summary and, through the job's
+# `commitlint_result` and `commitlint_report` outputs, to the CI summary
+# comment the `passed` job writes. The step is
 # non-blocking — exit 0 regardless of commitlint findings (D11: "warns,
 # does not block"). The commitlint CLI + config-conventional are pinned
 # inside this workflow's `npx` invocation; see the npm supply-chain trust
@@ -145,6 +147,16 @@ on:
         required: false
         type: string
         default: "codeql,actionlint"
+      scan_fail_on_findings:
+        description: "Fail the scan-suite job, and so the ci / passed check, when a scanner reports findings or an error. Default true. false keeps every enabled scanner running and reported as fail in the job summary and the CI summary comment, without failing the job. A scanner turned off with scan_disable does not run at all."
+        required: false
+        type: boolean
+        default: true
+      summary_comment:
+        description: "Keep one CI summary comment on the pull request, written by the passed job. Default true. false writes the same summary to the passed job's summary instead and posts no comment; the passed job keeps pull-requests: write either way, so the caller's grant is unchanged."
+        required: false
+        type: boolean
+        default: true
       bump:
         description: "One of 'patch', 'minor' or 'major'. Empty (default) falls back to the caller's workflow_dispatch input 'bump'; a value passed here wins. When neither is set, as on routine pull_request and push runs, no release is cut. When set, the version job resolves the next version, shows it in the run summary and stamps it into the packed release artifact, never into the checked-out tree."
         required: false
@@ -416,7 +428,11 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      pull-requests: write
+    outputs:
+      # clean, findings or inconclusive, and the report, for the CI summary
+      # comment the passed job writes. Empty outside pull_request events.
+      commitlint_result: ${{ steps.commitlint.outputs.result }}
+      commitlint_report: ${{ steps.commitlint.outputs.report }}
     steps:
       # actions/checkout v4.2.2 — consumer's tree, full history so commitlint
       # can walk the PR range across merge commits.
@@ -505,16 +521,43 @@ jobs:
           if [ "${status}" -ne 0 ] && [ ! -s "${report}" ]; then
             inconclusive="true"
           fi
+          result="findings"
+          if [ "${status}" -eq 0 ]; then
+            result="clean"
+          elif [ "${inconclusive}" = "true" ]; then
+            result="inconclusive"
+          fi
+          # The report holds commit messages from the pull request: it is
+          # bounded, and written under a random delimiter it cannot guess,
+          # so no commit message can end the value and set another output.
+          # It reaches the passed job inside one environment variable, as
+          # JSON, and Linux refuses an environment string over 128 KiB. So
+          # control characters are dropped (newline and tab stay), and the
+          # bound leaves room for a JSON writer that spends six bytes on
+          # every character (\uXXXX), the most any writer can. Without the
+          # bound, a commit message could stop the passed job, and
+          # commitlint never blocks.
+          max_report=18000
+          clean_report="${RUNNER_TEMP}/commitlint-report-clean.txt"
+          LC_ALL=C tr -d '\000-\010\013-\037\177' < "${report}" > "${clean_report}"
+          delim="HASHIRA_COMMITLINT_$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
           {
-            echo "report_path=${report}"
-            echo "status=${status}"
-            echo "inconclusive=${inconclusive}"
+            echo "result=${result}"
+            echo "report<<${delim}"
+            if [ "${result}" = "findings" ]; then
+              head -c "${max_report}" "${clean_report}"
+              echo
+              if [ "$(wc -c < "${clean_report}")" -gt "${max_report}" ]; then
+                echo "[commitlint report truncated to ${max_report} bytes]"
+              fi
+            fi
+            echo "${delim}"
           } >> "${GITHUB_OUTPUT}"
           if [ "${status}" -eq 0 ]; then
             echo "commitlint: clean (no non-CC commits in range)" >> "${GITHUB_STEP_SUMMARY}"
           elif [ "${inconclusive}" = "true" ]; then
             {
-              echo "commitlint: produced no findings on stdout; treating as inconclusive (likely install/runtime failure). Step is non-blocking; sticky comment skipped.";
+              echo "commitlint: produced no findings on stdout; treating as inconclusive (likely install/runtime failure). Step is non-blocking.";
               if [ -s "${err}" ]; then
                 echo '```';
                 cat "${err}";
@@ -531,38 +574,6 @@ jobs:
           fi
           # D11: non-blocking. Always exit 0.
           exit 0
-      - name: Post sticky commitlint comment
-        # Skip the sticky comment on inconclusive runs to avoid a misleading
-        # "non-CC commits found" comment when the real cause was an install
-        # failure (iter-2.2 review Major #1).
-        if: ${{ github.event_name == 'pull_request' && steps.commitlint.outputs.status != '0' && steps.commitlint.outputs.inconclusive != 'true' }}
-        # actions/github-script v7.0.1
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
-        env:
-          REPORT_FILE: ${{ steps.commitlint.outputs.report_path }}
-        with:
-          script: |
-            const fs = require('fs');
-            const marker = '<!-- hashira:npm-package-ci:commitlint -->';
-            const report = fs.readFileSync(process.env.REPORT_FILE, 'utf8');
-            const body = `${marker}\n### commitlint findings (non-blocking)\n\nOne or more commits in this PR's range don't follow [Conventional Commits](https://www.conventionalcommits.org/). semantic-release will not infer a version bump from them. The PR is **not** blocked — fix-forward or squash-rewrite at merge.\n\n\`\`\`\n${report}\n\`\`\`\n`;
-            const { owner, repo } = context.repo;
-            const issue_number = context.issue.number;
-            if (!issue_number) {
-              core.info('npm-package-ci/commitlint: no PR number; skipping sticky comment.');
-              return;
-            }
-            const existing = await github.paginate(github.rest.issues.listComments, {
-              owner, repo, issue_number, per_page: 100,
-            });
-            const prior = existing.find(c => c.body && c.body.startsWith(marker));
-            if (prior) {
-              await github.rest.issues.updateComment({ owner, repo, comment_id: prior.id, body });
-              core.info(`npm-package-ci/commitlint: updated sticky comment ${prior.id}.`);
-            } else {
-              await github.rest.issues.createComment({ owner, repo, issue_number, body });
-              core.info('npm-package-ci/commitlint: created sticky comment.');
-            }
 
   test:
     name: test
@@ -570,9 +581,13 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      # coverage-report (run as the last step of this job) posts a sticky PR
-      # comment via actions/github-script on pull_request events.
-      pull-requests: write
+    outputs:
+      # Coverage totals for the CI summary comment the passed job writes.
+      lines_pct: ${{ steps.coverage.outputs.lines_pct }}
+      branches_pct: ${{ steps.coverage.outputs.branches_pct }}
+      # '0' when the report measured no file: the comment then says so
+      # instead of showing 0.0% as if it were a measurement.
+      coverage_files: ${{ steps.coverage.outputs.files }}
     steps:
       # actions/checkout v4.2.2 — consumer's tree.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -608,10 +623,14 @@ jobs:
       # bug as nuget-package-ci.yml's, found and fixed via somi's iteration
       # 6.1/6.2 live migration. Removed entirely rather than wired up with
       # an artifact handoff, mirroring that fix.)
+      # No coverage comment here: the totals go to the passed job's one CI
+      # summary comment, and the per-file table stays in this job's summary.
       - name: Report coverage
+        id: coverage
         uses: ./.hashira/.github/actions/coverage-report
         with:
           coverage_path: ${{ inputs.coverage_path || 'coverage/lcov.info' }}
+          comment: 'false'
 
   scan-suite:
     name: scan-suite
@@ -625,6 +644,13 @@ jobs:
       security-events: write
       # dependency-review on PR events reads PR metadata.
       pull-requests: read
+    outputs:
+      # One '<name>\t<pass|fail|skipped>' line per scanner, for the CI
+      # summary comment.
+      verdicts: ${{ steps.scan.outputs.verdicts }}
+      # The '<name>\t<status>\t<details>' rows, so the comment can say why a
+      # scanner was skipped or failed.
+      scan_summary: ${{ steps.scan.outputs.summary }}
     steps:
       # actions/checkout v4.2.2 — consumer's tree.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -642,9 +668,13 @@ jobs:
           path: .hashira
           persist-credentials: false
       - name: Run scan-suite
+        id: scan
         uses: ./.hashira/.github/actions/scan-suite
         with:
           scan_disable: ${{ inputs.scan_disable }}
+          # Findings or a scanner error fail this job; a consumer who can't
+          # act on one scanner's findings turns it off with scan_disable.
+          fail_on_findings: ${{ inputs.scan_fail_on_findings && 'true' || 'false' }}
 
   # SoMi's quality check on what a pull request changes. On by default;
   # `quality_gate: false` skips this job. On push and workflow_dispatch the
@@ -658,6 +688,10 @@ jobs:
       # Read the consumer's tree. Violations go to the job summary and to
       # annotations, which need no grant.
       contents: read
+    outputs:
+      # The gate's result and violation count, for the CI summary comment.
+      result: ${{ steps.gate.outputs.result }}
+      violations: ${{ steps.gate.outputs.violations }}
     steps:
       # actions/checkout v4.2.2 — consumer's tree. Full history so the pull
       # request's base commit is present without a credentialed fetch.
@@ -679,6 +713,61 @@ jobs:
           path: .hashira
           persist-credentials: false
       - name: Run the SoMi quality gate
+        id: gate
         uses: ./.hashira/.github/actions/quality-gate
         with:
           level: ${{ inputs.quality_level }}
+
+  # The one stable check for every repo type. Called as job `ci`, this job
+  # reports as `ci / passed`, the check a branch ruleset requires. It runs
+  # with always(), so it reports even when setup fails or the run is
+  # cancelled, and it fails unless every needed job succeeded or was skipped
+  # by a documented input (see ci-summary's lib/verdict.js). On
+  # pull_request events it also keeps the one hashira summary comment on
+  # the pull request.
+  passed:
+    name: passed
+    needs: [setup, version, lint, test, scan-suite, quality-gate]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    # A hung comment API call must not hold the required check open for the
+    # runner's six-hour default. ci-summary runs on the runner's own node, so
+    # the job needs no setup-node download either.
+    timeout-minutes: 10
+    permissions:
+      # Check out hashira's ci-summary action.
+      contents: read
+      # Write, and edit in place, the one CI summary comment on the pull
+      # request. No other job in this workflow holds this grant.
+      pull-requests: write
+    steps:
+      # Resolve hashira's own commit here rather than read it from setup, so
+      # this job still reports when setup failed (see "Runtime contract" in
+      # the header).
+      - name: Resolve hashira's own commit
+        id: self
+        shell: bash
+        env:
+          # The called workflow file's commit, never the caller's.
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${WORKFLOW_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::npm-package-ci: job.workflow_sha is '${WORKFLOW_SHA}', not a 40-character commit SHA, so hashira's ci-summary action cannot be checked out."
+            exit 1
+          fi
+          echo "sha=${WORKFLOW_SHA}" >> "${GITHUB_OUTPUT}"
+      - name: Checkout hashira library at its own commit
+        # actions/checkout v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: skathio/hashira
+          ref: ${{ steps.self.outputs.sha }}
+          path: .hashira
+          persist-credentials: false
+      - name: Judge the jobs and write the CI summary
+        uses: ./.hashira/.github/actions/ci-summary
+        with:
+          needs: ${{ toJSON(needs) }}
+          workflow_inputs: ${{ toJSON(inputs) }}
+          comment: ${{ inputs.summary_comment && 'true' || 'false' }}
