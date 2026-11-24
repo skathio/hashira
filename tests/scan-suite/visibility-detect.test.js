@@ -157,3 +157,30 @@ test('called with no arguments at all → safe defaults', () => {
   assert.equal(r.hasGHAS, false);
   assert.equal(r.forced, false);
 });
+
+// The scan actions call detect with `toJSON(github)`, whose payload is `event`.
+test('toJSON(github) shape: event.repository.visibility=public → public, hasGHAS true', () => {
+  const r = detect({ ghContext: { event: { repository: { visibility: 'public' } } }, env: {} });
+  assert.equal(r.visibility, 'public');
+  assert.equal(r.hasGHAS, true);
+});
+
+test('toJSON(github) shape: private with GHAS enabled → hasGHAS true', () => {
+  const r = detect({
+    ghContext: { event: { repository: { visibility: 'private', security_and_analysis: { advanced_security: { status: 'enabled' } } } } },
+    env: {},
+  });
+  assert.equal(r.visibility, 'private');
+  assert.equal(r.hasGHAS, true);
+});
+
+test('toJSON(github) shape: private without GHAS → hasGHAS false', () => {
+  const r = detect({ ghContext: { event: { repository: { visibility: 'private' } } }, env: {} });
+  assert.equal(r.hasGHAS, false);
+});
+
+test('a context with neither event nor payload → private, hasGHAS false', () => {
+  const r = detect({ ghContext: { repository: 'o/r' }, env: {} });
+  assert.equal(r.visibility, 'private');
+  assert.equal(r.hasGHAS, false);
+});

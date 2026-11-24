@@ -48,7 +48,12 @@ function detect({ ghContext, env } = {}) {
     return { visibility: 'private', hasGHAS: false, forced: true };
   }
 
-  const repo = (ghContext && ghContext.payload && ghContext.payload.repository) || {};
+  // The scan actions pass `toJSON(github)`, where the event payload is
+  // `event`; github-script's `context` names it `payload`. Reading only
+  // `payload` found no repository under `toJSON(github)`, so every repo was
+  // taken for private and dependency review never ran.
+  const payload = (ghContext && (ghContext.event || ghContext.payload)) || {};
+  const repo = payload.repository || {};
   const visibility = repo.visibility === 'public' ? 'public' : 'private';
 
   let hasGHAS;

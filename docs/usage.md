@@ -804,12 +804,12 @@ with:
 > existing findings goes red when it picks up v3.1.0.
 >
 > **Also fixed in v3.1.0.** Dependency review (and CodeQL, when you enable it)
-> was skipped on public repos with the notice "requires GHAS on private
-> repos", because the visibility check trusted the event payload's
-> `advanced_security.status`, which reads `disabled` on a public repo without
-> a GHAS purchase. Both scans are free on every public repo, so they now run
-> there. A public repo with a vulnerable or disallowed dependency in a pull
-> request's changes therefore goes red too.
+> was skipped on every repo with the notice "requires GHAS on private repos":
+> the visibility check looked for the repository where the scan actions never
+> put it, so every repo was taken for private without GHAS. Both scans now run
+> on public repos, where they are free, and on private repos with GHAS. A
+> repo with a vulnerable or disallowed dependency in a pull request's changes
+> therefore goes red too.
 
 Every enabled scanner still runs, and the job summary lists each scanner's
 result before the job fails. A scanner whose tool cannot be installed, or
