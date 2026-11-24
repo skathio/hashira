@@ -604,6 +604,9 @@ line and branch coverage, and on npm the commitlint result (warn-only).
   newer push exists, it writes nothing and says so in its job summary.
 - On a fork pull request or a Dependabot pull request, where the token
   cannot write comments, the comment body goes to the job summary instead.
+- `summary_comment: false` turns the comment off: the body goes to the
+  `passed` job's summary and nothing is posted. A comment an earlier run
+  already posted stays as it was; delete it by hand if it should go.
   Any comment API error does the same, with a warning. No comment outcome
   changes the conclusion of `ci / passed`.
 - Other events write no comment.

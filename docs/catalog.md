@@ -30,6 +30,7 @@ CI for an npm package: commitlint, tests with coverage, the scan suite, SoMi's q
 | `coverage_path` | no | `''` |
 | `scan_disable` | no | `codeql,actionlint` |
 | `scan_fail_on_findings` | no | `true` |
+| `summary_comment` | no | `true` |
 | `bump` | no | `''` |
 | `seed_version` | no | `''` |
 | `quality_gate` | no | `true` |
@@ -60,6 +61,7 @@ CI for a NuGet package: restore and build, tests with coverage, the scan suite, 
 | `coverage_path` | no | `''` |
 | `scan_disable` | no | `codeql,actionlint` |
 | `scan_fail_on_findings` | no | `true` |
+| `summary_comment` | no | `true` |
 | `bump` | no | `''` |
 | `seed_version` | no | `''` |
 | `quality_gate` | no | `true` |
@@ -91,6 +93,7 @@ CI for a static site on GitHub Pages: build, tests with coverage, the scan suite
 | `coverage_path` | no | `''` |
 | `scan_disable` | no | `codeql,actionlint` |
 | `scan_fail_on_findings` | no | `true` |
+| `summary_comment` | no | `true` |
 | `quality_gate` | no | `true` |
 | `quality_level` | no | `strict` |
 
@@ -321,6 +324,7 @@ What it does not score is shown, never hidden. The job summary lists files SoMi 
 |-------|----------|---------|
 | `needs` | yes | — |
 | `workflow_inputs` | no | `{}` |
+| `comment` | no | `true` |
 
 | Output | Meaning |
 |--------|---------|

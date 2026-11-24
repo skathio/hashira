@@ -196,6 +196,11 @@ on:
         required: false
         type: boolean
         default: true
+      summary_comment:
+        description: "Keep one CI summary comment on the pull request, written by the passed job. Default true. false writes the same summary to the passed job's summary instead and posts no comment; the passed job keeps pull-requests: write either way, so the caller's grant is unchanged."
+        required: false
+        type: boolean
+        default: true
       quality_gate:
         description: "Run SoMi's quality gate on what a pull request changes. Default true; false skips the quality-gate job. The gate runs only on pull_request events; on other events it passes and says so in the job summary."
         required: false
@@ -575,3 +580,4 @@ jobs:
         with:
           needs: ${{ toJSON(needs) }}
           workflow_inputs: ${{ toJSON(inputs) }}
+          comment: ${{ inputs.summary_comment && 'true' || 'false' }}

@@ -152,6 +152,11 @@ on:
         required: false
         type: boolean
         default: true
+      summary_comment:
+        description: "Keep one CI summary comment on the pull request, written by the passed job. Default true. false writes the same summary to the passed job's summary instead and posts no comment; the passed job keeps pull-requests: write either way, so the caller's grant is unchanged."
+        required: false
+        type: boolean
+        default: true
       bump:
         description: "One of 'patch', 'minor' or 'major'. Empty (default) falls back to the caller's workflow_dispatch input 'bump'; a value passed here wins. When neither is set, as on routine pull_request and push runs, no release is cut. When set, the version job resolves the next version, shows it in the run summary and stamps it into the packed release artifact, never into the checked-out tree."
         required: false
@@ -765,3 +770,4 @@ jobs:
         with:
           needs: ${{ toJSON(needs) }}
           workflow_inputs: ${{ toJSON(inputs) }}
+          comment: ${{ inputs.summary_comment && 'true' || 'false' }}

@@ -62,6 +62,7 @@ DOCUMENTED_INPUTS = [
     "coverage_path",
     "scan_disable",
     "scan_fail_on_findings",
+    "summary_comment",
     "bump",
     "seed_version",
     "quality_gate",

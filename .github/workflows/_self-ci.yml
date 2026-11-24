@@ -294,7 +294,7 @@ jobs:
         # Files are listed by name: Node 20's `node --test` takes no globs.
         run: |
           set -euo pipefail
-          node --test tests/ci-summary/verdict.test.js tests/ci-summary/verdict-edges.test.js tests/ci-summary/comment.test.js tests/ci-summary/comment-edges.test.js tests/ci-summary/render.test.js tests/ci-summary/body-reasons.test.js
+          node --test tests/ci-summary/verdict.test.js tests/ci-summary/verdict-edges.test.js tests/ci-summary/comment.test.js tests/ci-summary/comment-edges.test.js tests/ci-summary/render.test.js tests/ci-summary/body-reasons.test.js tests/ci-summary/comment-switch.test.js
 
 
   quality-gate:
@@ -1327,7 +1327,8 @@ jobs:
     # The called workflow can only narrow these grants.
     permissions:
       contents: read
-      # coverage-report's sticky PR comment, inside the called `test` job.
+      # The called workflow's `passed` job declares this grant (for its summary
+      # comment, turned off below); a caller grant below it fails the call.
       pull-requests: write
       # scan-suite grants security-events:write for CodeQL when enabled.
       security-events: write
@@ -1336,6 +1337,9 @@ jobs:
       # The quality-gate job above already gates this pull request; running
       # it again inside this call would only repeat the same check.
       quality_gate: false
+      # This call summarizes only the nested .NET smoke run, not hashira's
+      # own CI, so its summary goes to the job summary, not the pull request.
+      summary_comment: false
 
   library-self-sha-assert:
     name: library-self-sha-assert
@@ -1556,6 +1560,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 tests/ci-summary/test_passed_job.py
+          python3 tests/ci-summary/test_comment_switch.py
 
   # Edges of the same contract, run through the real code: the comment's size
   # cap, npm's commitlint step against hostile commit messages, and a CodeQL

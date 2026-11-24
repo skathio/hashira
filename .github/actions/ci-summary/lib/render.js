@@ -55,6 +55,8 @@ function summaryText(conclusion, lines) {
   return ['### passed', '', `Verdict: ${conclusion}`, '', ...items, ''].join('\n');
 }
 
+const COMMENT_OFF = '_The pull request comment is turned off (summary_comment: false)._';
+
 /** Runs the step against `env`; returns { conclusion, body }. */
 function run(env) {
   const needs = parseObject(env.CI_SUMMARY_NEEDS, 'the needs context');
@@ -62,7 +64,13 @@ function run(env) {
   const event = readEvent(env.GITHUB_EVENT_PATH);
   const { conclusion, lines } = evaluate({ needs, inputs, event });
   const body = renderBody({ needs, inputs, event: event ?? {}, runUrl: runUrl(env) });
-  if (env.GITHUB_STEP_SUMMARY) fs.appendFileSync(env.GITHUB_STEP_SUMMARY, `${summaryText(conclusion, lines)}\n`);
+  if (env.GITHUB_STEP_SUMMARY) {
+    fs.appendFileSync(env.GITHUB_STEP_SUMMARY, `${summaryText(conclusion, lines)}\n`);
+    // With the comment turned off, the body still reaches a reader here.
+    if (env.CI_SUMMARY_COMMENT === 'false' && env.GITHUB_EVENT_NAME === 'pull_request') {
+      fs.appendFileSync(env.GITHUB_STEP_SUMMARY, `\n${COMMENT_OFF}\n\n${body}`);
+    }
+  }
   const bodyFile = path.join(env.RUNNER_TEMP || os.tmpdir(), 'ci-summary-body.md');
   fs.writeFileSync(bodyFile, body);
   if (env.GITHUB_OUTPUT) {
@@ -74,6 +82,13 @@ function run(env) {
 // The step itself. A caller that left `needs` out, or whose job needs no
 // other job, would otherwise get a green check that stands for nothing.
 function main(env) {
+  // Unset means the action's default, 'true'.
+  const comment = env.CI_SUMMARY_COMMENT ?? 'true';
+  if (comment !== 'true' && comment !== 'false') {
+    process.stdout.write("::error title=passed::ci-summary: comment must be 'true' or 'false'\n");
+    process.exitCode = 1;
+    return;
+  }
   if (Object.keys(parseObject(env.CI_SUMMARY_NEEDS, 'the needs context')).length === 0) {
     process.stdout.write('::error title=passed::ci-summary got no job results: pass toJSON(needs) from a job that needs every other job\n');
     process.exitCode = 1;
@@ -84,4 +99,4 @@ function main(env) {
 
 if (require.main === module) main(process.env);
 
-module.exports = { run };
+module.exports = { run, main };
