@@ -16,6 +16,7 @@ The Plan step is run as release.yml holds it, with a stub `gh` first on PATH and
 empty repo, so the plan sees no tags and never reads this checkout's own.
 """
 
+import json
 import os
 import shutil
 import stat
@@ -295,6 +296,71 @@ class SiteDeployRefusesAStaleRelease(unittest.TestCase):
         step = next(s for s in steps if s.get("name") == "Refuse unless this commit holds the latest release")
         self.assertEqual(str(step.get("if")).replace(" ", ""), "${{inputs.released}}")
         self.assertLess(steps.index(step), next(i for i, s in enumerate(steps) if s.get("id") == "deploy"))
+
+
+def ci_wait_script():
+    steps = workflow(RELEASE)["jobs"]["check"]["steps"]
+    return next(step["run"] for step in steps if step.get("name") == "Wait for the _self-ci.yml run for main's HEAD")
+
+
+class CheckWaitsForMainsCi(unittest.TestCase):
+    """The wait step run as release.yml holds it, with a stub gh that answers from a script of
+    states and a sleep that returns at once."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="ci-wait-")
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        bin_dir = os.path.join(self.tmp, "bin")
+        os.mkdir(bin_dir)
+        self.answers = os.path.join(self.tmp, "answers")
+        self.calls = os.path.join(self.tmp, "calls")
+        for name, body in (
+            ("gh", '#!/usr/bin/env bash\necho x >> "${CALLS}"\nhead -n 1 "${ANSWERS}"\n'
+                   'if [ "$(wc -l < "${ANSWERS}")" -gt 1 ]; then sed -i 1d "${ANSWERS}"; fi\n'),
+            ("sleep", "#!/usr/bin/env bash\nexit 0\n"),
+        ):
+            path = os.path.join(bin_dir, name)
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(body)
+            os.chmod(path, 0o755)
+        self.script = os.path.join(self.tmp, "wait.sh")
+        with open(self.script, "w", encoding="utf-8") as handle:
+            handle.write(ci_wait_script())
+        self.env = dict(os.environ, PATH=bin_dir + os.pathsep + os.environ["PATH"], RUNNER_TEMP=self.tmp,
+                        ANSWERS=self.answers, CALLS=self.calls, GH_TOKEN="stub", REPO="skathio/hashira", SHA=SHA)
+
+    def run_with(self, *states):
+        lines = []
+        for status in states:
+            runs = [] if status is None else [{"head_sha": SHA, "status": status, "event": "push", "head_branch": "main",
+                                               "conclusion": "success" if status == "completed" else None}]
+            lines.append(json.dumps(runs))
+        with open(self.answers, "w", encoding="utf-8") as handle:
+            handle.write("\n".join(lines) + "\n")
+        result = subprocess.run(["bash", self.script], cwd=ROOT, env=self.env, capture_output=True, text=True, timeout=60)
+        with open(self.calls, encoding="utf-8") as handle:
+            return result, len(handle.read().splitlines())
+
+    def test_a_finished_run_is_read_once(self):
+        result, calls = self.run_with("completed")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(calls, 1)
+
+    def test_a_running_ci_is_waited_for_not_refused(self):
+        result, calls = self.run_with("queued", "in_progress", "completed")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(calls, 3)
+        self.assertIn("pending; checking again", result.stdout)
+        with open(os.path.join(self.tmp, "ci-runs.json"), encoding="utf-8") as handle:
+            self.assertEqual(json.load(handle)[0]["status"], "completed", "Decide reads the finished run")
+
+    def test_a_run_that_has_not_appeared_yet_is_waited_for(self):
+        result, calls = self.run_with(None, "in_progress", "completed")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(calls, 3)
+
+    def test_the_check_job_is_bounded(self):
+        self.assertLessEqual(int(workflow(RELEASE)["jobs"]["check"]["timeout-minutes"]), 60)
 
 
 class BuildRefusesADocsIndexPage(unittest.TestCase):

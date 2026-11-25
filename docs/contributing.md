@@ -152,7 +152,8 @@ gh workflow run release.yml --ref main -f bump=patch
 ```
 
 It refuses, before any approval, when the latest `_self-ci.yml` run for
-`main`'s HEAD is not green, when the version's major is 1 or 2, when a
+`main`'s HEAD is not green (it first waits up to 45 minutes for a run still
+in progress, so you can dispatch right after a merge), when the version's major is 1 or 2, when a
 `templates/*/ci.yml` pins another major than the release's, or when the tag
 `vX.Y.Z` is already on another commit. It then builds the docs, waits for the
 `production` approval, pushes the annotated tag `vX.Y.Z`, creates the GitHub
