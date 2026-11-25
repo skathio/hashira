@@ -13,6 +13,8 @@ Contract tests for the v3 CI workflow inputs.
   switched by `quality_gate` and levelled by `quality_level`, which the
   `setup` job validates against strict, standard and relaxed.
 - `_self-ci.yml` runs the gate on hashira's own pull requests at strict.
+- Every artifact `_self-ci.yml` uploads has a name no other job in the run
+  uses, so a download by name can only find the one it was meant for.
 
 Conditions are read with a small evaluator of GitHub's expression syntax.
 A value it cannot know offline (a step or job output) counts as unknown,
@@ -500,6 +502,20 @@ class SelfCiRunsTheGate(unittest.TestCase):
     def test_self_ci_runs_this_file(self):
         self.assertIn(THIS_FILE, read_text(SELF_CI))
 
+
+
+class SelfCiArtifactNamesAreUnique(unittest.TestCase):
+    # npm-release downloads `npm-tarball` by name, and with several artifacts of one name in a
+    # run it takes the highest ID, which need not be the job's own upload.
+    def test_no_two_self_ci_uploads_share_a_name(self):
+        names = {}
+        for job_id, job in load_yaml(SELF_CI)["jobs"].items():
+            for step in job.get("steps") or []:
+                if "actions/upload-artifact@" in str(step.get("uses", "")):
+                    names.setdefault((step.get("with") or {}).get("name"), []).append(job_id)
+        self.assertTrue(names, "no upload-artifact step found in _self-ci.yml")
+        shared = {name: jobs for name, jobs in names.items() if len(jobs) > 1}
+        self.assertEqual(shared, {}, "artifact names uploaded by more than one job")
 
 class DocsAndShapeValidate(unittest.TestCase):
     def test_flow_docs_list_the_quality_inputs_with_their_defaults(self):
