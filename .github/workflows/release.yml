@@ -201,8 +201,12 @@ jobs:
             const mainHead = execFileSync("git", ["rev-parse", "refs/remotes/origin/main"], { encoding: "utf8" }).trim();
             rel.assertCurrentMain({ version: env.VERSION, sha: env.SHA, mainHead, tags });
           '
+          # A re-run finishing a release whose tag is already on this commit skips this: a later
+          # release may have moved the major tag on, and the plan then leaves it alone ("done").
+          # The push step checks ancestry again before any real move.
           major_tag="v${VERSION%%.*}"
-          if current="$(git rev-parse --verify --quiet "refs/tags/${major_tag}^{commit}")"; then
+          own="$(git rev-parse --verify --quiet "refs/tags/v${VERSION}^{commit}" || true)"
+          if [ "${own}" != "${SHA}" ] && current="$(git rev-parse --verify --quiet "refs/tags/${major_tag}^{commit}")"; then
             if ! git merge-base --is-ancestor "${current}" "${SHA}"; then
               echo "::error::${major_tag} is on ${current}, which ${SHA} does not contain; refusing to release an older commit."
               exit 1

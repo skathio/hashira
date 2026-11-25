@@ -192,6 +192,15 @@ class PublishRefusesAStaleCommit(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("refusing to release an older commit", result.stdout)
 
+    def test_a_superseded_rerun_finishing_its_release_passes(self):
+        # Run 1 pushed v3.2.0 on A, then its Release failed. Run 2 released v3.2.1 on B and moved
+        # v3 to B. Re-running run 1 only creates the missing Release, so it must not be refused.
+        self.tag("v3.2.0", self.a)
+        self.tag("v3.2.1", self.b)
+        self.tag("v3", self.b)
+        result = self.guard(self.a)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_a_new_major_with_no_major_tag_passes(self):
         result = self.guard(self.b, version="4.0.0")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
