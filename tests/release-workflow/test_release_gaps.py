@@ -315,9 +315,16 @@ class CheckWaitsForMainsCi(unittest.TestCase):
         self.answers = os.path.join(self.tmp, "answers")
         self.calls = os.path.join(self.tmp, "calls")
         for name, body in (
-            ("gh", '#!/usr/bin/env bash\necho x >> "${CALLS}"\nhead -n 1 "${ANSWERS}"\n'
-                   'if [ "$(wc -l < "${ANSWERS}")" -gt 1 ]; then sed -i 1d "${ANSWERS}"; fi\n'),
+            # Answers one line per call (the last one repeats); a FAIL line is a failed read.
+            ("gh", '#!/usr/bin/env bash\necho x >> "${CALLS}"\nline="$(head -n 1 "${ANSWERS}")"\n'
+                   'if [ "$(wc -l < "${ANSWERS}")" -gt 1 ]; then sed -i 1d "${ANSWERS}"; fi\n'
+                   'if [ "${line}" = FAIL ]; then exit 1; fi\nprintf "%s\\n" "${line}"\n'),
             ("sleep", "#!/usr/bin/env bash\nexit 0\n"),
+            # A clock that moves CLOCK_STEP seconds on every read, so the limits are reached.
+            ("date", '#!/usr/bin/env bash\nt="$(cat "${CLOCK}" 2>/dev/null || echo 0)"\n'
+                     'echo $(( t + CLOCK_STEP )) > "${CLOCK}"\necho "${t}"\n'),
+            # The fetch of origin/main after the wait stays off the network.
+            ("git", '#!/usr/bin/env bash\necho "git $*" >> "${CALLS}.git"\n'),
         ):
             path = os.path.join(bin_dir, name)
             with open(path, "w", encoding="utf-8") as handle:
@@ -327,11 +334,16 @@ class CheckWaitsForMainsCi(unittest.TestCase):
         with open(self.script, "w", encoding="utf-8") as handle:
             handle.write(ci_wait_script())
         self.env = dict(os.environ, PATH=bin_dir + os.pathsep + os.environ["PATH"], RUNNER_TEMP=self.tmp,
-                        ANSWERS=self.answers, CALLS=self.calls, GH_TOKEN="stub", REPO="skathio/hashira", SHA=SHA)
+                        ANSWERS=self.answers, CALLS=self.calls, GH_TOKEN="stub", REPO="skathio/hashira", SHA=SHA,
+                        CLOCK=os.path.join(self.tmp, "clock"), CLOCK_STEP="0")
 
-    def run_with(self, *states):
+    def run_with(self, *states, step=0):
+        self.env["CLOCK_STEP"] = str(step)
         lines = []
         for status in states:
+            if status == "FAIL":
+                lines.append("FAIL")
+                continue
             runs = [] if status is None else [{"head_sha": SHA, "status": status, "event": "push", "head_branch": "main",
                                                "conclusion": "success" if status == "completed" else None}]
             lines.append(json.dumps(runs))
@@ -358,6 +370,37 @@ class CheckWaitsForMainsCi(unittest.TestCase):
         result, calls = self.run_with(None, "in_progress", "completed")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(calls, 3)
+
+    def test_a_ci_still_running_after_45_minutes_stops_the_release(self):
+        result, _calls = self.run_with("in_progress", step=600)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("still running after 45 minutes", result.stdout)
+
+    def test_a_run_that_never_appears_stops_waiting_after_5_minutes(self):
+        # The step ends and leaves no run for Decide, which then refuses: no green CI.
+        result, calls = self.run_with(None, step=120)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertLessEqual(calls, 4)
+        with open(os.path.join(self.tmp, "ci-runs.json"), encoding="utf-8") as handle:
+            self.assertEqual(json.load(handle), [])
+
+    def test_one_failed_read_is_retried_not_a_refusal(self):
+        result, calls = self.run_with("FAIL", "completed")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(calls, 2)
+        self.assertIn("try 1 of 3", result.stdout)
+
+    def test_three_failed_reads_stop_the_release(self):
+        result, calls = self.run_with("FAIL")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(calls, 3)
+        self.assertIn("could not read the _self-ci.yml runs", result.stdout)
+
+    def test_origin_main_is_refreshed_after_the_wait(self):
+        result, _calls = self.run_with("in_progress", "completed")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        with open(self.calls + ".git", encoding="utf-8") as handle:
+            self.assertIn("fetch", handle.read())
 
     def test_the_check_job_is_bounded(self):
         self.assertLessEqual(int(workflow(RELEASE)["jobs"]["check"]["timeout-minutes"]), 60)

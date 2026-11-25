@@ -97,9 +97,23 @@ jobs:
           set -euo pipefail
           runs="${RUNNER_TEMP}/ci-runs.json"
           start="$(date +%s)"
+          # One failed read (a 502, a rate limit) is retried, not taken as a refusal; three in a
+          # row stop the release, which published nothing yet.
+          read_runs() {
+            local try
+            for try in 1 2 3; do
+              if gh api "repos/${REPO}/actions/workflows/_self-ci.yml/runs?branch=main&event=push&head_sha=${SHA}&per_page=100" \
+                --jq '.workflow_runs' > "${runs}"; then
+                return 0
+              fi
+              echo "::warning::reading the _self-ci.yml runs failed (try ${try} of 3)."
+              sleep 10
+            done
+            echo "::error::could not read the _self-ci.yml runs for ${SHA}; dispatch again."
+            return 1
+          }
           while :; do
-            gh api "repos/${REPO}/actions/workflows/_self-ci.yml/runs?branch=main&event=push&head_sha=${SHA}&per_page=100" \
-              --jq '.workflow_runs' > "${runs}"
+            read_runs
             state="$(node -e 'const fs = require("node:fs");
               const rel = require("./tests/release/lib/release.js");
               process.stdout.write(rel.ciState(JSON.parse(fs.readFileSync(process.argv[1], "utf8")), process.env.SHA));' "${runs}")"
@@ -117,6 +131,8 @@ jobs:
             echo "_self-ci.yml for ${SHA}: ${state}; checking again in 30 seconds."
             sleep 30
           done
+          # The wait can be long: refresh origin/main so Decide checks against main as it is now.
+          git fetch --quiet --no-tags origin main
       # Refuses on a red or missing CI run, a frozen major, a template pinning another major,
       # the release tag on another commit, or a commit main has moved past (a full re-run of an
       # old run) that does not already carry its release tag. The Release's state does not matter here; `publish`
