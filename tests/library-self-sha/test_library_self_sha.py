@@ -178,6 +178,16 @@ class LibraryCheckedOutAtOwnSha(unittest.TestCase):
             with self.subTest(workflow=name, job=job_id):
                 self.assertEqual(sources - set(needs_list(job)), set())
 
+    def test_library_checkout_is_sparse_to_github_in_cone_mode(self):
+        # A consumer's bare `node --test` discovers test files anywhere in its workspace, so a full
+        # checkout ran hashira's own tests in the consumer's CI. Only .github/ is checked out; cone
+        # mode (the default) keeps the root package.json that makes lib/ resolve as CommonJS.
+        for name, job_id, _job, step in flow_library_checkouts():
+            with_ = step.get("with") or {}
+            with self.subTest(workflow=name, job=job_id):
+                self.assertEqual(str(with_.get("sparse-checkout", "")).strip(), ".github")
+                self.assertNotIn(str(with_.get("sparse-checkout-cone-mode", "true")).lower(), ("false",))
+
 
 class OidcFallbackStaysInSetup(unittest.TestCase):
     """Holds only when the OIDC `job_workflow_sha` fallback is used."""

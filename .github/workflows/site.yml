@@ -102,5 +102,33 @@ jobs:
       pages: write      # deploy-pages
       id-token: write   # deploy-pages authenticates via OIDC
     steps:
+      # A release's deploy goes out only while its commit holds the highest vX.Y.Z tag. The check
+      # is here, not in `build`: "Re-run failed jobs" after a failed deploy re-runs only this job,
+      # and would otherwise put an older release's site over a newer one with no approval. It reads
+      # the tags with an unauthenticated ls-remote (the repo is public), so this job gains no grant.
+      - name: Refuse unless this commit holds the latest release
+        if: ${{ inputs.released }}
+        env:
+          SHA: ${{ github.sha }}
+          REMOTE: ${{ github.server_url }}/${{ github.repository }}.git
+        run: |
+          set -euo pipefail
+          refs="$(git ls-remote --tags "${REMOTE}" 'refs/tags/v*')"
+          # One "<tag> <commit>" line per vX.Y.Z, peeled to the commit for an annotated tag.
+          latest="$(awk '
+            $2 ~ /^refs\/tags\/v[0-9]+\.[0-9]+\.[0-9]+(\^\{\})?$/ {
+              n = $2; sub(/^refs\/tags\//, "", n)
+              if (n ~ /\^\{\}$/) { sub(/\^\{\}$/, "", n); peeled[n] = $1 } else { direct[n] = $1 }
+            }
+            END { for (n in direct) print n, ((n in peeled) ? peeled[n] : direct[n]) }
+          ' <<< "${refs}" | sort -V -k1,1 | tail -n 1)"
+          if [ -z "${latest}" ]; then
+            echo "::error::no vX.Y.Z release tag found; refusing to deploy a release site."
+            exit 1
+          fi
+          if [ "${latest#* }" != "${SHA}" ]; then
+            echo "::error::the latest release ${latest% *} is on ${latest#* }, not ${SHA}; this run is stale."
+            exit 1
+          fi
       - id: deploy
         uses: skathio/hashira/.github/actions/pages-deploy@2c8d52526cbce593a445f7572b599813503160f5 # v3.0.0

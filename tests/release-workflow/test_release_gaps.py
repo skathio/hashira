@@ -218,6 +218,85 @@ class PublishRefusesAStaleCommit(unittest.TestCase):
         self.assertLess(run.index("merge-base --is-ancestor"), run.index("push origin"))
 
 
+def deploy_guard_script():
+    steps = workflow(".github/workflows/site.yml")["jobs"]["deploy"]["steps"]
+    return next(step["run"] for step in steps if step.get("name") == "Refuse unless this commit holds the latest release")
+
+
+class SiteDeployRefusesAStaleRelease(unittest.TestCase):
+    """site.yml's deploy-time check, run as the file holds it, against a throwaway remote.
+
+    "Re-run failed jobs" after a failed deploy re-runs only `deploy`, so the check lives there.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="site-guard-")
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.remote = os.path.join(self.tmp, "repo.git")
+        self.git_env = dict(os.environ, GIT_DIR=self.remote, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t",
+                            GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t")
+        self.git("init", "--quiet", "--bare", self.remote)
+        tree = self.git("mktree", stdin="")
+        self.a = self.git("commit-tree", tree, "-m", "A")
+        self.b = self.git("commit-tree", tree, "-p", self.a, "-m", "B")
+        self.script = os.path.join(self.tmp, "guard.sh")
+        with open(self.script, "w", encoding="utf-8") as handle:
+            handle.write(deploy_guard_script())
+
+    def git(self, *args, stdin=None):
+        return subprocess.run(["git", *args], env=self.git_env, input=stdin, capture_output=True,
+                              text=True, check=True).stdout.strip()
+
+    def annotated(self, name, commit):
+        self.git("tag", "-a", name, "-m", name, commit)
+
+    def light(self, name, commit):
+        self.git("update-ref", f"refs/tags/{name}", commit)
+
+    def guard(self, sha):
+        env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+        env.update(SHA=sha, REMOTE=self.remote)
+        return subprocess.run(["bash", self.script], cwd=self.tmp, env=env, capture_output=True, text=True, timeout=60)
+
+    def test_the_latest_release_deploys(self):
+        self.annotated("v3.1.0", self.a)
+        self.annotated("v3.1.1", self.b)
+        self.light("v3", self.b)
+        result = self.guard(self.b)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_an_older_release_rerun_is_refused(self):
+        # Run 1 released v3.1.0 on A and its deploy failed; run 2 released v3.1.1 on B. Re-running
+        # run 1's failed deploy must not put A's site over B's.
+        self.annotated("v3.1.0", self.a)
+        self.annotated("v3.1.1", self.b)
+        result = self.guard(self.a)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("this run is stale", result.stdout)
+
+    def test_versions_compare_as_numbers(self):
+        self.annotated("v3.9.0", self.a)
+        self.annotated("v3.10.0", self.b)
+        self.assertEqual(self.guard(self.b).returncode, 0)
+        self.assertNotEqual(self.guard(self.a).returncode, 0)
+
+    def test_a_lightweight_release_tag_counts(self):
+        self.light("v3.2.0", self.b)
+        self.assertEqual(self.guard(self.b).returncode, 0)
+
+    def test_a_major_tag_alone_is_not_a_release(self):
+        self.light("v3", self.b)
+        result = self.guard(self.b)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("no vX.Y.Z release tag", result.stdout)
+
+    def test_only_a_release_call_runs_the_check(self):
+        steps = workflow(".github/workflows/site.yml")["jobs"]["deploy"]["steps"]
+        step = next(s for s in steps if s.get("name") == "Refuse unless this commit holds the latest release")
+        self.assertEqual(str(step.get("if")).replace(" ", ""), "${{inputs.released}}")
+        self.assertLess(steps.index(step), next(i for i, s in enumerate(steps) if s.get("id") == "deploy"))
+
+
 class BuildRefusesADocsIndexPage(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="docs-index-")
