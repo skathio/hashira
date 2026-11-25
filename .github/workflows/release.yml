@@ -42,6 +42,8 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-latest
+    # The CI wait below gives up after 45 minutes; this bounds the whole job.
+    timeout-minutes: 60
     permissions:
       contents: read   # checkout, the tags and the caller templates
       actions: read    # the _self-ci.yml runs for main's HEAD
@@ -83,15 +85,54 @@ jobs:
         with:
           tags: ${{ steps.tags.outputs.list }}
           bump: ${{ inputs.bump }}
-      - name: Read the _self-ci.yml runs for main's HEAD
+      # A dispatch right after a merge finds main's CI still running. Wait for it instead of
+      # refusing: up to 45 minutes while it is queued or running (it takes 5 to 20), and 5 minutes
+      # for it to appear at all. Decide then refuses anything but a green run, as before.
+      - name: Wait for the _self-ci.yml run for main's HEAD
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          gh api "repos/${REPO}/actions/workflows/_self-ci.yml/runs?branch=main&event=push&head_sha=${SHA}&per_page=100" \
-            --jq '.workflow_runs' > "${RUNNER_TEMP}/ci-runs.json"
+          runs="${RUNNER_TEMP}/ci-runs.json"
+          start="$(date +%s)"
+          # One failed read (a 502, a rate limit) is retried, not taken as a refusal; three in a
+          # row stop the release, which published nothing yet.
+          read_runs() {
+            local try
+            for try in 1 2 3; do
+              if gh api "repos/${REPO}/actions/workflows/_self-ci.yml/runs?branch=main&event=push&head_sha=${SHA}&per_page=100" \
+                --jq '.workflow_runs' > "${runs}"; then
+                return 0
+              fi
+              echo "::warning::reading the _self-ci.yml runs failed (try ${try} of 3)."
+              sleep 10
+            done
+            echo "::error::could not read the _self-ci.yml runs for ${SHA}; dispatch again."
+            return 1
+          }
+          while :; do
+            read_runs
+            state="$(node -e 'const fs = require("node:fs");
+              const rel = require("./tests/release/lib/release.js");
+              process.stdout.write(rel.ciState(JSON.parse(fs.readFileSync(process.argv[1], "utf8")), process.env.SHA));' "${runs}")"
+            waited=$(( $(date +%s) - start ))
+            case "${state}" in
+              done) break ;;
+              missing) if [ "${waited}" -ge 300 ]; then break; fi ;;
+              pending)
+                if [ "${waited}" -ge 2700 ]; then
+                  echo "::error::_self-ci.yml for ${SHA} is still running after 45 minutes; dispatch again when it finishes."
+                  exit 1
+                fi ;;
+              *) echo "::error::unexpected CI state '${state}'"; exit 1 ;;
+            esac
+            echo "_self-ci.yml for ${SHA}: ${state}; checking again in 30 seconds."
+            sleep 30
+          done
+          # The wait can be long: refresh origin/main so Decide checks against main as it is now.
+          git fetch --quiet --no-tags origin main
       # Refuses on a red or missing CI run, a frozen major, a template pinning another major,
       # the release tag on another commit, or a commit main has moved past (a full re-run of an
       # old run) that does not already carry its release tag. The Release's state does not matter here; `publish`

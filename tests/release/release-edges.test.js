@@ -8,7 +8,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { checkRelease, planPublish, latestCiConclusion, hashiraRefs } = require('./lib/release.js');
+const { checkRelease, planPublish, latestCiConclusion, ciState, hashiraRefs } = require('./lib/release.js');
 
 const HEAD = 'a'.repeat(40);
 const OTHER = 'b'.repeat(40);
@@ -109,4 +109,32 @@ test('a commit already released as another version is refused', () => {
 test('a major tag or a prerelease tag on the commit is not a release of it', () => {
   const tags = { v3: HEAD, 'v3.2.0-rc.1': HEAD, 'v3.1.0': OTHER };
   assert.equal(planPublish({ version: '3.1.1', sha: HEAD, tags, releaseExists: false }).tag, 'create');
+});
+
+// ciState: release.yml waits while main's CI for the commit is queued or running, instead of
+// refusing a dispatch made right after a merge.
+const mainPush = (status, extra = {}) => ({ head_sha: HEAD, status, event: 'push', head_branch: 'main', ...extra });
+
+test('ciState is pending while main\'s push run at HEAD is queued or running', () => {
+  assert.equal(ciState([mainPush('queued')], HEAD), 'pending');
+  assert.equal(ciState([mainPush('in_progress')], HEAD), 'pending');
+  assert.equal(ciState([mainPush('completed', { conclusion: 'success' }), mainPush('in_progress')], HEAD), 'pending');
+});
+
+test('ciState is done once every main push run at HEAD has completed, whatever it concluded', () => {
+  assert.equal(ciState([mainPush('completed', { conclusion: 'success' })], HEAD), 'done');
+  assert.equal(ciState([mainPush('completed', { conclusion: 'failure' })], HEAD), 'done');
+});
+
+test('ciState is missing when no main push run at HEAD exists yet', () => {
+  assert.equal(ciState([], HEAD), 'missing');
+  assert.equal(ciState([{ ...mainPush('in_progress'), head_sha: 'b'.repeat(40) }], HEAD), 'missing');
+  assert.equal(ciState([mainPush('in_progress', { event: 'pull_request' })], HEAD), 'missing');
+  assert.equal(ciState([mainPush('in_progress', { head_branch: 'feature' })], HEAD), 'missing');
+});
+
+test('ciState fails closed on bad input: never done', () => {
+  for (const [runs, sha] of [[null, HEAD], [undefined, HEAD], ['x', HEAD], [[mainPush('completed')], 'nope'], [[mainPush('completed')], undefined]]) {
+    assert.notEqual(ciState(runs, sha), 'done');
+  }
 });

@@ -137,7 +137,8 @@ before a merge. Wait for the checks with `gh pr checks <n> --watch`. Read a fail
 
 Releases go through `.github/workflows/release.yml`: dispatch it on `main` with `bump` set to `patch`, `minor` or
 `major` (`gh workflow run release.yml --ref main -f bump=patch`). Its `check` job refuses, before any approval, a ref
-other than `main`, a `_self-ci.yml` run for `main`'s HEAD that is not green, a v1 or v2 version, a `templates/*/ci.yml`
+other than `main`, a `_self-ci.yml` run for `main`'s HEAD that is not green (it waits up to 45 minutes for one still
+running, so a dispatch right after a merge works), a v1 or v2 version, a `templates/*/ci.yml`
 that pins another major than the release's, and a `vX.Y.Z` tag already on another commit. The version comes from
 hashira's own `version-resolver`; the decisions are in `tests/release/lib/release.js`. The `docs` job builds the docs
 with `docs-site/build.sh`, so a broken docs build stops the release before any tag. The `publish` job waits for the

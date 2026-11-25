@@ -23,7 +23,7 @@ this release in this session.
    One release runs at a time, and GitHub keeps at most one run waiting behind it: a later dispatch replaces a
    waiting run, which is cancelled before any job starts and changed nothing. Dispatch a cancelled release again.
    `check` refuses, before any approval, a ref other than main, a commit main has moved past, a `_self-ci.yml` run for main's HEAD that is not
-   green, a v1 or v2 version, a template that pins another major, and a `vX.Y.Z` tag on another commit. `docs` builds
+   green (it waits up to 45 minutes for one still running, so dispatch right after the merge is fine), a v1 or v2 version, a template that pins another major, and a `vX.Y.Z` tag on another commit. `docs` builds
    the docs, and a failure stops the release before any tag.
 3. The `publish` job waits for the `production` environment's approval (the hashira-owners team). After it, the job
    pushes `vX.Y.Z`, creates the Release with generated notes and points the major tag at the commit, with the release

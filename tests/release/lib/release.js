@@ -211,6 +211,18 @@ function latestCiConclusion(runs, headSha) {
   return done.length ? done[0].conclusion : null;
 }
 
+/**
+ * Where main's own `_self-ci.yml` push run for `headSha` stands: 'pending' while one is queued or
+ * running, 'missing' when there is none yet (a dispatch right after a merge), else 'done'.
+ * release.yml waits on 'pending', and on 'missing' for a short grace, before it decides.
+ */
+function ciState(runs, headSha) {
+  if (typeof headSha !== 'string' || !COMMIT.test(headSha)) return 'missing';
+  const mine = (Array.isArray(runs) ? runs : []).filter((run) => run && run.head_sha === headSha && fromMainPush(run));
+  if (mine.length === 0) return 'missing';
+  return mine.some((run) => run.status !== 'completed') ? 'pending' : 'done';
+}
+
 // Only main's own push runs count: a pull_request run at the same commit (a PR whose head is
 // main's HEAD) is a different check. The workflow's query asks for push runs on main too; a run
 // without these fields is left to that query.
@@ -219,5 +231,5 @@ function fromMainPush(run) {
 }
 
 module.exports = {
-  checkRelease, planPublish, latestCiConclusion, hashiraRefs, assertCurrentMain, assertLatestRelease,
+  checkRelease, planPublish, latestCiConclusion, ciState, hashiraRefs, assertCurrentMain, assertLatestRelease,
 };
