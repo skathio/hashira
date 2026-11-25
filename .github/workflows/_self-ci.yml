@@ -560,10 +560,10 @@ jobs:
     env:
       # Skip the actual `npm publish` and tag/release steps. Documented
       # reserved env name; do NOT set in consumer workflows — doing so
-      # silently turns publishes into no-ops. NOTE: this does NOT skip the
-      # actions/download-artifact / tarball-locate steps (see action.yml) —
-      # those run for real below, proving the actual CI->CD artifact-handoff
-      # plumbing (NFR-Rel-1), not just the auth-mode branching.
+      # silently turns publishes into no-ops. It also skips the
+      # download-artifact and tarball-locate steps (see action.yml), so this
+      # job covers the input checks, toolchain floors and auth-mode branching,
+      # not the CI->CD artifact handoff.
       HASHIRA_NPM_RELEASE_DRY_RUN: '1'
     steps:
       # actions/checkout v4.2.2
@@ -586,17 +586,20 @@ jobs:
           # Mirrors npm-package-ci.yml's `version` job: pack the fixture
           # directory into a real tarball. There is no version-stamping here
           # (this fixture isn't exercising D1/D8's stamp step — that's
-          # npm-package-ci's own shape-validation job) — just producing a
-          # real .tgz for the composite's download-artifact step to fetch.
+          # npm-package-ci's own shape-validation job). The dry run never
+          # downloads it (see the job's env comment).
           mkdir -p "${RUNNER_TEMP}/npm-release-dry-run-pack-output"
           npm pack --pack-destination "${RUNNER_TEMP}/npm-release-dry-run-pack-output" \
             ./tests/npm-release/dry-run-fixture
-      - name: Upload fixture tarball as 'npm-tarball' (same artifact name the real CI version job uses)
+      - name: Upload fixture tarball as 'npm-release-dry-run-tarball'
         # actions/upload-artifact v4.4.3 — same pin already verified and in
         # use at npm-package-ci.yml / nuget-package-ci.yml / coverage-report.
+        # Not 'npm-tarball': the dry run skips the download, and only
+        # npm-release-smoke-oidc-fails-loud downloads that name. A second
+        # 'npm-tarball' in the run could be the one its download picks.
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
-          name: npm-tarball
+          name: npm-release-dry-run-tarball
           path: ${{ runner.temp }}/npm-release-dry-run-pack-output/*.tgz
           if-no-files-found: error
           retention-days: 1
@@ -648,10 +651,11 @@ jobs:
           mkdir -p "${RUNNER_TEMP}/npm-release-dry-run-pack-output"
           npm pack --pack-destination "${RUNNER_TEMP}/npm-release-dry-run-pack-output" \
             ./tests/npm-release/dry-run-fixture
-      - name: Upload fixture tarball as 'npm-tarball'
+      - name: Upload fixture tarball as 'npm-release-dry-run-auth-modes-tarball'
+        # Its own name for the same reason as npm-release-dry-run's upload.
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
-          name: npm-tarball
+          name: npm-release-dry-run-auth-modes-tarball
           path: ${{ runner.temp }}/npm-release-dry-run-pack-output/*.tgz
           if-no-files-found: error
           retention-days: 1
