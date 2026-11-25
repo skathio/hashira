@@ -16,10 +16,9 @@ on:
     paths:
       - '.github/homepage.json'
       - 'site/mark.svg'
+  # Also started by release.yml after the site deploy, as a run of its own: a called workflow
+  # would not see the `homepage` environment's secret.
   workflow_dispatch:
-  # From release.yml, after the site deploy. The `homepage` environment's secret is read here, so
-  # the caller passes no secrets.
-  workflow_call:
 
 permissions: {}
 

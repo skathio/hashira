@@ -13,7 +13,7 @@
 #           scoped to skathio/hashira, and pushes with it. The `release-tags` ruleset lets only
 #           that App write v* tags.
 #   site    site.yml with `released: true`, so there is no second approval.
-#   homepage homepage.yml; a failed ping warns and never fails the release.
+#   homepage starts homepage.yml as its own run; a failed ping warns and never fails the release.
 #
 # Re-running a release that failed partway finishes it: a release tag already on the commit, an
 # existing Release and a major tag already on the commit each count as done.
@@ -401,8 +401,22 @@ jobs:
     with:
       released: true
 
+  # Starts homepage.yml as its own run instead of calling it: a called workflow only sees secrets
+  # its caller passes, so the `homepage` environment's token read as empty and the ping was
+  # skipped. A run of its own reads the token as a manual run does. A workflow_dispatch made with
+  # GITHUB_TOKEN does start a run, unlike most events it raises.
   homepage:
     needs: site
-    # homepage.yml reads its token from the `homepage` environment and needs no GITHUB_TOKEN grant.
-    permissions: {}
-    uses: ./.github/workflows/homepage.yml
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write   # start homepage.yml with workflow_dispatch; nothing else is read or run here
+    steps:
+      - name: Ask homepage.yml to ping the org homepage
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          # A ping is a courtesy: a failure to start it warns and never fails the release.
+          if ! gh workflow run homepage.yml --ref main; then
+            echo "::warning title=Homepage ping not started::Run homepage.yml by hand on main; the tile catches up on the next scheduled build."
+          fi
