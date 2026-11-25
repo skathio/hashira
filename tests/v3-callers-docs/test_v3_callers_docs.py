@@ -118,9 +118,16 @@ def caller_block(text, workflow):
                  if lang in YAML_LANGS and any(needle in line for line in body)), (None, None))
 
 
+# This repo's own deploy workflows. release.yml calls them, so they take `workflow_call`, but no
+# consumer does.
+INTERNAL_WORKFLOWS = {"site.yml", "homepage.yml"}
+
+
 def reusable_workflows():
+    """The consumer-facing reusable workflows."""
     files = sorted(glob.glob(path(".github/workflows/*.yml")))
-    return [os.path.basename(f) for f in files if "workflow_call" in triggers(load(os.path.relpath(f, ROOT)))]
+    return [os.path.basename(f) for f in files if os.path.basename(f) not in INTERNAL_WORKFLOWS
+            and "workflow_call" in triggers(load(os.path.relpath(f, ROOT)))]
 
 
 def composite_actions():

@@ -6,3 +6,7 @@ __pycache__/
 *.pyc
 # A hook outside this repo writes here when it does not expand the variable; local paths, never commit.
 /${CLAUDE_PROJECT_DIR}/
+# The docs build stages its sources and assembles the Pages folder here; nothing generated is committed.
+/artifacts/
+# npm installs for the docs build (npm ci restores them from docs-site/package-lock.json).
+/docs-site/node_modules/
