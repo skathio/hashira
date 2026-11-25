@@ -153,7 +153,7 @@ commands are the fallback when the workflow is down. Dispatching a release or pu
 never do it unless asked. The App's one-time setup is in `docs/contributing.md`.
 
 The site deploys only through `site.yml`: `release.yml` calls it after the tags and the Release, with no second
-approval, so the published docs match the released version, and then calls `homepage.yml`, whose failed ping only
+approval, so the published docs match the released version, and then starts `homepage.yml` as a run of its own (a called workflow would not see its environment secret), whose failed ping only
 warns. A page-only fix can run `site.yml` by hand, which waits for the `production` approval. It does not deploy on
 push. Its build job holds only `contents: read`, runs `docs-site/build.sh` and uploads `artifacts/pages`. `site.yml`
 pins hashira's own `pages-upload` and `pages-deploy` by SHA (the v3.0.0 commit).

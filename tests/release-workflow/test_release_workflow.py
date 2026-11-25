@@ -218,9 +218,9 @@ class ReleaseWorkflow(unittest.TestCase):
 
     def test_site_then_homepage_after_the_push(self):
         site = jobs_where(self.jobs, lambda job: str(job.get("uses", "")) == "./" + SITE)
-        home = jobs_where(self.jobs, lambda job: str(job.get("uses", "")) == "./" + HOMEPAGE)
+        home = jobs_where(self.jobs, lambda job: "gh workflow run homepage.yml --ref main" in dump(job))
         self.assertEqual(len(site), 1, "one job deploys through site.yml")
-        self.assertEqual(len(home), 1, "one job pings through homepage.yml")
+        self.assertEqual(len(home), 1, "one job starts homepage.yml as a run of its own")
         self.assertIn(self.push_job(), ancestors(self.jobs, site[0]))
         self.assertIn(site[0], ancestors(self.jobs, home[0]))
         self.assertTrue(self.jobs[site[0]].get("with"), "the release tells site.yml it is approved")
@@ -273,8 +273,23 @@ class SiteWorkflow(unittest.TestCase):
 
 
 class HomepageWorkflow(unittest.TestCase):
-    def test_callable_from_release(self):
-        self.assertIn("workflow_call", triggers(load(HOMEPAGE)))
+    def test_started_as_a_run_of_its_own_not_called(self):
+        # A called workflow only sees the secrets its caller passes, so the `homepage` environment's
+        # token read as empty and the release's ping was silently skipped.
+        on = triggers(load(HOMEPAGE))
+        self.assertIn("workflow_dispatch", on)
+        self.assertNotIn("workflow_call", on)
+        for name, job in (load(RELEASE).get("jobs") or {}).items():
+            with self.subTest(job=name):
+                self.assertNotEqual(str(job.get("uses", "")), "./" + HOMEPAGE)
+
+    def test_the_release_job_that_starts_it_holds_only_actions_write(self):
+        jobs = load(RELEASE).get("jobs") or {}
+        home = [job for job in jobs.values() if "gh workflow run homepage.yml" in dump(job)]
+        self.assertEqual(len(home), 1)
+        self.assertEqual(home[0].get("permissions"), {"actions": "write"})
+        self.assertNotIn("secrets.", dump(home[0]))
+        self.assertNotIn("actions/checkout", dump(home[0]))
 
     def test_failed_ping_still_only_warns(self):
         text = read(HOMEPAGE)
