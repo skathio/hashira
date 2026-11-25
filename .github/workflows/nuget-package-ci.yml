@@ -334,6 +334,10 @@ jobs:
           repository: skathio/hashira
           ref: ${{ steps.self.outputs.sha }}
           path: .hashira
+          # Only .github/ (plus root files such as package.json, in cone mode): the actions
+          # need nothing else, and a consumer's bare `node --test` must not discover and
+          # run hashira's own tests out of .hashira/.
+          sparse-checkout: .github
           persist-credentials: false
       - name: Confirm the checked-out library commit
         id: library
@@ -386,6 +390,10 @@ jobs:
           repository: skathio/hashira
           ref: ${{ needs.setup.outputs.library_sha }}
           path: .hashira
+          # Only .github/ (plus root files such as package.json, in cone mode): the actions
+          # need nothing else, and a consumer's bare `node --test` must not discover and
+          # run hashira's own tests out of .hashira/.
+          sparse-checkout: .github
           persist-credentials: false
       # actions/setup-dotnet v4.1.0 — needed for `dotnet pack` below.
       - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73
@@ -608,6 +616,10 @@ jobs:
           repository: skathio/hashira
           ref: ${{ needs.setup.outputs.library_sha }}
           path: .hashira
+          # Only .github/ (plus root files such as package.json, in cone mode): the actions
+          # need nothing else, and a consumer's bare `node --test` must not discover and
+          # run hashira's own tests out of .hashira/.
+          sparse-checkout: .github
           persist-credentials: false
       - name: Run tests
         uses: ./.hashira/.github/actions/run-tests-dotnet
@@ -678,6 +690,10 @@ jobs:
           repository: skathio/hashira
           ref: ${{ needs.setup.outputs.library_sha }}
           path: .hashira
+          # Only .github/ (plus root files such as package.json, in cone mode): the actions
+          # need nothing else, and a consumer's bare `node --test` must not discover and
+          # run hashira's own tests out of .hashira/.
+          sparse-checkout: .github
           persist-credentials: false
       - name: Run scan-suite
         id: scan
@@ -725,6 +741,10 @@ jobs:
           repository: skathio/hashira
           ref: ${{ needs.setup.outputs.library_sha }}
           path: .hashira
+          # Only .github/ (plus root files such as package.json, in cone mode): the actions
+          # need nothing else, and a consumer's bare `node --test` must not discover and
+          # run hashira's own tests out of .hashira/.
+          sparse-checkout: .github
           persist-credentials: false
       - name: Run the SoMi quality gate
         id: gate
@@ -778,6 +798,10 @@ jobs:
           repository: skathio/hashira
           ref: ${{ steps.self.outputs.sha }}
           path: .hashira
+          # Only .github/ (plus root files such as package.json, in cone mode): the actions
+          # need nothing else, and a consumer's bare `node --test` must not discover and
+          # run hashira's own tests out of .hashira/.
+          sparse-checkout: .github
           persist-credentials: false
       - name: Judge the jobs and write the CI summary
         uses: ./.hashira/.github/actions/ci-summary

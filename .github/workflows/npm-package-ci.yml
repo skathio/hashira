@@ -256,6 +256,10 @@ jobs:
           repository: skathio/hashira
           ref: ${{ steps.self.outputs.sha }}
           path: .hashira
+          # Only .github/ (plus root files such as package.json, in cone mode): the actions
+          # need nothing else, and a consumer's bare `node --test` must not discover and
+          # run hashira's own tests out of .hashira/.
+          sparse-checkout: .github
           persist-credentials: false
       - name: Confirm the checked-out library commit
         id: library
@@ -307,6 +311,10 @@ jobs:
           repository: skathio/hashira
           ref: ${{ needs.setup.outputs.library_sha }}
           path: .hashira
+          # Only .github/ (plus root files such as package.json, in cone mode): the actions
+          # need nothing else, and a consumer's bare `node --test` must not discover and
+          # run hashira's own tests out of .hashira/.
+          sparse-checkout: .github
           persist-credentials: false
       # actions/setup-node v4.1.0 — needed for `npm pack`/`npm pkg set` below.
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
@@ -603,6 +611,10 @@ jobs:
           repository: skathio/hashira
           ref: ${{ needs.setup.outputs.library_sha }}
           path: .hashira
+          # Only .github/ (plus root files such as package.json, in cone mode): the actions
+          # need nothing else, and a consumer's bare `node --test` must not discover and
+          # run hashira's own tests out of .hashira/.
+          sparse-checkout: .github
           persist-credentials: false
       # Same bug as static-webapp-ci.yml's test/build-and-upload jobs — this
       # job ran `test_command` against an empty node_modules with nothing
@@ -666,6 +678,10 @@ jobs:
           repository: skathio/hashira
           ref: ${{ needs.setup.outputs.library_sha }}
           path: .hashira
+          # Only .github/ (plus root files such as package.json, in cone mode): the actions
+          # need nothing else, and a consumer's bare `node --test` must not discover and
+          # run hashira's own tests out of .hashira/.
+          sparse-checkout: .github
           persist-credentials: false
       - name: Run scan-suite
         id: scan
@@ -711,6 +727,10 @@ jobs:
           repository: skathio/hashira
           ref: ${{ needs.setup.outputs.library_sha }}
           path: .hashira
+          # Only .github/ (plus root files such as package.json, in cone mode): the actions
+          # need nothing else, and a consumer's bare `node --test` must not discover and
+          # run hashira's own tests out of .hashira/.
+          sparse-checkout: .github
           persist-credentials: false
       - name: Run the SoMi quality gate
         id: gate
@@ -764,6 +784,10 @@ jobs:
           repository: skathio/hashira
           ref: ${{ steps.self.outputs.sha }}
           path: .hashira
+          # Only .github/ (plus root files such as package.json, in cone mode): the actions
+          # need nothing else, and a consumer's bare `node --test` must not discover and
+          # run hashira's own tests out of .hashira/.
+          sparse-checkout: .github
           persist-credentials: false
       - name: Judge the jobs and write the CI summary
         uses: ./.hashira/.github/actions/ci-summary
