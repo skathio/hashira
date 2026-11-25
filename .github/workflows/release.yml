@@ -104,6 +104,8 @@ jobs:
           SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
+          # The JavaScript is single-quoted on purpose: its ${...} are template literals, not shell.
+          # shellcheck disable=SC2016
           node -e '
             const fs = require("node:fs");
             const { execFileSync } = require("node:child_process");
@@ -234,6 +236,8 @@ jobs:
             echo "::error::could not read whether the Release v${VERSION} exists: ${found}"
             exit 1
           fi
+          # The JavaScript is single-quoted on purpose: its ${...} are template literals, not shell.
+          # shellcheck disable=SC2016
           node -e '
             const fs = require("node:fs");
             const { execFileSync } = require("node:child_process");

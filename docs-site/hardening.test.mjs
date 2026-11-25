@@ -22,7 +22,7 @@ const { planPublish, latestCiConclusion, assertCurrentMain, assertLatestRelease 
 const HEAD = 'a'.repeat(40)
 const OTHER = 'b'.repeat(40)
 const OLDER = 'c'.repeat(40)
-const APP_TOKEN_SHA = 'f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc'
+const APP_ACTION_COMMIT = 'f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc'
 
 // The jobs of a workflow as name to its block of text, read by indentation.
 function jobBlocks(text) {
@@ -189,7 +189,7 @@ test('every create-github-app-token pin at f418cff says v3.4.0, the tag that SHA
   for (const file of readdirSync(dir).filter((f) => f.endsWith('.yml'))) {
     const lines = readFileSync(join(dir, file), 'utf8').split('\n')
     lines.forEach((line, i) => {
-      if (!line.includes(`actions/create-github-app-token@${APP_TOKEN_SHA}`)) return
+      if (!line.includes(`actions/create-github-app-token@${APP_ACTION_COMMIT}`)) return
       seen += 1
       let j = i
       const comment = [line]
