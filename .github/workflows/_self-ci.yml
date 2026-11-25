@@ -560,10 +560,10 @@ jobs:
     env:
       # Skip the actual `npm publish` and tag/release steps. Documented
       # reserved env name; do NOT set in consumer workflows — doing so
-      # silently turns publishes into no-ops. NOTE: this does NOT skip the
-      # actions/download-artifact / tarball-locate steps (see action.yml) —
-      # those run for real below, proving the actual CI->CD artifact-handoff
-      # plumbing (NFR-Rel-1), not just the auth-mode branching.
+      # silently turns publishes into no-ops. It also skips the
+      # download-artifact and tarball-locate steps (see action.yml), so this
+      # job covers the input checks, toolchain floors and auth-mode branching,
+      # not the CI->CD artifact handoff.
       HASHIRA_NPM_RELEASE_DRY_RUN: '1'
     steps:
       # actions/checkout v4.2.2
@@ -586,8 +586,8 @@ jobs:
           # Mirrors npm-package-ci.yml's `version` job: pack the fixture
           # directory into a real tarball. There is no version-stamping here
           # (this fixture isn't exercising D1/D8's stamp step — that's
-          # npm-package-ci's own shape-validation job) — just producing a
-          # real .tgz for the composite's download-artifact step to fetch.
+          # npm-package-ci's own shape-validation job). The dry run never
+          # downloads it (see the job's env comment).
           mkdir -p "${RUNNER_TEMP}/npm-release-dry-run-pack-output"
           npm pack --pack-destination "${RUNNER_TEMP}/npm-release-dry-run-pack-output" \
             ./tests/npm-release/dry-run-fixture

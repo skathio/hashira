@@ -13,8 +13,9 @@ Contract tests for the v3 CI workflow inputs.
   switched by `quality_gate` and levelled by `quality_level`, which the
   `setup` job validates against strict, standard and relaxed.
 - `_self-ci.yml` runs the gate on hashira's own pull requests at strict.
-- Every artifact `_self-ci.yml` uploads has a name no other job in the run
-  uses, so a download by name can only find the one it was meant for.
+- Every `actions/upload-artifact` step written in `_self-ci.yml` uses a name no
+  other job uses, so a download by name finds the one it was meant for. Uploads
+  made inside the composite actions its jobs call are not checked.
 
 Conditions are read with a small evaluator of GitHub's expression syntax.
 A value it cannot know offline (a step or job output) counts as unknown,
