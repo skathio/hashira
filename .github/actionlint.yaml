@@ -1,0 +1,8 @@
+# actionlint (up to v1.7.12) does not know `job.workflow_sha`, which GitHub documents in the `job`
+# context and the CI workflows' setup jobs read to find their own commit. This ignores exactly
+# that one error, so a plain `actionlint` run locally checks the same as CI. Drop it once
+# actionlint knows the property.
+paths:
+  .github/workflows/**/*.{yml,yaml}:
+    ignore:
+      - 'property "workflow_sha" is not defined in object type'

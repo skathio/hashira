@@ -111,11 +111,99 @@ doesn't conclude the maintainer axis is the only supported extension path.
   action with its inputs, outputs and a `uses:` snippet.
 - [`docs/migration-v2-to-v3.md`](./migration-v2-to-v3.md) — the breaking
   changes from v2.
+- [`docs/getting-started.md`](./getting-started.md) — a new consumer's path
+  from nothing to a first release; the docs site's home page.
 - `templates/<flow>/ci.yml` — the one caller per flow, copied into the flow
   guide and the README.
 
 Do not duplicate cross-cutting concerns into per-flow docs; link back to
 `usage.md`.
+
+## The docs site
+
+`docs-site/` builds `docs/*.md` and `docs/flows/*.md` into the VitePress site
+at https://skathio.github.io/hashira/docs/, next to the landing page in
+`site/`. The pages are read unchanged, so a page reads the same on GitHub and
+on the site. This file is the one page left out: it is the maintainer
+checklist, and links to it go to GitHub.
+
+- Build it with `(cd docs-site && npm ci)` once, then `docs-site/build.sh`.
+  The build writes `artifacts/pages` (gitignored) and fails on a dead
+  relative link. The `docs-site` job in `_self-ci.yml` runs the same build
+  and `node --test docs-site/`.
+- A new `docs/*.md` or `docs/flows/*.md` appears in the sidebar under its H1.
+  To place it in the sidebar order, or to leave it unpublished, edit
+  `docs-site/.vitepress/config.mts`.
+- A relative link that leaves `docs/` becomes a link to the file on GitHub's
+  `main`. Every other relative link must resolve on the site.
+- A change that affects what renders needs screenshots of the landing page
+  and the docs pages: follow `.claude/skills/visual-test-site/SKILL.md`.
+- The site deploys only through `site.yml`, which `release.yml` calls after a
+  release. For a page-only fix between releases, run `site.yml` by hand on
+  `main`; it waits for the `production` approval.
+
+## Releases
+
+`.github/workflows/release.yml` releases the current `main`. Dispatch it with
+`bump` set to `patch`, `minor` or `major`:
+
+```sh
+gh workflow run release.yml --ref main -f bump=patch
+```
+
+It refuses, before any approval, when the latest `_self-ci.yml` run for
+`main`'s HEAD is not green, when the version's major is 1 or 2, when a
+`templates/*/ci.yml` pins another major than the release's, or when the tag
+`vX.Y.Z` is already on another commit. It then builds the docs, waits for the
+`production` approval, pushes the annotated tag `vX.Y.Z`, creates the GitHub
+Release, points the major tag (`v3`) at the commit, deploys the site and pings
+the org homepage. Re-running a release that failed partway finishes it. `v1`
+and `v2` are frozen and are never moved. A major release needs a normal PR
+first that moves the templates, docs and lints to the new major.
+
+The decisions live in `tests/release/lib/release.js` (unit-tested in
+`tests/release/`), and `tests/shape-lints/release-lint.py` checks the
+workflow's shape. `.claude/skills/release/SKILL.md` keeps the manual commands
+as the fallback when the workflow is down.
+
+### One-time setup: the release GitHub App
+
+`release.yml` pushes tags with a token from a dedicated GitHub App, not with
+`GITHUB_TOKEN`, because the `release-tags` ruleset blocks updating and
+deleting `v*` tags for everyone it does not list as a bypass actor. The App's
+token is minted only in the `publish` job, after the `production` approval,
+and only for `skathio/hashira`. A repository admin does these steps once:
+
+1. Create the GitHub App under the `skathio` account (Settings → Developer
+   settings → GitHub Apps → New GitHub App). Name it for its job, for example
+   `hashira-release`. Turn the webhook off. Under Repository permissions, give
+   it **Contents: Read and write** and nothing else. Allow installation only
+   on this account.
+2. On the App's **General** page, note its **Client ID** (`Iv23…`, not the
+   numeric App ID: the token action deprecated `app-id`). Then open
+   **Credentials** in the App's sidebar and choose **Generate a private key**,
+   which downloads a `.pem` file.
+3. Install the App on `skathio/hashira` only (Install App → Only select
+   repositories).
+4. Add the App as a bypass actor on the `release-tags` ruleset (repo Settings
+   → Rules → Rulesets → `release-tags` → Bypass list → Add bypass → the App,
+   mode **Always**). Without it, moving `v3` is refused. Keep the ruleset's
+   target (`refs/tags/v*`) and its rules (restrict updates and deletions) as
+   they are.
+5. Store the two values as secrets of the `production` environment only, not
+   as repository secrets, so no job outside `production` can read them:
+
+   ```sh
+   gh secret set RELEASE_APP_CLIENT_ID --env production --repo skathio/hashira --body '<client id>'
+   gh secret set RELEASE_APP_PRIVATE_KEY --env production --repo skathio/hashira < hashira-release.private-key.pem
+   ```
+
+   Then delete the local `.pem` file.
+6. Check that `production` still requires the hashira-owners team's review
+   and allows only `main`, and that `github-pages` allows `main`.
+
+To rotate the key, generate a new private key on the App, replace
+`RELEASE_APP_PRIVATE_KEY`, then delete the old key on the App.
 
 ## Branch protection
 

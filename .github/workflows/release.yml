@@ -1,0 +1,367 @@
+# Releases the current main: the annotated tag vX.Y.Z, the GitHub Release with generated notes,
+# the lightweight major tag vN on the same commit, then the Pages site (landing page and docs)
+# through site.yml and the org homepage ping through homepage.yml.
+#
+# Order matters, and each stage holds only what it needs:
+#   check   read only, before any approval. Refuses a ref other than main, a _self-ci.yml run
+#           for main's HEAD that is not green, a frozen major, templates that pin another major,
+#           and a release tag already on another commit. The version comes from hashira's own
+#           version-resolver; the decisions live in tests/release/lib/release.js, unit-tested.
+#   docs    read only, no secrets: it runs third-party npm code. A broken docs build stops the
+#           release before any tag is pushed.
+#   publish the one job in `production` (owner approval). It alone mints the release App's token,
+#           scoped to skathio/hashira, and pushes with it. The `release-tags` ruleset lets only
+#           that App write v* tags.
+#   site    site.yml with `released: true`, so there is no second approval.
+#   homepage homepage.yml; a failed ping warns and never fails the release.
+#
+# Re-running a release that failed partway finishes it: a release tag already on the commit, an
+# existing Release and a major tag already on the commit each count as done.
+# Only the released version's own major tag is ever written. Older majors' tags stay where they
+# are, and nothing here deletes a tag.
+name: release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Which part of the version to advance. major makes v(N+1).0.0 and needs the templates to name the new major already."
+        type: choice
+        options: [patch, minor, major]
+        required: true
+
+permissions: {}
+
+# One release at a time, so two runs never race for the same tag. GitHub keeps at most one run
+# waiting behind the running one: a later dispatch replaces a waiting run, which is cancelled
+# before any job starts and so changed nothing. Dispatch a cancelled release again.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read   # checkout, the tags and the caller templates
+      actions: read    # the _self-ci.yml runs for main's HEAD
+    outputs:
+      version: ${{ steps.decide.outputs.version }}
+      sha: ${{ github.sha }}
+    steps:
+      - name: Refuse any ref but main
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          if [ "${REF}" != "refs/heads/main" ]; then
+            echo "::error::release.yml releases main only; this run is on ${REF}."
+            exit 1
+          fi
+      # actions/checkout v4.2.2. Full history, so every tag is here.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # Tags already on the released commit are left out of the version input, so a re-run after
+      # a partial failure resolves the same version again and finishes it instead of bumping past.
+      - name: List the tags
+        id: tags
+        env:
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          delim="tags_$(openssl rand -hex 16)"
+          {
+            echo "list<<${delim}"
+            git for-each-ref refs/tags --format='%(refname:strip=2) %(objectname) %(*objectname)' \
+              | awk -v sha="${SHA}" '{ peeled = ($3 != "") ? $3 : $2; if (peeled != sha) print $1 }'
+            echo "${delim}"
+          } >> "${GITHUB_OUTPUT}"
+      - name: Resolve the version
+        id: resolve
+        uses: ./.github/actions/version-resolver
+        with:
+          tags: ${{ steps.tags.outputs.list }}
+          bump: ${{ inputs.bump }}
+      - name: Read the _self-ci.yml runs for main's HEAD
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          gh api "repos/${REPO}/actions/workflows/_self-ci.yml/runs?branch=main&event=push&head_sha=${SHA}&per_page=100" \
+            --jq '.workflow_runs' > "${RUNNER_TEMP}/ci-runs.json"
+      # Refuses on a red or missing CI run, a frozen major, a template pinning another major,
+      # the release tag on another commit, or a commit main has moved past (a full re-run of an
+      # old run) that does not already carry its release tag. The Release's state does not matter here; `publish`
+      # plans again with it after the approval.
+      - name: Decide
+        id: decide
+        env:
+          BUMP: ${{ inputs.bump }}
+          RESOLVED: ${{ steps.resolve.outputs.version }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          # The JavaScript is single-quoted on purpose: its ${...} are template literals, not shell.
+          # shellcheck disable=SC2016
+          node -e '
+            const fs = require("node:fs");
+            const { execFileSync } = require("node:child_process");
+            const rel = require("./tests/release/lib/release.js");
+            const env = process.env;
+            const out = execFileSync("git", ["for-each-ref", "refs/tags",
+              "--format=%(refname:strip=2) %(objectname) %(*objectname)"], { encoding: "utf8" });
+            const tags = {};
+            for (const [name, obj, peeled] of out.split("\n").filter(Boolean).map((l) => l.split(" "))) {
+              tags[name] = peeled || obj;
+            }
+            const onOther = Object.keys(tags).filter((t) => tags[t] !== env.SHA);
+            const templates = {};
+            for (const flow of fs.readdirSync("templates")) {
+              const file = `templates/${flow}/ci.yml`;
+              if (fs.existsSync(file)) templates[file] = fs.readFileSync(file, "utf8");
+            }
+            const runs = JSON.parse(fs.readFileSync(`${env.RUNNER_TEMP}/ci-runs.json`, "utf8"));
+            const r = rel.checkRelease({ bump: env.BUMP, tags: onOther, templates,
+              ciConclusion: rel.latestCiConclusion(runs, env.SHA) });
+            if (r.version !== env.RESOLVED) {
+              throw new Error(`release refused: version-resolver says ${env.RESOLVED}, the checks say ${r.version}`);
+            }
+            rel.planPublish({ version: r.version, sha: env.SHA, tags, releaseExists: false });
+            const mainHead = execFileSync("git", ["rev-parse", "refs/remotes/origin/main"], { encoding: "utf8" }).trim();
+            rel.assertCurrentMain({ version: r.version, sha: env.SHA, mainHead, tags });
+            fs.appendFileSync(env.GITHUB_OUTPUT, `version=${r.version}\n`);
+            console.log(`Releasing v${r.version} at ${env.SHA}.`);
+          '
+
+  docs:
+    needs: check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read   # checkout only: this job runs third-party npm code, so it holds nothing else
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ needs.check.outputs.sha }}
+          persist-credentials: false
+      # actions/setup-node v4.1.0. VitePress 1.6 needs a current Node.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: '24'
+      - name: Install the docs toolchain from the lockfile
+        working-directory: docs-site
+        run: npm ci
+      - name: Build the docs, the same build site.yml deploys
+        run: docs-site/build.sh
+
+  publish:
+    needs: [check, docs]
+    runs-on: ubuntu-latest
+    # The owner approval. The release App's secrets live in this environment only.
+    environment: production
+    permissions:
+      contents: read   # checkout; the tags and the Release are written with the App token
+    steps:
+      - name: Refuse any ref but main
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          if [ "${REF}" != "refs/heads/main" ]; then
+            echo "::error::release.yml releases main only; this run is on ${REF}."
+            exit 1
+          fi
+      # actions/checkout v4.2.2. Full history, so the plan sees every tag as it is now.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ needs.check.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      # Checked again after the approval, which can come long after `check` ran, and on "Re-run
+      # failed jobs", which reuses `check`'s outputs: the commit must still be main's HEAD (or
+      # already carry this version's tag, a re-run finishing a partial release), and the major tag
+      # may only move forward. Both refuse before the App token exists and before any push, so a
+      # refusal publishes nothing.
+      - name: Refuse a commit main has moved past
+        env:
+          VERSION: ${{ needs.check.outputs.version }}
+          SHA: ${{ needs.check.outputs.sha }}
+        run: |
+          set -euo pipefail
+          node -e '
+            const { execFileSync } = require("node:child_process");
+            const rel = require("./tests/release/lib/release.js");
+            const env = process.env;
+            const out = execFileSync("git", ["for-each-ref", "refs/tags",
+              "--format=%(refname:strip=2) %(objectname) %(*objectname)"], { encoding: "utf8" });
+            const tags = {};
+            for (const [name, obj, peeled] of out.split("\n").filter(Boolean).map((l) => l.split(" "))) {
+              tags[name] = peeled || obj;
+            }
+            const mainHead = execFileSync("git", ["rev-parse", "refs/remotes/origin/main"], { encoding: "utf8" }).trim();
+            rel.assertCurrentMain({ version: env.VERSION, sha: env.SHA, mainHead, tags });
+          '
+          # A re-run finishing a release whose tag is already on this commit skips this: a later
+          # release may have moved the major tag on, and the plan then leaves it alone ("done").
+          # The push step checks ancestry again before any real move.
+          major_tag="v${VERSION%%.*}"
+          own="$(git rev-parse --verify --quiet "refs/tags/v${VERSION}^{commit}" || true)"
+          if [ "${own}" != "${SHA}" ] && current="$(git rev-parse --verify --quiet "refs/tags/${major_tag}^{commit}")"; then
+            if ! git merge-base --is-ancestor "${current}" "${SHA}"; then
+              echo "::error::${major_tag} is on ${current}, which ${SHA} does not contain; refusing to release an older commit."
+              exit 1
+            fi
+          fi
+      # Planned again after the approval, against the tags and the Release as they are now, so a
+      # re-run skips what is done and still refuses a release tag on another commit.
+      - name: Plan
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.check.outputs.version }}
+          SHA: ${{ needs.check.outputs.sha }}
+        run: |
+          set -euo pipefail
+          # Only gh's own "release not found" means there is no Release. Any other failure
+          # (network, auth) stops here, before the App token is minted, so it is never taken
+          # for "no Release" and followed by a create that an existing Release would fail.
+          if found="$(gh release view "v${VERSION}" --json tagName 2>&1)"; then
+            export RELEASE_EXISTS=true
+          elif grep -qiF 'release not found' <<< "${found}"; then
+            export RELEASE_EXISTS=false
+          else
+            echo "::error::could not read whether the Release v${VERSION} exists: ${found}"
+            exit 1
+          fi
+          # The JavaScript is single-quoted on purpose: its ${...} are template literals, not shell.
+          # shellcheck disable=SC2016
+          node -e '
+            const fs = require("node:fs");
+            const { execFileSync } = require("node:child_process");
+            const rel = require("./tests/release/lib/release.js");
+            const env = process.env;
+            const out = execFileSync("git", ["for-each-ref", "refs/tags",
+              "--format=%(refname:strip=2) %(objectname) %(*objectname)"], { encoding: "utf8" });
+            const tags = {};
+            for (const [name, obj, peeled] of out.split("\n").filter(Boolean).map((l) => l.split(" "))) {
+              tags[name] = peeled || obj;
+            }
+            const plan = rel.planPublish({ version: env.VERSION, sha: env.SHA, tags,
+              releaseExists: env.RELEASE_EXISTS === "true" });
+            fs.appendFileSync(env.GITHUB_OUTPUT, [`tag=${plan.tag}`, `release=${plan.release}`,
+              `major_tag=${plan.majorTag}`, `major_tag_name=${plan.majorTagName}`, ""].join("\n"));
+            console.log(JSON.stringify(plan));
+          '
+      # Minted only here, after the approval, and only for skathio/hashira with Contents write:
+      # the tags and the Release.
+      # actions/create-github-app-token v3.4.0
+      - uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc
+        id: app
+        with:
+          client-id: ${{ secrets.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: skathio
+          repositories: hashira
+          permission-contents: write
+      - name: Tag, release and point the major tag
+        env:
+          APP_TOKEN: ${{ steps.app.outputs.token }}
+          APP_SLUG: ${{ steps.app.outputs.app-slug }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.check.outputs.version }}
+          SHA: ${{ needs.check.outputs.sha }}
+          TAG_STEP: ${{ steps.plan.outputs.tag }}
+          RELEASE_STEP: ${{ steps.plan.outputs.release }}
+          MAJOR_STEP: ${{ steps.plan.outputs.major_tag }}
+          MAJOR_TAG: ${{ steps.plan.outputs.major_tag_name }}
+        run: |
+          set -euo pipefail
+          tag="v${VERSION}"
+          # The sink re-checks what the plan already refused: only this version's own major tag,
+          # and never a frozen one.
+          major="${VERSION%%.*}"
+          if [ "${MAJOR_TAG}" != "v${major}" ] || [ "${major}" -le 2 ]; then
+            echo "::error::refusing to write major tag ${MAJOR_TAG} for ${tag}."
+            exit 1
+          fi
+          # Only forward, and checked before the first push, so a refusal leaves nothing half
+          # published: the major tag's commit must be in the released commit's history, so a
+          # stale run never pulls consumers back to an older release.
+          if [ "${MAJOR_STEP}" = move ]; then
+            current="$(git rev-parse "refs/tags/${MAJOR_TAG}^{commit}")"
+            if ! git merge-base --is-ancestor "${current}" "${SHA}"; then
+              echo "::error::${MAJOR_TAG} is on ${current}, which ${SHA} does not contain; refusing to move it back."
+              exit 1
+            fi
+          fi
+          auth="$(printf 'x-access-token:%s' "${APP_TOKEN}" | base64 -w0)"
+          echo "::add-mask::${auth}"
+          push() {
+            git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth}" push "$@"
+          }
+          git config user.name "${APP_SLUG}[bot]"
+          git config user.email "${APP_SLUG}[bot]@users.noreply.github.com"
+
+          if [ "${TAG_STEP}" = create ]; then
+            git tag -a "${tag}" -m "${tag}" "${SHA}"
+            push origin "refs/tags/${tag}"
+          fi
+          if [ "${RELEASE_STEP}" = create ]; then
+            GH_TOKEN="${APP_TOKEN}" gh release create "${tag}" --verify-tag --generate-notes --title "${tag}"
+          fi
+          case "${MAJOR_STEP}" in
+            create) push origin "${SHA}:refs/tags/${MAJOR_TAG}" ;;
+            move) push --force origin "${SHA}:refs/tags/${MAJOR_TAG}" ;;
+          esac
+          echo "Released ${tag} at ${SHA}; ${MAJOR_TAG} points at it." >> "${GITHUB_STEP_SUMMARY}"
+
+  # Read only. A stale re-run of a finished release must not deploy its older site over a newer
+  # release's, so the site goes out only while this commit holds the highest release tag.
+  latest:
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read   # checkout, and the tags as origin has them now
+    steps:
+      # actions/checkout v4.2.2. Full history, so every tag is here.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Refuse unless this commit holds the latest release
+        env:
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          node -e '
+            const { execFileSync } = require("node:child_process");
+            const rel = require("./tests/release/lib/release.js");
+            const out = execFileSync("git", ["for-each-ref", "refs/tags",
+              "--format=%(refname:strip=2) %(objectname) %(*objectname)"], { encoding: "utf8" });
+            const tags = {};
+            for (const [name, obj, peeled] of out.split("\n").filter(Boolean).map((l) => l.split(" "))) {
+              tags[name] = peeled || obj;
+            }
+            rel.assertLatestRelease({ tags, sha: process.env.SHA });
+          '
+
+  site:
+    needs: latest
+    # site.yml's build reads the repo; its deploy publishes to Pages and proves itself with OIDC.
+    # `released: true` skips its own production gate: `publish` already passed it.
+    permissions:
+      contents: read   # site.yml build: checkout
+      pages: write     # site.yml deploy: deploy-pages
+      id-token: write  # site.yml deploy: deploy-pages authenticates via OIDC
+    uses: ./.github/workflows/site.yml
+    with:
+      released: true
+
+  homepage:
+    needs: site
+    # homepage.yml reads its token from the `homepage` environment and needs no GITHUB_TOKEN grant.
+    permissions: {}
+    uses: ./.github/workflows/homepage.yml

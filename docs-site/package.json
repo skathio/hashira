@@ -1,0 +1,16 @@
+{
+  "name": "hashira-docs-site",
+  "private": true,
+  "type": "module",
+  "main": "run-tests.mjs",
+  "scripts": {
+    "build": "bash build.sh",
+    "test": "node --test"
+  },
+  "devDependencies": {
+    "vitepress": "1.6.4"
+  },
+  "overrides": {
+    "vite": "6.4.6"
+  }
+}

@@ -1,45 +1,99 @@
-# Deploys the project page in site/ to GitHub Pages (https://skathio.github.io/<repo>/).
+# Deploys the project page and the docs to GitHub Pages (https://skathio.github.io/<repo>/).
 #
-# The merge is the approval: main only takes reviewed pull requests (or an owner), so a push to
-# main that touches site/ deploys with no second, manual approval. github-pages accepts main only.
-# site/ is plain static HTML, so there is no build step: the folder is uploaded as it is with
-# hashira's pages-upload and deployed with pages-deploy, pinned by SHA to the v3.0.0 release
+# One release, one approval. release.yml calls this after its `publish` job, which already passed
+# the `production` Environment's owner approval, so the site goes out after the tags and the
+# Release with no second approval (`released: true` skips `gate`). Run by hand, for a page-only
+# fix, it waits at `gate` for that same approval. There is no push trigger: a deploy is always a
+# release or an approved run, so the published docs match the released version.
+# The build job runs docs-site/build.sh, which builds the VitePress docs from docs/ and assembles
+# artifacts/pages: the site/ files at its root and the docs under docs/. That folder is uploaded
+# with hashira's pages-upload and deployed with pages-deploy, pinned by SHA to the v3.0.0 release
 # commit. Deploys only from main; the github-pages environment's branch policy enforces that too.
+# A deploy that fails after the release's tags are pushed is not retried here: re-run this
+# workflow by hand, approved in `production`.
 name: site
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'site/**'
-      - '.github/workflows/site.yml'
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      released:
+        description: "true only from release.yml's `site` job, whose `publish` job already passed the production approval."
+        type: boolean
+        default: false
 
 permissions: {}
 
-
 jobs:
-  build:
+  # One release, one approval: a hand run waits here for the `production` Environment's owner
+  # approval. A call from release.yml skips it.
+  gate:
+    if: ${{ !inputs.released }}
     runs-on: ubuntu-latest
+    environment: production
+    permissions: {}
+    steps:
+      # A hand run on another branch would publish that branch's site, unreleased; refuse it
+      # before anything runs. A call from release.yml is on main already.
+      - name: Refuse any ref but main
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          if [ "${REF}" != "refs/heads/main" ]; then
+            echo "::error::site.yml deploys main only; this run is on ${REF}."
+            exit 1
+          fi
+      - name: Owner approval
+        run: echo "Approved in the production environment."
+
+  build:
+    needs: gate
+    # After the approval at `gate`, or from release.yml with `gate` skipped.
+    if: ${{ !cancelled() && (needs.gate.result == 'success' || (needs.gate.result == 'skipped' && inputs.released)) }}
+    runs-on: ubuntu-latest
+    # Read only: this job runs npm packages and VitePress. pages-upload does not need the OIDC
+    # token or Pages write (upload-pages-artifact is a tar plus actions/upload-artifact, which
+    # uses the runner's own token); only `deploy` holds those grants.
     permissions:
       contents: read
-      id-token: write   # pages-upload (upload-pages-artifact)
-      pages: write      # pages-upload (upload-pages-artifact)
     steps:
+      # A hand run on another branch would publish that branch's site, unreleased; refuse it
+      # before anything runs. A call from release.yml is on main already.
+      - name: Refuse any ref but main
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          if [ "${REF}" != "refs/heads/main" ]; then
+            echo "::error::site.yml deploys main only; this run is on ${REF}."
+            exit 1
+          fi
       # actions/checkout v4.2.2
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
+      # actions/setup-node v4.1.0. VitePress 1.6 needs a current Node.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: '24'
+      - name: Install the docs toolchain from the lockfile
+        working-directory: docs-site
+        run: npm ci
+      - name: Build the docs and assemble the Pages folder
+        run: docs-site/build.sh
       - uses: skathio/hashira/.github/actions/pages-upload@2c8d52526cbce593a445f7572b599813503160f5 # v3.0.0
         with:
-          path: site
+          path: artifacts/pages
 
   deploy:
     needs: build
-    # One Pages deploy at a time; a newer run queues behind an older one instead of racing it.
+    # One Pages deploy at a time. On this job only, so a run waiting at `gate` never holds the
+    # queue for the others.
     concurrency:
       group: pages
       cancel-in-progress: false
+    # `!cancelled()` because a skipped `gate` upstream would otherwise skip this job too; unlike
+    # `always()` it still stops on a cancelled run.
+    if: ${{ !cancelled() && needs.build.result == 'success' }}
     runs-on: ubuntu-latest
     environment:
       name: github-pages
@@ -48,5 +102,33 @@ jobs:
       pages: write      # deploy-pages
       id-token: write   # deploy-pages authenticates via OIDC
     steps:
+      # A release's deploy goes out only while its commit holds the highest vX.Y.Z tag. The check
+      # is here, not in `build`: "Re-run failed jobs" after a failed deploy re-runs only this job,
+      # and would otherwise put an older release's site over a newer one with no approval. It reads
+      # the tags with an unauthenticated ls-remote (the repo is public), so this job gains no grant.
+      - name: Refuse unless this commit holds the latest release
+        if: ${{ inputs.released }}
+        env:
+          SHA: ${{ github.sha }}
+          REMOTE: ${{ github.server_url }}/${{ github.repository }}.git
+        run: |
+          set -euo pipefail
+          refs="$(git ls-remote --tags "${REMOTE}" 'refs/tags/v*')"
+          # One "<tag> <commit>" line per vX.Y.Z, peeled to the commit for an annotated tag.
+          latest="$(awk '
+            $2 ~ /^refs\/tags\/v[0-9]+\.[0-9]+\.[0-9]+(\^\{\})?$/ {
+              n = $2; sub(/^refs\/tags\//, "", n)
+              if (n ~ /\^\{\}$/) { sub(/\^\{\}$/, "", n); peeled[n] = $1 } else { direct[n] = $1 }
+            }
+            END { for (n in direct) print n, ((n in peeled) ? peeled[n] : direct[n]) }
+          ' <<< "${refs}" | sort -V -k1,1 | tail -n 1)"
+          if [ -z "${latest}" ]; then
+            echo "::error::no vX.Y.Z release tag found; refusing to deploy a release site."
+            exit 1
+          fi
+          if [ "${latest#* }" != "${SHA}" ]; then
+            echo "::error::the latest release ${latest% *} is on ${latest#* }, not ${SHA}; this run is stale."
+            exit 1
+          fi
       - id: deploy
         uses: skathio/hashira/.github/actions/pages-deploy@2c8d52526cbce593a445f7572b599813503160f5 # v3.0.0

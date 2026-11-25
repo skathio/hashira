@@ -5,8 +5,8 @@
 # Token: HOMEPAGE_DISPATCH_TOKEN, a fine-grained token limited to skathio/skathio.github.io with
 # Contents read and write (what repository_dispatch requires). Keep it as a secret of the
 # `homepage` environment, which only main can use, so a workflow pushed to any other branch or
-# tag cannot read it. A release is picked up by the homepage's scheduled build, or at once by
-# running this workflow by hand on main. When it is not set, the job notes that and succeeds, and the
+# tag cannot read it. release.yml calls this after each release's site deploy; it can also be
+# run by hand on main. When it is not set, the job notes that and succeeds, and the
 # homepage catches up on its own schedule. A failed ping warns on the run instead of failing it.
 name: homepage
 
@@ -17,6 +17,9 @@ on:
       - '.github/homepage.json'
       - 'site/mark.svg'
   workflow_dispatch:
+  # From release.yml, after the site deploy. The `homepage` environment's secret is read here, so
+  # the caller passes no secrets.
+  workflow_call:
 
 permissions: {}
 

@@ -349,6 +349,11 @@ directory so it can invoke its own composite actions through a **literal**
 expression in the `@<ref>` part of a `uses:` line, which is why this
 self-checkout exists at all.
 
+The checkout is sparse: only `.github/` and the library's root files land in
+`.hashira/`. The actions need nothing else, and keeping hashira's own tests
+out of your workspace means a test runner that discovers files on its own,
+such as a bare `node --test`, never runs them or counts them in your coverage.
+
 The workflow resolves the ref to check out by itself: it is the commit the
 workflow file was called at. The `setup` job reads `job.workflow_sha`, which
 GitHub documents as the commit of the workflow file that defines the current

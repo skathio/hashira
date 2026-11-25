@@ -296,6 +296,115 @@ jobs:
           set -euo pipefail
           node --test tests/ci-summary/verdict.test.js tests/ci-summary/verdict-edges.test.js tests/ci-summary/comment.test.js tests/ci-summary/comment-edges.test.js tests/ci-summary/render.test.js tests/ci-summary/body-reasons.test.js tests/ci-summary/comment-switch.test.js
 
+  release-logic-unit-tests:
+    name: release-logic-unit-tests
+    # The decisions release.yml makes before anything is approved or pushed
+    # (CI status, frozen majors, template majors) and its idempotent plan.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      # actions/setup-node v4.1.0. Node 20 is the oldest Node the release
+      # logic must keep working on.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: '20'
+      - name: Run release logic unit tests
+        shell: bash
+        # Files are listed by name: Node 20's `node --test` takes no globs.
+        run: |
+          set -euo pipefail
+          # request-gaps.test.mjs and hardening.test.mjs hold more release cases next to the
+          # docs-site ones; they import only Node built-ins and plain modules, so they run here
+          # without `npm ci` (hardening's docs-build case skips here; the docs-site job runs it).
+          node --test tests/release/release.test.js tests/release/release-edges.test.js docs-site/request-gaps.test.mjs docs-site/hardening.test.mjs
+
+  # release.yml pushes the tags consumers pin to: one job in production mints the App token, no
+  # other job reads a secret, no step names the frozen majors, and nothing deletes a tag. The
+  # contract tests also cover site.yml and homepage.yml, which the release calls.
+  release-lint:
+    name: release-lint
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Run the release lint
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tests/shape-lints/release-lint.py
+      - name: Run the release workflow contract tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tests/release-workflow/test_release_workflow.py
+      # The Plan step run with a stub gh (a failed read of the Release is not "no Release"),
+      # publish's refusal of a commit main has moved past, and build.sh's refusal of a docs/index.md.
+      - name: Run the release and docs-build gap tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tests/release-workflow/test_release_gaps.py
+
+  # Each broken copy of release.yml must fail the lint for its own reason.
+  release-lint-self-test:
+    name: release-lint-self-test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Run the release lint's self-test
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tests/shape-lints/release-lint.py --self-test
+
+  # The full docs build, the same script the Pages deploy uses: VitePress over docs/, whose
+  # dead-link check stays on, so a dead link or a build error fails the pull request. Then the
+  # docs-site tests, which rebuild and check the built site.
+  docs-site:
+    name: docs-site
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      # VitePress 1.6 and the folder form of `node --test docs-site/` need a
+      # current Node.
+      # actions/setup-node v4.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: '24'
+      - name: Install the docs toolchain from the lockfile
+        working-directory: docs-site
+        run: npm ci
+      - name: Build the docs and assemble the Pages folder
+        run: docs-site/build.sh
+      - name: Run the docs-site tests
+        run: node --test docs-site/
+      # Here and not in a job of its own: it rebuilds the docs, so it needs the npm ci above.
+      - name: Run the maintainer docs contract tests
+        run: python3 tests/maintainer-docs/test_maintainer_docs.py
+      # Here too: docs/getting-started.md is the docs site's home page, and this holds its
+      # contract (what it covers, where it links, no pasted caller block).
+      - name: Run the getting-started contract tests
+        run: python3 tests/getting-started/test_getting_started.py
+
 
   quality-gate:
     name: quality-gate
@@ -1875,7 +1984,7 @@ jobs:
         timeout-minutes: 125
         shell: bash
         run: node tests/consumer-integration/lib/integrate.js lock-wait
-      # actions/create-github-app-token v3.3.0. App tokens last an hour, so
+      # actions/create-github-app-token v3.4.0. App tokens last an hour, so
       # each phase mints its own; each is scoped to this leg's fixture repo.
       - uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc
         id: lock-token
@@ -1891,7 +2000,7 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.lock-token.outputs.token }}
         run: node tests/consumer-integration/lib/integrate.js lock
-      # actions/create-github-app-token v3.3.0
+      # actions/create-github-app-token v3.4.0
       - uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc
         id: app-token
         with:
@@ -1915,7 +2024,7 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: node tests/consumer-integration/lib/integrate.js pr-run
-      # actions/create-github-app-token v3.3.0. A fresh token: the PR wait
+      # actions/create-github-app-token v3.4.0. A fresh token: the PR wait
       # above may have used most of the last one's hour.
       - uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc
         id: gate-token
@@ -1933,7 +2042,7 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.gate-token.outputs.token }}
         run: node tests/consumer-integration/lib/integrate.js gate-run
-      # actions/create-github-app-token v3.3.0
+      # actions/create-github-app-token v3.4.0
       - uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc
         id: release-token
         with:
@@ -1949,7 +2058,7 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.release-token.outputs.token }}
         run: node tests/consumer-integration/lib/integrate.js release
-      # actions/create-github-app-token v3.3.0. Cleanup runs on success,
+      # actions/create-github-app-token v3.4.0. Cleanup runs on success,
       # failure and cancellation, with a fresh token.
       - uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc
         id: cleanup-token

@@ -39,6 +39,9 @@ CATALOG = os.path.join(REPO_ROOT, "docs", "catalog.md")
 ROW = re.compile(r"^\|(.*)\|\s*$")
 SEPARATOR = re.compile(r"^\|[\s:|-]+\|\s*$")
 NONE_SHOWN = {"—", "-", ""}
+# This repo's own deploy workflows. release.yml calls them, so they take `workflow_call`, but no
+# consumer does, so they are not catalog entries.
+INTERNAL_WORKFLOWS = {"site.yml", "homepage.yml"}
 
 
 def load(path):
@@ -57,7 +60,8 @@ def entries(root):
                  for path in sorted(glob.glob(os.path.join(root, ".github", "workflows", "*.yml")))]
     actions = [(os.path.basename(os.path.dirname(path)), load(path))
                for path in sorted(glob.glob(os.path.join(root, ".github", "actions", "*", "action.yml")))]
-    found = [(name, "workflows", spec or {}) for name, spec in workflows if spec is not None]
+    found = [(name, "workflows", spec or {}) for name, spec in workflows
+             if spec is not None and name not in INTERNAL_WORKFLOWS]
     found += [(name, "actions", spec) for name, spec in actions]
     return [(name, kind, spec.get("inputs") or {}, spec.get("outputs") or {}) for name, kind, spec in found]
 

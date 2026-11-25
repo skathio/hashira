@@ -5,14 +5,16 @@ NuGet package publish, and a static site on GitHub Pages. Consumers call it with
 `uses: skathio/hashira/...@<ref>`. The repo is `skathio/hashira`. The README still says `hashira-ops` in places, but
 every `uses:` ref must name `skathio/hashira`.
 
-There is no application code and no build. The product is YAML (`.github/workflows/`, `.github/actions/*/action.yml`),
-small Node/shell helpers inside the actions, the docs, and a static project site in `site/`.
+There is no application code. The product is YAML (`.github/workflows/`, `.github/actions/*/action.yml`), small
+Node/shell helpers inside the actions, the docs, and a static project site in `site/`. The one build is the docs site:
+`docs-site/build.sh` turns `docs/` into a VitePress site and assembles it with `site/` for GitHub Pages.
 
 ## Layout
 
 - `.github/workflows/`: `npm-package-ci.yml`, `nuget-package-ci.yml` and `static-webapp-ci.yml` are the consumer-facing
-  reusable CI workflows (`workflow_call`). `_self-ci.yml` is this repo's own CI. `site.yml` deploys `site/` to Pages.
-  `homepage.yml` pings the org homepage when `.github/homepage.json` or `site/mark.svg` changes.
+  reusable CI workflows (`workflow_call`). `_self-ci.yml` is this repo's own CI. `release.yml` cuts a release (see
+  Release flow). `site.yml` deploys the landing page and the docs to Pages, called from `release.yml` or run by hand.
+  `homepage.yml` pings the org homepage when `.github/homepage.json` or `site/mark.svg` changes, and after a release.
 - `.github/actions/<name>/action.yml`: the composite actions. The CD halves are `npm-release`, `nuget-push` and
   `pages-deploy`. The building blocks are `pages-upload`, `scan-suite`, `run-tests-js`, `run-tests-dotnet`,
   `coverage-report`, `dotnet-pack-version`, `version-resolver` and `quality-gate` (SoMi's PR-scope quality check,
@@ -25,7 +27,16 @@ small Node/shell helpers inside the actions, the docs, and a static project site
   action with its inputs and outputs. `docs/migration-v2-to-v3.md` lists the v3 breaking changes. `docs/contributing.md`
   is the maintainer checklist for adding an action or a workflow.
 - `site/` is the project page at https://skathio.github.io/hashira/: plain `index.html`, `theme.js` and SVGs. It has
-  no build step and is deployed as is.
+  no build step of its own. `docs-site/build.sh` copies it to the root of `artifacts/pages` and refuses to run if
+  `site/docs` exists.
+- `docs-site/` builds the docs site at https://skathio.github.io/hashira/docs/: VitePress 1.6.4, installed with
+  `npm ci` from its committed `package-lock.json`. `.vitepress/config.mts` holds the sidebar, the link rewrites
+  (links that leave `docs/`, and links to `docs/contributing.md`, go to GitHub) and the theme bridge that shares the
+  `theme` localStorage key with `site/`. `build.sh` stages `docs/*.md` and `docs/flows/*.md` unchanged under
+  `artifacts/` (gitignored), builds with the dead-link check on, and writes `artifacts/pages` (`site/` at its root,
+  the docs under `docs/`). Its tests are `docs-site/*.test.mjs`. `docs/contributing.md` is not published.
+- `docs/getting-started.md` takes a new consumer from nothing to a first release. It is the docs site's home page and
+  links to the templates and flow guides instead of pasting a caller.
 - `templates/<flow>/ci.yml` is each flow's one consumer caller. It is copied word for word as the first caller block of
   `docs/flows/<flow>.md` and as the flow's caller in `README.md` (`tests/templates/identity-lint.py`).
   `templates/dependabot.yml` is a template for consumers.
@@ -39,7 +50,8 @@ small Node/shell helpers inside the actions, the docs, and a static project site
 
 ## Commands (all verified locally: Node 26, Python 3.12 with PyYAML 6)
 
-There is no `npm install` and no build. Run the tests individually, the way `_self-ci.yml` does:
+Run the tests individually, the way `_self-ci.yml` does. Only the docs build installs anything (`npm ci` in
+`docs-site/`, which needs network access once):
 
 ```sh
 # Node unit tests
@@ -69,6 +81,20 @@ python3 tests/v3-callers-docs/test_v3_callers_docs.py
 python3 tests/ci-workflow-inputs/test_ci_workflow_inputs.py
 python3 tests/consumer-integration/test_consumer_integration.py
 python3 tests/fixture-consumers/test_fixture_consumers.py
+# Release decision logic (Node 20 safe), the release.yml lint and its self-test, and the release workflow contract
+node --test tests/release/release.test.js tests/release/release-edges.test.js docs-site/request-gaps.test.mjs docs-site/hardening.test.mjs
+python3 tests/shape-lints/release-lint.py
+python3 tests/shape-lints/release-lint.py --self-test
+python3 tests/release-workflow/test_release_workflow.py
+python3 tests/release-workflow/test_release_gaps.py
+# The docs site: install from the lockfile, build (VitePress's dead-link check fails the build), then its tests and
+# the maintainer docs contract. CI runs these on Node 24, because VitePress 1.6 needs a current Node.
+(cd docs-site && npm ci)
+docs-site/build.sh
+node --test docs-site/
+python3 tests/maintainer-docs/test_maintainer_docs.py
+# The getting-started page's contract (unittest)
+python3 tests/getting-started/test_getting_started.py
 ```
 
 The `actionlint` CI job installs actionlint v1.7.7 from its release tarball and checks the tarball's SHA-256. If
@@ -77,10 +103,11 @@ GitHub Actions.
 
 ## CI
 
-`_self-ci.yml` runs on every pull request and every push to main, 46 jobs: actionlint, the unit tests and shape
-lints above, and smoke jobs that run the composite actions against fixtures (`tests/pages-fixture`,
-`tests/run-tests-dotnet`, `tests/npm-release/dry-run-fixture`). Every job must be green before a merge. Wait for the
-checks with `gh pr checks <n> --watch`. Read a failure with `gh run view <id> --log-failed`.
+`_self-ci.yml` runs on every pull request and every push to main, 56 jobs: actionlint, the unit tests and shape
+lints above, the docs build and its tests (`docs-site`), the release checks (`release-logic-unit-tests`,
+`release-lint`, `release-lint-self-test`), and smoke jobs that run the composite actions against fixtures
+(`tests/pages-fixture`, `tests/run-tests-dotnet`, `tests/npm-release/dry-run-fixture`). Every job must be green
+before a merge. Wait for the checks with `gh pr checks <n> --watch`. Read a failure with `gh run view <id> --log-failed`.
 
 ## Conventions and invariants (enforced by the shape lints)
 
@@ -108,23 +135,36 @@ checks with `gh pr checks <n> --watch`. Read a failure with `gh run view <id> --
 
 ## Release flow
 
-Releases are cut by hand. Tag `vX.Y.Z` on main, create the GitHub Release (`gh release create`), then roll the major
-tag `v3` forward to the release commit (the first v3 release creates it). `v1` and `v2` are frozen and never move:
-moving `v2` onto a v3 commit would break every v2 consumer, whose callers still pass `library_ref`. `v3` is the only tag
-that is ever force-pushed. Follow
-`.claude/skills/release/SKILL.md` for the exact commands. Pushing tags is the maintainer's call: never do it unless
-asked.
+Releases go through `.github/workflows/release.yml`: dispatch it on `main` with `bump` set to `patch`, `minor` or
+`major` (`gh workflow run release.yml --ref main -f bump=patch`). Its `check` job refuses, before any approval, a ref
+other than `main`, a `_self-ci.yml` run for `main`'s HEAD that is not green, a v1 or v2 version, a `templates/*/ci.yml`
+that pins another major than the release's, and a `vX.Y.Z` tag already on another commit. The version comes from
+hashira's own `version-resolver`; the decisions are in `tests/release/lib/release.js`. The `docs` job builds the docs
+with `docs-site/build.sh`, so a broken docs build stops the release before any tag. The `publish` job waits for the
+`production` environment's approval (the hashira-owners team), mints a token from the release GitHub App
+(`RELEASE_APP_CLIENT_ID`, `RELEASE_APP_PRIVATE_KEY`, secrets of `production` only), then pushes the annotated tag `vX.Y.Z`,
+creates the GitHub Release with generated notes and points the lightweight major tag (`v3`) at the commit. Re-running a
+release that failed partway finishes it. A major release (`bump=major`) needs the templates, docs and lints to name the
+new major in a normal PR first. `v1` and `v2` are frozen and never move: moving `v2` onto a v3 commit would break every
+v2 consumer, whose callers still pass `library_ref`. The current major tag is the only tag that is ever force-pushed,
+and a major release leaves the previous major's tag where it was. Follow `.claude/skills/release/SKILL.md`; its manual
+commands are the fallback when the workflow is down. Dispatching a release or pushing tags is the maintainer's call:
+never do it unless asked. The App's one-time setup is in `docs/contributing.md`.
 
-The site deploys on every push to main that touches `site/**` (`site.yml`, `github-pages` environment, main only, no
-second approval). `site.yml` pins hashira's own `pages-upload` and `pages-deploy` by SHA (the v3.0.0 commit).
+The site deploys only through `site.yml`: `release.yml` calls it after the tags and the Release, with no second
+approval, so the published docs match the released version, and then calls `homepage.yml`, whose failed ping only
+warns. A page-only fix can run `site.yml` by hand, which waits for the `production` approval. It does not deploy on
+push. Its build job holds only `contents: read`, runs `docs-site/build.sh` and uploads `artifacts/pages`. `site.yml`
+pins hashira's own `pages-upload` and `pages-deploy` by SHA (the v3.0.0 commit).
 
 ## Frontend: visual testing is mandatory
 
-`site/` renders, and it supports light, dark and auto (`theme.js`, `data-theme` on `<html>`). For every change that
-affects what renders (`site/**`, and `.github/homepage.json` or `site/mark.svg`, which feed the org homepage tile),
-serve the site and take screenshots at phone width (390px) and desktop width (1440px), in both light and dark. Look at
-every screenshot and check for horizontal scroll, overflow, contrast, and broken images or links. Then attach or
-describe the screenshots in the PR. Follow `.claude/skills/visual-test-site/SKILL.md`.
+`site/` and the docs site render, and both support light, dark and auto (`theme.js`, `data-theme` on `<html>`, and the
+docs' theme bridge, which share the `theme` localStorage key). For every change that affects what renders (`site/**`,
+`docs-site/**`, `docs/**`, and `.github/homepage.json` or `site/mark.svg`, which feed the org homepage tile), build
+with `docs-site/build.sh`, serve `artifacts/pages`, and take screenshots of the landing page and the docs pages at
+phone width (390px) and desktop width (1440px), in both light and dark. Look at every screenshot and check for
+horizontal scroll, overflow, contrast, and broken images or links. Then attach or describe the screenshots in the PR. Follow `.claude/skills/visual-test-site/SKILL.md`.
 
 ## Pitfalls
 
