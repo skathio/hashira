@@ -196,12 +196,39 @@ jobs:
 Walk-through: [`docs/flows/static-webapp.md`](docs/flows/static-webapp.md)
 (Pages enablement, framework guidance, failure modes).
 
+### Project page and docs on GitHub Pages
+
+For a project page with docs, rather than a framework app: `pages-site.yml`
+copies your `site/` (or runs your build), adds the shared site kit in
+`_kit/` (`site-kit`: colour tokens, the theme toggle and the `<site-nav>`
+header) and builds a VitePress docs site from your `docs/` into `docs/`
+(`docs-build`, described by `.github/pages.json`), then deploys it after the
+`production` approval, or with `released: true` from a release job that
+already passed it. hashira's own page at
+https://skathio.github.io/hashira/ is built this way.
+
+```yaml
+jobs:
+  site:
+    permissions:
+      contents: read   # build: checkout
+      pages: write     # deploy: deploy-pages
+      id-token: write  # deploy: deploy-pages authenticates via OIDC
+    uses: skathio/hashira/.github/workflows/pages-site.yml@v3
+```
+
+Walk-through: [`docs/flows/pages.md`](docs/flows/pages.md) (the
+`.github/pages.json` schema, defaults, errors, and the trusted-input
+warning).
+
 ## The parts
 
-The three CI workflows are built from composite actions you can also use on
-their own: `scan-suite`, `run-tests-js`, `run-tests-dotnet`,
+The three CI workflows and `pages-site.yml` are built from composite actions
+you can also use on their own: `scan-suite`, `run-tests-js`, `run-tests-dotnet`,
 `coverage-report`, `quality-gate`, `ci-summary`, `version-resolver`,
-`dotnet-pack-version`, `pages-upload`, and the publish and deploy actions
+`dotnet-pack-version`, `pages-upload`, `docs-build` (a VitePress docs
+site from `docs/` and `.github/pages.json`), `site-kit` (the shared page
+header, theme toggle and colour tokens), and the publish and deploy actions
 `npm-release`, `nuget-push` and `pages-deploy`. Each CI workflow ends with
 the job `passed`, which reports as the one check to require in a branch
 ruleset, `ci / passed`, and keeps one CI summary comment on the pull

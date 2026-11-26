@@ -1,0 +1,85 @@
+# Composite action: docs-build
+#
+# Builds a VitePress docs site from the caller's docs/**/*.md, described by
+# .github/pages.json (see docs/flows/pages.md), into `output_dir`. VitePress
+# and its lockfile live in this action's vitepress/ folder and are installed
+# with `npm ci --ignore-scripts` into a work folder under RUNNER_TEMP: the
+# caller keeps no docs packages, and the build never edits docs/ (VitePress
+# reads a staged copy). Needs Node 20 or later on the runner (setup-node).
+#
+# ## Trust boundary
+#
+# pages.json is data a pull request can edit: lib/pages-config.js checks it
+# before anything is installed, and nothing in it reaches a shell. Inputs are
+# bound via `env:` and dereferenced with quoting. `pre_build_command` runs as
+# raw shell and is TRUSTED input, like static-webapp-ci's `build_command`.
+name: docs-build
+description: Build a VitePress docs site from docs/**/*.md and .github/pages.json into output_dir.
+
+inputs:
+  pre_build_command:
+    description: "Shell command run from the repo root before VitePress, with DOCS_STAGE set to the staged docs folder; Markdown it writes there is published. Default '' (none). Trusted input (raw-shell sink per D10d; do NOT pass values derived from PR titles, issue bodies, branch names, or other externally controlled context)."
+    required: false
+    default: ''
+  output_dir:
+    description: "Repo-relative folder the built site is written to. It must not exist yet. Default 'artifacts/pages/docs'."
+    required: false
+    default: artifacts/pages/docs
+
+outputs:
+  output_dir:
+    description: "The folder the site was written to (the `output_dir` input)."
+    value: ${{ steps.build.outputs.output_dir }}
+
+runs:
+  using: composite
+  steps:
+    - name: Check output_dir and pages.json, and stage the docs
+      id: prep
+      shell: bash
+      env:
+        DB_OUTPUT_DIR: ${{ inputs.output_dir }}
+        DB_ACTION: ${{ github.action_path }}
+      run: node "${DB_ACTION}/lib/prepare.js"
+
+    - name: Run pre_build_command
+      if: inputs.pre_build_command != ''
+      shell: bash
+      env:
+        DB_PRE: ${{ inputs.pre_build_command }}
+        DOCS_STAGE: ${{ steps.prep.outputs.stage }}
+      run: |
+        set +e
+        bash -eo pipefail -c "${DB_PRE}"
+        rc=$?
+        if [ "${rc}" -ne 0 ]; then
+          echo "::error::docs-build: pre_build_command exited with code ${rc}." >&2
+          exit "${rc}"
+        fi
+
+    - name: Install VitePress from hashira's lockfile
+      shell: bash
+      env:
+        DB_WORK: ${{ steps.prep.outputs.work }}
+      # --ignore-scripts: no dependency runs an install script. --include=dev
+      # keeps NODE_ENV=production in a caller's job from skipping VitePress.
+      run: cd "${DB_WORK}/vitepress" && npm ci --ignore-scripts --include=dev --no-audit --no-fund
+
+    - name: Build the docs
+      id: build
+      shell: bash
+      env:
+        DB_WORK: ${{ steps.prep.outputs.work }}
+        DB_OUTPUT_DIR: ${{ inputs.output_dir }}
+      run: |
+        set -euo pipefail
+        node "${DB_WORK}/vitepress/node_modules/vitepress/bin/vitepress.js" build "${DB_WORK}/vitepress"
+        # pre_build_command may have created output_dir since the first check.
+        if [ -e "${DB_OUTPUT_DIR}" ] || [ -L "${DB_OUTPUT_DIR}" ]; then
+          echo "::error::docs-build: output_dir '${DB_OUTPUT_DIR}' already exists; docs-build never writes over it." >&2
+          exit 1
+        fi
+        mkdir -p "$(dirname "${DB_OUTPUT_DIR}")"
+        cp -R "${DB_WORK}/dist" "${DB_OUTPUT_DIR}"
+        echo "output_dir=${DB_OUTPUT_DIR}" >> "${GITHUB_OUTPUT}"
+        echo "docs-build: wrote the docs site to '${DB_OUTPUT_DIR}'" >> "${GITHUB_STEP_SUMMARY}"

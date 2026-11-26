@@ -121,21 +121,24 @@ Do not duplicate cross-cutting concerns into per-flow docs; link back to
 
 ## The docs site
 
-`docs-site/` builds `docs/*.md` and `docs/flows/*.md` into the VitePress site
-at https://skathio.github.io/hashira/docs/, next to the landing page in
-`site/`. The pages are read unchanged, so a page reads the same on GitHub and
-on the site. This file is the one page left out: it is the maintainer
-checklist, and links to it go to GitHub.
+hashira's own `pages-site.yml` builds `docs/**/*.md` into the VitePress
+site at https://skathio.github.io/hashira/docs/, with the `docs-build`
+action, next to the landing page in `site/` and the `site-kit` files in
+`_kit/`. `.github/pages.json` describes the docs (see
+[`flows/pages.md`](flows/pages.md)). The pages are read unchanged, so a page
+reads the same on GitHub and on the site. This file is the one page left
+out (`unpublished` in `.github/pages.json`): it is the maintainer checklist,
+and links to it go to GitHub.
 
-- Build it with `(cd docs-site && npm ci)` once, then `docs-site/build.sh`.
-  The build writes `artifacts/pages` (gitignored) and fails on a dead
-  relative link. The `docs-site` job in `_self-ci.yml` runs the same build
-  and `node --test docs-site/`.
-- A new `docs/*.md` or `docs/flows/*.md` appears in the sidebar under its H1.
-  To place it in the sidebar order, or to leave it unpublished, edit
-  `docs-site/.vitepress/config.mts`.
-- A relative link that leaves `docs/` becomes a link to the file on GitHub's
-  `main`. Every other relative link must resolve on the site.
+- Build it with `node tests/pages-site/build-site.js`, which builds the site
+  the way `site.yml` does. It writes `artifacts/pages` (gitignored) and fails
+  on a dead relative link. The `hashira-site` job in `_self-ci.yml` runs the
+  same build and `node --test tests/pages-site/`.
+- A new `docs/**/*.md` appears in the sidebar under its H1. To place it in
+  the sidebar order, give it a short label, or leave it unpublished, edit
+  `.github/pages.json`.
+- A relative link that leaves `docs/` becomes a link to the file on GitHub.
+  Every other relative link must resolve on the site.
 - A change that affects what renders needs screenshots of the landing page
   and the docs pages: follow `.claude/skills/visual-test-site/SKILL.md`.
 - The site deploys only through `site.yml`, which `release.yml` calls after a

@@ -14,7 +14,8 @@ What it holds, because each one guards a tag consumers pin to:
   - No step names v1 or v2. Those majors are frozen: their consumers still
     pass `library_ref`, and moving either tag would break them.
   - Nothing deletes a tag.
-  - The docs build runs before the push, so a broken build stops the release.
+  - The docs build (hashira's docs-build action) runs in a job the push needs,
+    so a broken build stops the release.
 
 Run from anywhere: python3 tests/shape-lints/release-lint.py
 `--self-test` mutates the real release.yml in memory and checks that each
@@ -104,11 +105,14 @@ def check_frozen(jobs):
             for name, job in jobs.items() for step in steps(job) if FROZEN.search(dump(step))]
 
 
+DOCS_BUILD = "./.github/actions/docs-build"
+
+
 def check_docs_first(jobs, push):
     docs = [n for n, j in jobs.items()
-            if any("docs-site/build.sh" in str(s.get("run", "")) for s in steps(j))]
+            if any(str(s.get("uses", "")).rstrip("/") == DOCS_BUILD for s in steps(j))]
     if not docs or not push or not set(docs) & ancestors(jobs, push):
-        return ["the docs build (docs-site/build.sh) must run in a job the pushing job needs"]
+        return [f"the docs build ({DOCS_BUILD}) must run in a job the pushing job needs"]
     return []
 
 
@@ -161,6 +165,7 @@ def mutations(text):
             "run: echo ok", "env:", "  LEAK: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}"]), "secret"),
         "a push trigger": (text.replace("\non:\n", "\non:\n  push:\n", 1), "workflow_dispatch"),
         "a tag deletion": (first_step_of(text, push, ["run: git push --delete origin v9"]), "delete"),
+        "no docs build": (text.replace(DOCS_BUILD, "./.github/actions/pages-upload"), "docs build"),
     }
 
 

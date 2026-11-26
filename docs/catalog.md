@@ -107,6 +107,37 @@ jobs:
     uses: skathio/hashira/.github/workflows/static-webapp-ci.yml@v3
 ```
 
+### pages-site.yml
+
+Builds and deploys a project's GitHub Pages site: the static site (`site_dir` copied as-is, or built by `site_build_command` into `site_output`), the shared site kit in `_kit/` (`site-kit`) and, unless `docs` is false, the docs from `docs/` and `.github/pages.json` in `docs/` (`docs-build`), uploaded with `pages-upload` and deployed with `pages-deploy`. Jobs `check` -> `gate` -> `build` -> `deploy`: `check` refuses any ref but `main` before the approval, `gate` waits for the `production` environment's approval (skipped when `released` is true), `build` refuses any ref but `main` again and holds only `contents: read`, and `deploy` holds only `pages: write` and `id-token: write` in `github-pages`, one deploy at a time. A released run deploys only while its commit holds the highest `vX.Y.Z` tag. `build` fails when `<site_output>/docs` or `<site_output>/_kit` already exists after the site build.
+
+**Use it directly**: As the job that publishes a project page, called by hand (`workflow_dispatch`) or from a release workflow after its tags with `released: true`. The caller grants `contents: read`, `pages: write` and `id-token: write`. `site_build_command` and `docs_pre_build_command` are trusted input: they run as shell, so never pass them values from PR titles, issue bodies, branch names or other outside context.
+
+| Input | Required | Default |
+|-------|----------|---------|
+| `released` | no | `false` |
+| `site_dir` | no | `site` |
+| `site_build_command` | no | `''` |
+| `site_output` | no | `''` |
+| `docs` | no | `true` |
+| `docs_pre_build_command` | no | `''` |
+| `node_version` | no | `24` |
+| `dotnet_version` | no | `''` |
+
+An empty `site_output` means `site_dir`.
+
+No outputs.
+
+```yaml
+jobs:
+  site:
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    uses: skathio/hashira/.github/workflows/pages-site.yml@v3
+```
+
 ## Composite actions
 
 Called as a step with `uses:` inside a job of your own. A composite
@@ -201,6 +232,47 @@ Packages a static site directory as the `github-pages` artifact, autodetecting `
 
 ```yaml
 - uses: skathio/hashira/.github/actions/pages-upload@v3
+```
+
+### site-kit
+
+Copies the shared site kit into `<dest>/_kit/`: `tokens.css` (the landing pages' colour, type and spacing variables in light and dark, with `--accent` and `--accent-soft` taken from `--site-accent`), `theme.js` (the `theme` localStorage key: `light`, `dark` or `auto`, anything else is `auto`) and `site-nav.js` (the `<site-nav>` custom element: brand, `nav` links, Docs, an extras slot, `home_link`, theme toggle). The kit comes from the action's own folder, so it is the kit at the commit your `uses:` ref resolved to. `dest` must be an existing workspace-relative directory without `..` and without a `_kit` in it.
+
+**Use it directly**: After your own site build, before `pages-upload`, so the page can load `_kit/tokens.css`, `_kit/theme.js` (in `<head>`) and `_kit/site-nav.js`.
+
+| Input | Required | Default |
+|-------|----------|---------|
+| `dest` | yes | — |
+
+| Output | Meaning |
+|--------|---------|
+| `kit_path` | The directory the kit was copied to (`<dest>/_kit`). |
+
+```yaml
+- uses: skathio/hashira/.github/actions/site-kit@v3
+  with:
+    dest: dist
+```
+
+### docs-build
+
+Builds a VitePress docs site from the repo's `docs/**/*.md`, described by `.github/pages.json` (name, base, home page, sidebar, unpublished pages, header links, accent, logo, `theme_css`). VitePress 1.6.4 and its lockfile live in the action and are installed with `npm ci --ignore-scripts` into `RUNNER_TEMP`, so the repo keeps no docs packages, and the build reads a staged copy of `docs/`, never `docs/` itself. Heading ids follow GitHub's slug rule, a `.md` link opens the published page, a link to an unpublished page or to a folder with no index opens it on GitHub, raw HTML and `${{ }}` render as text, and local search is on. The sidebar lists `sidebar` in order, then every other page by path under its first H1. A missing or unpublished `sidebar` file, a `docs/index.md` beside the home page, or an `output_dir` that already exists fails the build. Needs Node 20 or later.
+
+**Use it directly**: When your site is built in your own job: run it after the site build and before `pages-upload`, with `output_dir` set to the `docs/` folder of the site you upload. `pre_build_command` is trusted input: it runs as shell, so never pass it values from PR titles, issue bodies, branch names or other outside context.
+
+| Input | Required | Default |
+|-------|----------|---------|
+| `pre_build_command` | no | `''` |
+| `output_dir` | no | `artifacts/pages/docs` |
+
+| Output | Meaning |
+|--------|---------|
+| `output_dir` | The folder the site was written to (the `output_dir` input). |
+
+```yaml
+- uses: skathio/hashira/.github/actions/docs-build@v3
+  with:
+    output_dir: dist/docs
 ```
 
 ### scan-suite

@@ -558,8 +558,8 @@ class MigrationAndUsage(unittest.TestCase):
         self.assertTrue(os.path.isfile(path(MIGRATION)), f"{MIGRATION} is missing")
         return read(MIGRATION)
 
-    def test_lists_exactly_the_three_reusable_workflows(self):
-        self.assertEqual(reusable_workflows(), ["npm-package-ci.yml", "nuget-package-ci.yml", "static-webapp-ci.yml"])
+    def test_lists_exactly_the_reusable_workflows(self):
+        self.assertEqual(reusable_workflows(), ["npm-package-ci.yml", "nuget-package-ci.yml", "pages-site.yml", "static-webapp-ci.yml"])
 
     def test_migration_lists_each_breaking_input_with_a_caller_line(self):
         text = self.migration()

@@ -3,26 +3,27 @@
 Contract tests for the maintainer docs that come with the docs site and the
 release workflow.
 
-- CLAUDE.md drops its "no build" statements, names docs-site/, release.yml
-  and docs/getting-started.md in its layout, lists the new test commands
+- CLAUDE.md drops its "no build" statements, names .github/pages.json,
+  pages-site.yml, release.yml and docs/getting-started.md in its layout, lists the new test commands
   that _self-ci.yml runs, gives a CI job count equal to _self-ci.yml's, says
   releases go through release.yml with a `bump` while v1 and v2 stay frozen,
   and no longer says the site deploys on every push to main.
 - The release skill dispatches release.yml and keeps the manual tag, Release
   and major-tag commands as the fallback, after the dispatch.
-- The visual-test-site skill builds with docs-site/build.sh, serves
+- The visual-test-site skill builds with tests/pages-site/build-site.js, serves
   artifacts/pages and screenshots the docs pages too, at 390px and 1440px in
   light and dark.
 - docs/contributing.md writes down the GitHub App steps: create it, install
   it, add it as a bypass actor on the `release-tags` ruleset and store
   RELEASE_APP_CLIENT_ID and RELEASE_APP_PRIVATE_KEY as `production` environment
-  secrets. It also names the docs site and release.yml.
+  secrets. It also names the docs build (docs-build and .github/pages.json)
+  and release.yml.
 - The docs build, with its dead-link check, and the existing shape lints
   still pass.
 
 Run from the repo root: python3 tests/maintainer-docs/test_maintainer_docs.py
-Needs python3 and PyYAML, as the other shape lints do. The docs build test
-needs `npm ci` in docs-site/ first, as docs-site/build.sh does.
+Needs python3 and PyYAML, as the other shape lints do. The site build test
+needs Node 20 or later and network access once, for docs-build's `npm ci`.
 """
 
 import os
@@ -86,14 +87,14 @@ class ClaudeMd(unittest.TestCase):
         self.assertNotIn("no application code and no build", self.text)
         self.assertNotIn("There is no `npm install` and no build", self.text)
 
-    def test_layout_names_docs_site_release_workflow_and_getting_started(self):
+    def test_layout_names_the_pages_config_release_workflow_and_getting_started(self):
         layout = section(self.text, "Layout")
-        for name in ("docs-site/", "release.yml", "docs/getting-started.md"):
+        for name in (".github/pages.json", "pages-site.yml", "release.yml", "docs/getting-started.md"):
             self.assertIn(name, layout, f"the Layout section does not name {name}")
 
     def test_commands_list_the_docs_build_and_new_tests(self):
         commands = next(body for name, body in sections(self.text).items() if name.startswith("Commands"))
-        for needle in ("npm ci", "docs-site/build.sh", "node --test docs-site/",
+        for needle in ("node tests/pages-site/build-site.js", "node --test tests/docs-build/ tests/site-kit/ tests/pages-site/",
                        "tests/release/", "tests/shape-lints/release-lint.py",
                        "tests/release-workflow/test_release_workflow.py"):
             self.assertIn(needle, commands, f"the Commands section does not list {needle}")
@@ -153,7 +154,8 @@ class VisualTestSkill(unittest.TestCase):
         self.text = read(VISUAL_SKILL)
 
     def test_builds_and_serves_artifacts_pages(self):
-        self.assertIn("docs-site/build.sh", self.text)
+        self.assertIn("tests/pages-site/build-site.js", self.text)
+        self.assertNotIn("docs-site", self.text)
         self.assertIn("artifacts/pages", self.text)
         self.assertNotRegex(self.text, r"--directory\s+site\b",
                             "the skill still serves site/ alone")
@@ -186,8 +188,10 @@ class Contributing(unittest.TestCase):
         self.assertIn("RELEASE_APP_CLIENT_ID", body)
         self.assertIn("production", body)
 
-    def test_names_docs_site_and_release_workflow(self):
-        self.assertIn("docs-site", self.text)
+    def test_names_the_docs_build_and_release_workflow(self):
+        self.assertIn("docs-build", self.text)
+        self.assertIn(".github/pages.json", self.text)
+        self.assertNotIn("docs-site", self.text)
         self.assertIn("release.yml", self.text)
 
 
@@ -208,8 +212,8 @@ class StillPasses(unittest.TestCase):
                 result = run(sys.executable, lint)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
-    def test_docs_build_with_dead_link_check_passes(self):
-        result = run("bash", "docs-site/build.sh")
+    def test_site_build_with_dead_link_check_passes(self):
+        result = run("node", "tests/pages-site/build-site.js")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertTrue(os.path.isfile(os.path.join(ROOT, "artifacts/pages/docs/index.html")))
 

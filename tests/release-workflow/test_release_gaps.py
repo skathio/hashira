@@ -4,12 +4,13 @@
 - release.yml's Plan step reads only gh's own "release not found" as "no Release". Any other
   failure of `gh release view` (network, auth) stops the job before the App token is minted,
   instead of going on to create a Release that may already exist.
-- docs-site/build.sh refuses a docs/index.md: getting-started.md is published as the docs
-  site's index page, so the two would be written to the same file.
+- The docs build (the docs-build action's first step, lib/prepare.js) refuses a docs/index.md:
+  getting-started.md is published as the docs site's index page, so the two would be written
+  to the same file.
 - After the approval, publish refuses a commit main has moved past unless it already carries
   this version's tag, and a major tag that would move backwards, before the App token is minted
   and before any push. "Re-run failed jobs" reuses check's outputs, so check alone is not enough.
-- The release decision cases in docs-site/request-gaps.test.mjs also run on Node 20, the
+- The release decision cases in tests/release/request-gaps.test.mjs also run on Node 20, the
   oldest Node the release logic must keep working on.
 
 The Plan step is run as release.yml holds it, with a stub `gh` first on PATH and GIT_DIR on an
@@ -220,12 +221,12 @@ class PublishRefusesAStaleCommit(unittest.TestCase):
 
 
 def deploy_guard_script():
-    steps = workflow(".github/workflows/site.yml")["jobs"]["deploy"]["steps"]
+    steps = workflow(".github/workflows/pages-site.yml")["jobs"]["deploy"]["steps"]
     return next(step["run"] for step in steps if step.get("name") == "Refuse unless this commit holds the latest release")
 
 
 class SiteDeployRefusesAStaleRelease(unittest.TestCase):
-    """site.yml's deploy-time check, run as the file holds it, against a throwaway remote.
+    """pages-site.yml's deploy-time check (site.yml calls it), run as the file holds it, against a throwaway remote.
 
     "Re-run failed jobs" after a failed deploy re-runs only `deploy`, so the check lives there.
     """
@@ -292,7 +293,7 @@ class SiteDeployRefusesAStaleRelease(unittest.TestCase):
         self.assertIn("no vX.Y.Z release tag", result.stdout)
 
     def test_only_a_release_call_runs_the_check(self):
-        steps = workflow(".github/workflows/site.yml")["jobs"]["deploy"]["steps"]
+        steps = workflow(".github/workflows/pages-site.yml")["jobs"]["deploy"]["steps"]
         step = next(s for s in steps if s.get("name") == "Refuse unless this commit holds the latest release")
         self.assertEqual(str(step.get("if")).replace(" ", ""), "${{inputs.released}}")
         self.assertLess(steps.index(step), next(i for i, s in enumerate(steps) if s.get("id") == "deploy"))
@@ -407,13 +408,18 @@ class CheckWaitsForMainsCi(unittest.TestCase):
 
 
 class BuildRefusesADocsIndexPage(unittest.TestCase):
+    """Runs docs-build's first step, which checks the docs before anything is installed."""
+
+    PREPARE = os.path.join(ROOT, ".github/actions/docs-build/lib/prepare.js")
+
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="docs-index-")
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
-        for folder in ("docs-site/node_modules/vitepress", "docs/flows", "site"):
-            os.makedirs(os.path.join(self.tmp, folder))
-        shutil.copy(os.path.join(ROOT, "docs-site/build.sh"), os.path.join(self.tmp, "docs-site/build.sh"))
-        for rel in ("docs/getting-started.md", "docs/flows/npm.md", "site/mark.svg"):
+        os.makedirs(os.path.join(self.tmp, "docs/flows"))
+        os.makedirs(os.path.join(self.tmp, ".github"))
+        with open(os.path.join(self.tmp, ".github/pages.json"), "w", encoding="utf-8") as handle:
+            handle.write("{}\n")
+        for rel in ("docs/getting-started.md", "docs/flows/npm.md"):
             self.write(rel)
 
     def write(self, rel):
@@ -421,8 +427,14 @@ class BuildRefusesADocsIndexPage(unittest.TestCase):
             handle.write("# Page\n")
 
     def build(self):
-        return subprocess.run(["bash", os.path.join(self.tmp, "docs-site/build.sh")], cwd=self.tmp,
+        env = {**os.environ, "DB_OUTPUT_DIR": "artifacts/pages/docs", "GITHUB_REPOSITORY": "skathio/hashira",
+               "RUNNER_TEMP": self.tmp, "GITHUB_OUTPUT": os.path.join(self.tmp, "output")}
+        return subprocess.run(["node", self.PREPARE], cwd=self.tmp, env=env,
                               capture_output=True, text=True, timeout=120)
+
+    def staged(self):
+        with open(os.path.join(self.tmp, "output"), encoding="utf-8") as handle:
+            return dict(line.split("=", 1) for line in handle.read().splitlines())["stage"]
 
     def test_docs_index_md_is_refused_before_anything_is_staged(self):
         self.write("docs/index.md")
@@ -430,15 +442,14 @@ class BuildRefusesADocsIndexPage(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("docs/index.md", result.stderr)
         self.assertIn("getting-started.md", result.stderr)
-        self.assertFalse(os.path.exists(os.path.join(self.tmp, "artifacts")), "nothing is staged or built")
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "output")), "nothing is staged")
 
     def test_an_index_page_in_a_subfolder_is_not_refused(self):
         # Only docs/index.md lands on the home page's file; docs/flows/index.md has its own.
         self.write("docs/flows/index.md")
         result = self.build()
-        self.assertNotIn("docs/index.md", result.stderr)
-        self.assertTrue(os.path.exists(os.path.join(self.tmp, "artifacts/docs-site/src/flows/index.md")),
-                        result.stdout + result.stderr)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(os.path.exists(os.path.join(self.staged(), "flows/index.md")))
 
     def test_the_repo_has_no_docs_index_md(self):
         self.assertFalse(os.path.exists(os.path.join(ROOT, "docs/index.md")))
@@ -450,14 +461,14 @@ class CiWiring(unittest.TestCase):
         node = next(step["with"]["node-version"] for step in job["steps"] if "setup-node" in str(step.get("uses", "")))
         self.assertEqual(str(node), "20")
         commands = "\n".join(str(step.get("run", "")) for step in job["steps"])
-        self.assertIn("docs-site/request-gaps.test.mjs", commands)
+        self.assertIn("tests/release/request-gaps.test.mjs", commands)
 
     def test_self_ci_and_claude_md_run_this_file(self):
         jobs = workflow(SELF_CI)["jobs"]
         ran = [name for name, job in jobs.items() if any(THIS in str(step.get("run", "")) for step in job.get("steps", []))]
         self.assertEqual(ran, ["release-lint"])
         self.assertIn(THIS, read("CLAUDE.md"))
-        self.assertIn("docs-site/request-gaps.test.mjs", read("CLAUDE.md").split("node --test tests/release/release.test.js", 1)[1].split("\n", 1)[0])
+        self.assertIn("tests/release/request-gaps.test.mjs", read("CLAUDE.md").split("node --test tests/release/release.test.js", 1)[1].split("\n", 1)[0])
 
 
 if __name__ == "__main__":

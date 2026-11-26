@@ -1,0 +1,6 @@
+{
+  "name": "hashira-tests-pages-site",
+  "private": true,
+  "type": "commonjs",
+  "main": "run-tests.js"
+}

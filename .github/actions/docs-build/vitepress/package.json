@@ -1,0 +1,11 @@
+{
+  "name": "hashira-docs-build",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "vitepress": "1.6.4"
+  },
+  "overrides": {
+    "vite": "6.4.6"
+  }
+}

@@ -1,0 +1,281 @@
+# Reusable workflow: pages-site
+#
+# Builds a project's GitHub Pages site and deploys it: the caller's static site (copied from
+# `site_dir` as-is, or built by `site_build_command`), hashira's shared site kit in `_kit/`
+# (site-kit) and, unless `docs` is false, the VitePress docs from docs/ and .github/pages.json in
+# `docs/` (docs-build). The folder is uploaded with pages-upload and deployed with pages-deploy.
+# See docs/flows/pages.md.
+#
+# ## Jobs
+#
+#   check  -> refuses any ref but main, before the approval and before any install.
+#   gate   -> waits for the `production` Environment's approval; skipped when `released` is true
+#             (the caller's release job already passed that approval).
+#   build  -> refuses any ref but main again, builds the site, adds the kit and the docs, uploads.
+#   deploy -> deploys; for a released run, only while the commit holds the highest vX.Y.Z tag.
+#
+# Why `check` is its own job: an Environment's approval is asked for before any step of the job
+# that names it runs, so a step in `gate` could only refuse a wrong ref after someone approved
+# it. `check` holds no grant and runs no install; `gate` needs it, so a run on another branch
+# fails there and no approval is ever requested.
+#
+# ## Trust boundary
+#
+# `site_build_command` and `docs_pre_build_command` are raw-shell sinks (D10d): TRUSTED input
+# from the caller's workflow file. They run only in `build`, which holds `contents: read` and no
+# secrets, never in `deploy`. Every input reaches a shell through `env:`, quoted.
+#
+# ## Library self-checkout
+#
+# `build` checks skathio/hashira out into `.hashira/` at `job.workflow_sha`, the commit this file
+# was called at (never `github.sha` or `github.workflow_sha`, which name the caller's commit),
+# and uses site-kit, docs-build and pages-upload from there, as the CI workflows do.
+name: pages-site
+
+on:
+  workflow_call:
+    inputs:
+      released:
+        description: "true when the caller's release job already passed the production approval: skips `gate`, and `deploy` then deploys only while this commit holds the highest vX.Y.Z tag. Default false."
+        type: boolean
+        default: false
+      site_dir:
+        description: "Repo-relative folder holding the static site. Default 'site'."
+        type: string
+        default: site
+      site_build_command:
+        description: "Shell command that builds the site into `site_output`, run from the repo root. Default '' (copy `site_dir` to `site_output` as-is). Trusted input (raw-shell sink per D10d; do NOT pass values derived from PR titles, issue bodies, branch names, or other externally controlled context)."
+        type: string
+        default: ''
+      site_output:
+        description: "Repo-relative folder the built site is in, which gets `_kit/`, `docs/` and the upload. Default '' (the same as `site_dir`)."
+        type: string
+        default: ''
+      docs:
+        description: "Build the docs from docs/ and .github/pages.json into `<site_output>/docs`. Default true."
+        type: boolean
+        default: true
+      docs_pre_build_command:
+        description: "Shell command docs-build runs before VitePress, with DOCS_STAGE set to the staged docs folder. Default '' (none). Trusted input (raw-shell sink per D10d; do NOT pass values derived from PR titles, issue bodies, branch names, or other externally controlled context)."
+        type: string
+        default: ''
+      node_version:
+        description: "Node version for setup-node. Default '24' (VitePress 1.6 needs a current Node)."
+        type: string
+        default: '24'
+      dotnet_version:
+        description: ".NET SDK version for setup-dotnet, for a site or docs build that needs it. Default '' (no .NET)."
+        type: string
+        default: ''
+
+permissions: {}
+
+jobs:
+  # Runs before the approval: a run on another branch would publish that branch's site,
+  # unreleased, so it fails here and `gate` never asks for an approval.
+  check:
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Refuse any ref but main
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          if [ "${REF}" != "refs/heads/main" ]; then
+            echo "::error::pages-site: deploys main only; this run is on ${REF}."
+            exit 1
+          fi
+
+  # One release, one approval: a hand run waits here for the `production` Environment's owner
+  # approval. A release run (`released: true`) skips it.
+  gate:
+    needs: check
+    if: ${{ !inputs.released }}
+    runs-on: ubuntu-latest
+    environment: production
+    permissions: {}
+    steps:
+      - name: Owner approval
+        run: echo "Approved in the production environment."
+
+  build:
+    needs: gate
+    # After the approval at `gate`, or with `gate` skipped on a release run. A release run on
+    # another branch reaches this job too, and its own ref check refuses it.
+    if: ${{ !cancelled() && (needs.gate.result == 'success' || (needs.gate.result == 'skipped' && inputs.released)) }}
+    runs-on: ubuntu-latest
+    # Read only: this job runs the caller's build commands and npm packages. pages-upload does not
+    # need the OIDC token or Pages write (upload-pages-artifact is a tar plus
+    # actions/upload-artifact, which uses the runner's own token); only `deploy` holds those.
+    permissions:
+      contents: read
+    steps:
+      # A release run skips `check`'s guard through `gate`, so refuse a wrong ref here too, before
+      # any checkout, install or build command.
+      - name: Refuse any ref but main
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          if [ "${REF}" != "refs/heads/main" ]; then
+            echo "::error::pages-site: deploys main only; this run is on ${REF}."
+            exit 1
+          fi
+      - name: Resolve hashira's own commit
+        id: self
+        env:
+          # The called workflow file's commit, never the caller's.
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
+        run: |
+          if [[ ! "${WORKFLOW_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::pages-site: job.workflow_sha is '${WORKFLOW_SHA}', not a 40-character commit SHA, so hashira's composite actions cannot be checked out at the commit this workflow was called at (GitHub Enterprise Server does not provide job.workflow_sha)."
+            exit 1
+          fi
+          echo "sha=${WORKFLOW_SHA}" >> "${GITHUB_OUTPUT}"
+      # The caller's tree. No persisted credential, since the caller's build commands run in
+      # this job.
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Checkout hashira library at its own commit
+        # actions/checkout v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: skathio/hashira
+          ref: ${{ steps.self.outputs.sha }}
+          path: .hashira
+          # Only .github/: the actions need nothing else.
+          sparse-checkout: .github
+          persist-credentials: false
+      - name: Confirm the checked-out library commit
+        env:
+          EXPECTED_SHA: ${{ steps.self.outputs.sha }}
+        run: |
+          actual="$(git -C .hashira rev-parse HEAD)"
+          if [ "${actual}" != "${EXPECTED_SHA}" ]; then
+            echo "::error::pages-site: .hashira is at ${actual}, expected ${EXPECTED_SHA}."
+            exit 1
+          fi
+      # actions/setup-node v4.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: ${{ inputs.node_version }}
+      - if: ${{ inputs.dotnet_version != '' }}
+        # actions/setup-dotnet v4.1.0
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73
+        with:
+          dotnet-version: ${{ inputs.dotnet_version }}
+      - name: Build or copy the site
+        id: site
+        env:
+          SITE_DIR: ${{ inputs.site_dir }}
+          SITE_OUTPUT: ${{ inputs.site_output }}
+          # Raw-shell sink, trusted input (see the header).
+          SITE_BUILD_COMMAND: ${{ inputs.site_build_command }}
+        run: |
+          # No -e: each failure below is caught and named.
+          set +e -uo pipefail
+          fail() { echo "::error::pages-site: $1" >&2; exit 1; }
+          checkPath() {
+            case "$2" in
+              ''|/*|..|../*|*/..|*/../*) fail "$1 '$2' must be a repo-relative folder without '..' segments or a leading '/'." ;;
+            esac
+          }
+          out="${SITE_OUTPUT:-${SITE_DIR}}"
+          out="${out%/}"
+          checkPath site_dir "${SITE_DIR}"
+          checkPath site_output "${out}"
+          if [ -n "${SITE_BUILD_COMMAND}" ]; then
+            echo "pages-site: running site_build_command"
+            bash -eo pipefail -c "${SITE_BUILD_COMMAND}"
+            rc=$?
+            [ "${rc}" -eq 0 ] || fail "site_build_command exited with code ${rc}."
+          else
+            [ -d "${SITE_DIR}" ] || fail "site_dir '${SITE_DIR}' does not exist or is not a folder."
+            if [ "${out}" != "${SITE_DIR%/}" ]; then
+              case "${out}/" in
+                "${SITE_DIR%/}/"*) fail "site_output '${out}' is inside site_dir '${SITE_DIR}'." ;;
+              esac
+              { [ -e "${out}" ] || [ -L "${out}" ]; } && fail "site_output '${out}' already exists; the copy of site_dir never writes over it."
+              if ! mkdir -p "${out}" || ! cp -R "${SITE_DIR%/}/." "${out}/"; then
+                fail "could not copy '${SITE_DIR}' to '${out}'."
+              fi
+            fi
+          fi
+          [ -d "${out}" ] || fail "site_output '${out}' does not exist or is not a folder after the site build."
+          # The kit and the docs each get a folder of their own; never write over the site's.
+          for reserved in "${out}/docs" "${out}/_kit"; do
+            if [ -e "${reserved}" ] || [ -L "${reserved}" ]; then
+              fail "'${reserved}' already exists after the site build; it is reserved for the site kit and the docs."
+            fi
+          done
+          echo "output=${out}" >> "${GITHUB_OUTPUT}"
+      - name: Add the site kit
+        uses: ./.hashira/.github/actions/site-kit
+        with:
+          dest: ${{ steps.site.outputs.output }}
+      - name: Build the docs
+        if: ${{ inputs.docs }}
+        uses: ./.hashira/.github/actions/docs-build
+        with:
+          pre_build_command: ${{ inputs.docs_pre_build_command }}
+          output_dir: ${{ steps.site.outputs.output }}/docs
+      - name: Upload the Pages artifact
+        uses: ./.hashira/.github/actions/pages-upload
+        with:
+          path: ${{ steps.site.outputs.output }}
+
+  deploy:
+    needs: build
+    # One Pages deploy at a time. On this job only, so a run waiting at `gate` never holds the
+    # queue for the others.
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    # `!cancelled()` because a skipped `gate` upstream would otherwise skip this job too; unlike
+    # `always()` it still stops on a cancelled run.
+    if: ${{ !cancelled() && needs.build.result == 'success' }}
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    permissions:
+      pages: write      # deploy-pages
+      id-token: write   # deploy-pages authenticates via OIDC
+    steps:
+      # A release's deploy goes out only while its commit holds the highest vX.Y.Z tag. The check
+      # is here, not in `build`: "Re-run failed jobs" after a failed deploy re-runs only this job,
+      # and would otherwise put an older release's site over a newer one with no approval. It reads
+      # the tags with an unauthenticated ls-remote, so this job gains no grant. That needs a public
+      # repo: in a private one ls-remote fails and so does the deploy (docs/flows/pages.md).
+      - name: Refuse unless this commit holds the latest release
+        if: ${{ inputs.released }}
+        env:
+          SHA: ${{ github.sha }}
+          REMOTE: ${{ github.server_url }}/${{ github.repository }}.git
+        run: |
+          set -euo pipefail
+          if ! refs="$(git ls-remote --tags "${REMOTE}" 'refs/tags/v*')"; then
+            echo "::error::pages-site: could not read this repo's tags; released: true needs a public repo."
+            exit 1
+          fi
+          # One "<tag> <commit>" line per vX.Y.Z, peeled to the commit for an annotated tag.
+          latest="$(awk '
+            $2 ~ /^refs\/tags\/v[0-9]+\.[0-9]+\.[0-9]+(\^\{\})?$/ {
+              n = $2; sub(/^refs\/tags\//, "", n)
+              if (n ~ /\^\{\}$/) { sub(/\^\{\}$/, "", n); peeled[n] = $1 } else { direct[n] = $1 }
+            }
+            END { for (n in direct) print n, ((n in peeled) ? peeled[n] : direct[n]) }
+          ' <<< "${refs}" | sort -V -k1,1 | tail -n 1)"
+          if [ -z "${latest}" ]; then
+            echo "::error::no vX.Y.Z release tag found; refusing to deploy a release site."
+            exit 1
+          fi
+          if [ "${latest#* }" != "${SHA}" ]; then
+            echo "::error::the latest release ${latest% *} is on ${latest#* }, not ${SHA}; this run is stale."
+            exit 1
+          fi
+      # This job holds no contents grant, so it does not check hashira out; pages-deploy is a thin
+      # wrapper over actions/deploy-pages, pinned to the v3.0.0 release commit as site.yml does.
+      - id: deploy
+        uses: skathio/hashira/.github/actions/pages-deploy@2c8d52526cbce593a445f7572b599813503160f5 # v3.0.0

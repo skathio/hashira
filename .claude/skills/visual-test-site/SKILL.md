@@ -1,12 +1,14 @@
 ---
 name: visual-test-site
-description: Build hashira's Pages site (the site/ landing page plus the VitePress docs), serve it locally and screenshot the landing page and the docs pages at phone and desktop widths in light and dark mode. Use for every change that affects what renders, including site/**, docs-site/**, docs/**, .github/homepage.json and site/mark.svg, before you open or update the PR.
+description: Build hashira's Pages site (the site/ landing page plus the VitePress docs), serve it locally and screenshot the landing page and the docs pages at phone and desktop widths in light and dark mode. Use for every change that affects what renders, including site/**, docs/**, .github/pages.json, the site-kit and docs-build actions, .github/homepage.json and site/mark.svg, before you open or update the PR.
 ---
 
 # Visual test for the landing page and the docs
 
 The Pages site is `site/` (static HTML, served at `/hashira/`) plus the VitePress docs built from `docs/` (served at
-`/hashira/docs/`). `docs-site/build.sh` assembles both into `artifacts/pages`, the folder `site.yml` deploys. The repo
+`/hashira/docs/`), with the site kit (`_kit/tokens.css`, `_kit/theme.js`, `_kit/site-nav.js`) next to the landing.
+`node tests/pages-site/build-site.js` builds all of it the way `site.yml` does (pages-site.yml's site step, then the
+`site-kit` and `docs-build` actions) and writes it to `artifacts/pages`, the folder `site.yml` deploys. The repo
 has no browser tooling of its own, so this skill uses the Playwright CLI through `npx` with a pinned version, and adds
 nothing to the repo. If the Playwright MCP tools (`mcp__playwright__*`) are available, you can use them instead. Use
 the same widths and schemes.
@@ -14,9 +16,11 @@ the same widths and schemes.
 ## 1. Build and serve it
 
 ```sh
-(cd docs-site && npm ci)   # once, or after docs-site/package-lock.json changes
-docs-site/build.sh         # writes artifacts/pages; a dead link fails the build
+node tests/pages-site/build-site.js   # writes artifacts/pages; a dead link fails the build
 ```
+
+The docs build installs VitePress from `docs-build`'s lockfile into a temporary folder, so the first run needs network
+access.
 
 The docs use absolute `/hashira/docs/...` URLs, so serve the folder under `/hashira/` through a link in your
 scratchpad, never inside the repo:
@@ -50,16 +54,17 @@ done
 
 If Chromium is missing, run `npx -y playwright@1.61.1 install chromium` once.
 
-`--color-scheme` drives the default "auto" theme through `prefers-color-scheme`. The manual toggles (`theme.js` and
-`data-theme` on `<html>` on the landing page, the VitePress appearance switch in the docs) share the `theme`
-localStorage key. If your change touches `theme.js`, the `:root[data-theme=...]` blocks or the docs' theme bridge, also
+`--color-scheme` drives the default "auto" theme through `prefers-color-scheme`. The manual toggles (`_kit/theme.js`
+and `data-theme` on `<html>` on the landing page, through the `<site-nav>` toggle, the VitePress appearance switch in the docs) share the `theme`
+localStorage key. If your change touches the kit's `theme.js` or `tokens.css`, or the docs' theme bridge, also
 click the toggle in the Playwright MCP browser, screenshot each state, and open the other page to check it opens in the
 same theme with no flash.
 
 ## 3. Inspect: open every PNG with the Read tool and check
 
 - At 390px, nothing scrolls sideways. Only `<pre>` and code blocks, and wide tables in the docs, may scroll inside
-  themselves. Text does not overflow, cards stack in one column, and the landing page's header shows its Docs link.
+  themselves. Text does not overflow, cards stack in one column, and the landing page's `<site-nav>` header shows its
+  Docs link and the theme toggle.
 - At 1440px, the landing page's hero has the text on the left and the emblem on the right, the cards are in 3 columns,
   and the stats are in 4. The docs show the sidebar on the left (Getting started first) and the outline on the right.
 - Text and the accent green are readable in both schemes. In light mode, check `.t` (#0369a1) and the muted text.
