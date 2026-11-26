@@ -197,7 +197,9 @@ jobs:
                 "${SITE_DIR%/}/"*) fail "site_output '${out}' is inside site_dir '${SITE_DIR}'." ;;
               esac
               { [ -e "${out}" ] || [ -L "${out}" ]; } && fail "site_output '${out}' already exists; the copy of site_dir never writes over it."
-              mkdir -p "${out}" && cp -R "${SITE_DIR%/}/." "${out}/" || fail "could not copy '${SITE_DIR}' to '${out}'."
+              if ! mkdir -p "${out}" || ! cp -R "${SITE_DIR%/}/." "${out}/"; then
+                fail "could not copy '${SITE_DIR}' to '${out}'."
+              fi
             fi
           fi
           [ -d "${out}" ] || fail "site_output '${out}' does not exist or is not a folder after the site build."
