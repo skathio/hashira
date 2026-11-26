@@ -1,3 +1,6 @@
+// The landing page's theme toggle before it moved to site-kit. The landing now loads
+// _kit/theme.js, which keeps the same `theme` localStorage key; this file stays so that
+// /hashira/theme.js keeps working for any page or cache that still loads it.
 // Theme toggle: auto (follow the system), light, dark. The choice is a per-visitor
 // convenience kept in localStorage; the page renders correctly without it.
 (function () {

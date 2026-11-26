@@ -5,8 +5,8 @@ Contract tests for the release workflow and its site and homepage wiring.
 - release.yml runs only by workflow_dispatch with a `bump` choice of patch,
   minor or major, and refuses any ref but main.
 - A read-only checks job, which uses hashira's own version-resolver and reads
-  the _self-ci.yml runs, and a read-only docs build with docs-site/build.sh
-  both run before the one job that pushes.
+  the _self-ci.yml runs, and a read-only docs build with hashira's docs-build
+  action both run before the one job that pushes.
 - The pushing job declares the `production` environment and is the only job
   that mints the App token (actions/create-github-app-token at the pinned
   SHA, RELEASE_APP_CLIENT_ID and RELEASE_APP_PRIVATE_KEY, scoped to skathio/hashira)
@@ -15,9 +15,12 @@ Contract tests for the release workflow and its site and homepage wiring.
   generated notes.
 - After the push, the run deploys through site.yml and then pings the org
   homepage through homepage.yml, whose failed ping still only warns.
-- site.yml has no push trigger, is callable and runnable by hand after the
-  production approval, builds with contents: read only, and keeps hashira's
-  pages-upload and pages-deploy pinned to the v3.0.0 commit.
+- site.yml has no push trigger, is callable and runnable by hand, and deploys
+  through one call of pages-site.yml from this repo, passing `released` on and
+  refusing `released: true` on a hand run. pages-site.yml waits for the
+  production approval unless released, builds with contents: read only (the
+  site kit and docs-build included), and keeps pages-deploy pinned to the
+  v3.0.0 commit.
 - Every action is pinned to a full SHA with a version comment, permissions
   are deny-all at the top and each job grant carries a comment.
 - tests/shape-lints/release-lint.py passes, its --self-test passes, it fails
@@ -43,6 +46,8 @@ import yaml
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 RELEASE = ".github/workflows/release.yml"
 SITE = ".github/workflows/site.yml"
+PAGES_SITE = ".github/workflows/pages-site.yml"
+DOCS_BUILD = "./.github/actions/docs-build"
 HOMEPAGE = ".github/workflows/homepage.yml"
 SELF_CI = ".github/workflows/_self-ci.yml"
 LINT = "tests/shape-lints/release-lint.py"
@@ -192,7 +197,7 @@ class ReleaseWorkflow(unittest.TestCase):
         self.assertIn("tests/release/lib/release", self.text)
 
     def test_docs_build_is_read_only_and_before_the_push(self):
-        docs = jobs_where(self.jobs, lambda job: runs(job, "docs-site/build.sh"))
+        docs = jobs_where(self.jobs, lambda job: any(str(s.get("uses", "")) == DOCS_BUILD for s in steps(job)))
         self.assertEqual(len(docs), 1, "one job builds the docs")
         self.assertEqual(self.jobs[docs[0]].get("permissions"), {"contents": "read"})
         self.assertIsNone(env_name(self.jobs[docs[0]]))
@@ -232,9 +237,9 @@ class SiteWorkflow(unittest.TestCase):
         cls.doc = load(SITE)
         cls.jobs = cls.doc.get("jobs") or {}
 
-    def build_job(self):
-        names = jobs_where(self.jobs, lambda job: uses_any(job, ".github/actions/pages-upload"))
-        self.assertEqual(len(names), 1)
+    def call_job(self):
+        names = jobs_where(self.jobs, lambda job: str(job.get("uses", "")) == "./" + PAGES_SITE)
+        self.assertEqual(len(names), 1, "one job of site.yml calls pages-site.yml from this repo")
         return names[0]
 
     def test_deploys_only_when_called_or_run_by_hand(self):
@@ -243,19 +248,47 @@ class SiteWorkflow(unittest.TestCase):
     def test_permissions_deny_all_at_the_top(self):
         self.assertIn(self.doc.get("permissions"), ({}, {"contents": "read"}))
 
+    def test_passes_released_on_and_grants_only_what_pages_site_needs(self):
+        job = self.jobs[self.call_job()]
+        self.assertEqual(str((job.get("with") or {}).get("released")), "${{ inputs.released }}")
+        self.assertEqual(job.get("permissions"), {"contents": "read", "pages": "write", "id-token": "write"})
+
+    def test_a_hand_run_cannot_skip_the_approval(self):
+        # released: true skips pages-site's gate, so only release.yml may pass it.
+        job = self.jobs[self.call_job()]
+        guards = [n for n in ancestors(self.jobs, self.call_job())
+                  if "release.yml@" in dump(self.jobs[n]) and "inputs.released" in dump(self.jobs[n])]
+        self.assertTrue(guards, "a job the call needs refuses released outside release.yml")
+        for name in guards:
+            self.assertEqual(self.jobs[name].get("permissions"), {})
+            self.assertIn("github.workflow_ref", dump(self.jobs[name]))
+        self.assertNotIn("secrets", job)
+
+
+class PagesSiteWorkflow(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.doc = load(PAGES_SITE)
+        cls.jobs = cls.doc.get("jobs") or {}
+
+    def build_job(self):
+        names = jobs_where(self.jobs, lambda job: uses_any(job, ".github/actions/pages-upload"))
+        self.assertEqual(len(names), 1)
+        return names[0]
+
     def test_build_job_holds_only_contents_read(self):
         self.assertEqual(self.jobs[self.build_job()].get("permissions"), {"contents": "read"})
 
-    def test_build_job_builds_docs_and_uploads_the_assembled_folder(self):
-        job = self.jobs[self.build_job()]
-        self.assertTrue(runs(job, "docs-site/build.sh"))
-        upload = next(s for s in steps(job) if ".github/actions/pages-upload" in str(s.get("uses", "")))
-        self.assertEqual(str((upload.get("with") or {}).get("path", "")).rstrip("/"), "artifacts/pages")
+    def test_build_job_adds_the_kit_and_the_docs_before_the_upload(self):
+        used = [str(s.get("uses", "")) for s in steps(self.jobs[self.build_job()])]
+        kit = next(i for i, u in enumerate(used) if u.endswith(".github/actions/site-kit"))
+        docs = next(i for i, u in enumerate(used) if u.endswith(".github/actions/docs-build"))
+        upload = next(i for i, u in enumerate(used) if u.endswith(".github/actions/pages-upload"))
+        self.assertLess(max(kit, docs), upload)
 
-    def test_hashira_actions_stay_pinned_to_v300(self):
+    def test_pages_deploy_stays_pinned_to_v300(self):
         used = [str(s.get("uses", "")) for job in self.jobs.values() for s in steps(job)]
-        for action in ("pages-upload", "pages-deploy"):
-            self.assertIn(f"skathio/hashira/.github/actions/{action}@{V300}", used)
+        self.assertIn(f"skathio/hashira/.github/actions/pages-deploy@{V300}", used)
 
     def test_hand_run_waits_for_production_and_release_call_skips_it(self):
         gates = jobs_where(self.jobs, lambda job: env_name(job) == "production")
@@ -359,14 +392,14 @@ def grant_lines(lines):
 
 
 class Conventions(unittest.TestCase):
-    FILES = (RELEASE, SITE, HOMEPAGE)
+    FILES = (RELEASE, SITE, PAGES_SITE, HOMEPAGE)
 
     def test_every_action_pinned_by_sha_with_a_version(self):
         for rel in self.FILES:
             self.assertEqual(list(unpinned_uses(rel)), [])
 
     def test_every_job_grant_has_a_comment(self):
-        for rel in (RELEASE, SITE):
+        for rel in (RELEASE, SITE, PAGES_SITE):
             lines = read(rel).splitlines()
             bare = [f"{rel}:{i + 1}" for i in grant_lines(lines) if not comment_covers(lines, i)]
             self.assertEqual(bare, [], "each permission grant says why in a comment")

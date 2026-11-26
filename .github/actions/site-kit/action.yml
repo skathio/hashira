@@ -1,0 +1,60 @@
+# Composite action: site-kit
+#
+# Copies the shared site kit (kit/tokens.css, kit/theme.js, kit/site-nav.js)
+# into `<dest>/_kit/` of a built static site, so every project page loads the
+# same colour, type and spacing tokens, the same theme toggle and the same
+# `<site-nav>` header from its own origin, with no runtime dependency on
+# another site.
+#
+# ## Version
+#
+# The kit is copied from this action's own folder (`github.action_path`), so
+# it is the kit at the hashira commit the caller's `uses:` ref resolved to:
+# `@v3` gives the current v3 kit, a 40-character SHA gives that commit's kit
+# byte for byte. Nothing is fetched at build or page-load time.
+#
+# ## Trust boundary
+#
+# `dest` is bound via `env:` and dereferenced with quoting. It must be a
+# workspace-relative directory without `..` segments or a leading `/`, that
+# already exists and has no `_kit` in it yet (a site's own `_kit` is never
+# overwritten). Treat it as TRUSTED caller input all the same.
+name: site-kit
+description: Copy the shared site kit (tokens.css, theme.js and the <site-nav> element) into <dest>/_kit/.
+
+inputs:
+  dest:
+    description: "Workspace-relative directory of the built site. The kit lands in `<dest>/_kit/`. Trusted input — see `## Trust boundary`."
+    required: true
+
+outputs:
+  kit_path:
+    description: "The directory the kit was copied to (`<dest>/_kit`)."
+    value: ${{ steps.copy.outputs.kit_path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Copy the kit into <dest>/_kit
+      id: copy
+      shell: bash
+      env:
+        SK_DEST: ${{ inputs.dest }}
+        SK_KIT: ${{ github.action_path }}/kit
+      run: |
+        set -euo pipefail
+        fail() { echo "::error::site-kit: $1" >&2; exit 1; }
+        [ -n "${SK_DEST}" ] || fail "dest is required."
+        case "${SK_DEST}" in /*) fail "dest must be workspace-relative, without a leading '/' (got: '${SK_DEST}')." ;; esac
+        case "/${SK_DEST}/" in */../*) fail "dest must not contain '..' segments (got: '${SK_DEST}')." ;; esac
+        [ -d "${SK_DEST}" ] || fail "dest '${SK_DEST}' does not exist or is not a directory (cwd: $(pwd))."
+        # A symlinked dest could still point outside the workspace.
+        real="$(cd "${SK_DEST}" && pwd -P)"
+        ws="$(cd "${GITHUB_WORKSPACE:-.}" && pwd -P)"
+        case "${real}/" in "${ws}"/*) ;; *) fail "dest '${SK_DEST}' resolves outside the workspace (${real})." ;; esac
+        out="${SK_DEST%/}/_kit"
+        { [ -e "${out}" ] || [ -L "${out}" ]; } && fail "'${out}' already exists; site-kit never overwrites a site's own _kit."
+        mkdir "${out}"
+        cp "${SK_KIT}/tokens.css" "${SK_KIT}/theme.js" "${SK_KIT}/site-nav.js" "${out}/"
+        echo "kit_path=${out}" >> "${GITHUB_OUTPUT}"
+        echo "site-kit: copied tokens.css, theme.js and site-nav.js to '${out}'" >> "${GITHUB_STEP_SUMMARY}"

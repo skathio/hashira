@@ -1,0 +1,25 @@
+{
+  "name": "hashira",
+  "description": "Guides for hashira: reusable GitHub Actions workflows and composite actions for npm, NuGet and static-site CI/CD.",
+  "base": "/hashira/docs/",
+  "home_page": "getting-started.md",
+  "sidebar": [
+    { "file": "getting-started.md", "label": "Getting started" },
+    { "file": "usage.md", "label": "Usage and pin policy" },
+    { "file": "flows/npm.md", "label": "npm flow" },
+    { "file": "flows/nuget.md", "label": "NuGet flow" },
+    { "file": "flows/static-webapp.md", "label": "Static site flow" },
+    { "file": "catalog.md", "label": "Catalog" },
+    { "file": "migration-v2-to-v3.md", "label": "Migrating from v2 to v3" },
+    { "file": "flows/pages.md", "label": "Pages site and docs" }
+  ],
+  "unpublished": ["contributing.md"],
+  "nav": [
+    { "label": "Flows", "href": "#flows" },
+    { "label": "Use it", "href": "#use" },
+    { "label": "Security", "href": "#security" }
+  ],
+  "home_link": { "label": "← skathio", "href": "https://skathio.github.io/" },
+  "accent": "#1e7d69",
+  "logo": "site/mark.svg"
+}

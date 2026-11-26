@@ -1,0 +1,6 @@
+{
+  "name": "hashira-tests-docs-build",
+  "private": true,
+  "type": "commonjs",
+  "main": "run-tests.js"
+}

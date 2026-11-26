@@ -20,9 +20,10 @@ updates:
     directory: "/.github/actions/quality-gate"
     schedule:
       interval: "weekly"
-  # The docs site installs VitePress with `npm ci` from docs-site/package-lock.json.
-  # This keeps that pin, and the vite override, fresh.
+  # The docs-build action installs VitePress with `npm ci --ignore-scripts` from
+  # its own vitepress/package-lock.json. This keeps that pin, and the vite
+  # override, fresh.
   - package-ecosystem: "npm"
-    directory: "/docs-site"
+    directory: "/.github/actions/docs-build/vitepress"
     schedule:
       interval: "weekly"

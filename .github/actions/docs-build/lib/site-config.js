@@ -1,0 +1,163 @@
+// What the VitePress config needs from pages.json and the stage, after pre_build_command ran:
+// the docs index rewrite, the sidebar, the header items and where a folder link goes. Kept
+// apart from config.mts so it runs and is tested without a build.
+
+'use strict';
+
+const fs = require('node:fs');
+const path = require('node:path');
+
+const { h1Label } = require('./h1-label');
+const { escapeHtml, isUnpublished } = require('./links');
+
+const INDEX = 'index.md';
+const posix = path.posix;
+
+const fail = (msg) => {
+  throw new Error(`docs-build: ${msg}`);
+};
+
+// The published Markdown pages in the stage, as paths relative to it, in path order. public/
+// holds files served as they are, not pages.
+function stagedPages(stage, unpublished) {
+  const pages = [];
+  const walk = (dir, rel) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const sub = `${rel}${entry.name}`;
+      if (entry.name.startsWith('.') || entry.name === 'node_modules' || sub === 'public') continue;
+      if (entry.isDirectory()) walk(path.join(dir, entry.name), `${sub}/`);
+      else if (entry.name.endsWith('.md')) pages.push(sub);
+    }
+  };
+  walk(stage, '');
+  return pages.filter((rel) => !isUnpublished(rel, unpublished)).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+}
+
+// The landing page: the folder above the docs base (/site/ for /site/docs/).
+function landingOf(base) {
+  const trimmed = base.replace(/\/$/, '');
+  return trimmed === '' ? '/' : `${posix.dirname(trimmed).replace(/\/$/, '')}/`;
+}
+
+// A header href resolved against the landing, as <site-nav> on the landing reads it. A URL
+// with a scheme stays as written (pages.json only allows http and https), and so does a
+// scheme-relative //host/path, which names another host on the landing too.
+function landingHref(href, landing) {
+  if (/^(?:[a-z][a-z\d+.-]*:|\/\/)/i.test(href)) return href;
+  const url = new URL(href, `https://landing.invalid${landing}`);
+  return `${url.pathname}${url.search}${url.hash}`;
+}
+
+// The page that /<base>/ opens: home_page, unless it is unpublished. A page already called
+// index.md needs no rewrite; any other with an index.md beside it would be written over.
+function indexRewrite(config, pages) {
+  const home = config.home_page;
+  if (home === INDEX || !pages.includes(home)) return {};
+  if (pages.includes(INDEX)) fail(`${INDEX} in the docs would collide with ${home}, published as the docs index: rename ${INDEX} or set home_page to ${INDEX}.`);
+  return { [home]: INDEX };
+}
+
+const pageLink = (md, rewrites) => `/${(Object.hasOwn(rewrites, md) ? rewrites[md] : md).replace(/(index)?\.md$/, '')}`;
+
+// The sidebar entries of pages.json in order, then every other published page by path under
+// its first H1. Labels are HTML-escaped: VitePress renders sidebar text as HTML.
+function sidebarItems(config, pages, stage, rewrites) {
+  const missing = config.sidebar.map((e) => e.file).filter((f) => !pages.includes(f));
+  if (missing.length) fail(`sidebar files missing from the docs after pre_build_command: ${missing.join(', ')}`);
+  const listed = new Set(config.sidebar.map((e) => e.file));
+  const rest = pages.filter((f) => !listed.has(f)).map((f) => ({ file: f, html: h1Label(fs.readFileSync(path.join(stage, f), 'utf8'), escapeHtml(f)) }));
+  return [...config.sidebar.map((e) => ({ file: e.file, html: escapeHtml(e.label) })), ...rest].map((e) => ({ text: e.html, link: pageLink(e.file, rewrites) }));
+}
+
+// The header, in <site-nav>'s order: the nav links, Docs, then home_link (the brand is
+// VitePress's logo link and the theme toggle follows the menu). target _self keeps each
+// landing link out of VitePress's router, and the theme's RawLink keeps its href as built.
+function navItems(config, landing) {
+  const toLanding = (e) => ({ text: escapeHtml(e.label), link: landingHref(e.href, landing), target: '_self' });
+  return [...config.nav.map(toLanding), { text: 'Docs', link: '/' }, ...(config.home_link ? [toLanding(config.home_link)] : [])];
+}
+
+// A link to a folder of docs/ with no index page of its own opens that folder on GitHub.
+function folderCheck(docs, stage) {
+  const isDir = (p) => fs.existsSync(p) && fs.statSync(p).isDirectory();
+  return (repoPath) => {
+    const sub = repoPath.slice('docs/'.length);
+    return (isDir(path.join(docs, sub)) || isDir(path.join(stage, sub))) && !fs.existsSync(path.join(stage, sub, INDEX));
+  };
+}
+
+// docs/ holds Markdown pages and static files. VitePress runs code it finds beside the pages
+// (a `[id].paths.js` for a `[id].md` dynamic route, and whatever such code imports), so any
+// other kind of file, and any name with a bracket, fails the build before VitePress sees it.
+const STATIC_FILE = /\.(?:md|png|jpe?g|gif|webp|avif|svg|ico|bmp|woff2?|ttf|otf|pdf|txt|csv)$/i;
+
+function checkStagedFiles(files, prefix) {
+  for (const rel of files) {
+    if (/[[\]]/.test(rel)) fail(`${prefix}${rel}: a [ or ] in a name makes a VitePress dynamic route, which runs code at build time.`);
+    // VitePress builds a .md under public/ as a page, outside the page checks here.
+    if (/^public\//.test(rel) && /\.md$/i.test(rel)) fail(`${prefix}${rel}: a Markdown file under public/ would be built as a page; public/ is for files served as they are.`);
+    if (!STATIC_FILE.test(rel)) fail(`${prefix}${rel}: only Markdown pages and static files (images, fonts, PDF, text, CSV) are published.`);
+  }
+}
+
+// Every file in the stage, as paths relative to it.
+function allFiles(stage) {
+  const files = [];
+  const walk = (dir, rel) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (entry.isDirectory()) walk(path.join(dir, entry.name), `${rel}${entry.name}/`);
+      else files.push(`${rel}${entry.name}`);
+    }
+  };
+  walk(stage, '');
+  return files;
+}
+
+// VitePress replaces `<!--@include: path-->` with any file the runner can read, outside the
+// docs too, before markdown-it sees the page. GitHub hides the comment, so no page may hold one.
+const INCLUDE = /<!--\s*@include:/;
+
+function refuseIncludes(stage, pages) {
+  for (const rel of pages) {
+    if (INCLUDE.test(fs.readFileSync(path.join(stage, rel), 'utf8'))) {
+      fail(`${rel}: <!--@include--> is not supported; it would publish a file from outside the docs.`);
+    }
+  }
+}
+
+// gray-matter runs front matter that opens with `---js` (or `---javascript`) as code, and
+// reads other languages with engines of their own. Only YAML is read: a page whose opening
+// `---` line names another language fails, before VitePress parses it. The config's engines
+// throw too, so a page this check missed still fails.
+const FRONT_MATTER_LANG = /^\uFEFF?---[ \t]*([^\s-][^\r\n]*?)[ \t]*(?:\r?\n|$)/;
+
+function refuseFrontMatterCode(dir, pages, prefix) {
+  for (const rel of pages) {
+    const lang = fs.readFileSync(path.join(dir, rel), 'utf8').match(FRONT_MATTER_LANG)?.[1];
+    if (lang && lang.toLowerCase() !== 'yaml') {
+      fail(`${prefix}${rel}: front matter in ${lang.slice(0, 20)} is not supported; only YAML front matter is read.`);
+    }
+  }
+}
+
+function siteConfig(build) {
+  const { config, stage } = build;
+  // pre_build_command may have added files since prepare.js checked the stage.
+  // prepare.js stages theme_css itself, the one CSS file served as it is.
+  const own = build.themeCss ? `public/${build.themeCss}` : null;
+  checkStagedFiles(allFiles(stage).filter((rel) => rel !== own && !isUnpublished(rel, config.unpublished)), '');
+  const pages = stagedPages(stage, config.unpublished);
+  refuseFrontMatterCode(stage, pages, '');
+  refuseIncludes(stage, pages);
+  const rewrites = indexRewrite(config, pages);
+  const landing = landingOf(config.base);
+  return {
+    rewrites,
+    landing,
+    sidebar: sidebarItems(config, pages, stage, rewrites),
+    nav: navItems(config, landing),
+    isFolder: folderCheck(build.docs, stage),
+  };
+}
+
+module.exports = { checkStagedFiles, refuseFrontMatterCode, siteConfig, isUnpublished, stagedPages, landingOf, landingHref, indexRewrite, sidebarItems, navItems, pageLink };
