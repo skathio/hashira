@@ -28,7 +28,7 @@ CI for an npm package: commitlint, tests with coverage, the scan suite, SoMi's q
 | `node_version` | no | `20` |
 | `test_command` | no | `npm test` |
 | `coverage_path` | no | `''` |
-| `scan_disable` | no | `codeql,actionlint` |
+| `scan_disable` | no | `codeql` |
 | `scan_fail_on_findings` | no | `true` |
 | `summary_comment` | no | `true` |
 | `bump` | no | `''` |
@@ -59,7 +59,7 @@ CI for a NuGet package: restore and build, tests with coverage, the scan suite, 
 | `project_path` | no | `''` |
 | `test_filter` | no | `''` |
 | `coverage_path` | no | `''` |
-| `scan_disable` | no | `codeql,actionlint` |
+| `scan_disable` | no | `codeql` |
 | `scan_fail_on_findings` | no | `true` |
 | `summary_comment` | no | `true` |
 | `bump` | no | `''` |
@@ -91,7 +91,7 @@ CI for a static site on GitHub Pages: build, tests with coverage, the scan suite
 | `output_dir` | no | `''` |
 | `test_command` | no | `npm test` |
 | `coverage_path` | no | `''` |
-| `scan_disable` | no | `codeql,actionlint` |
+| `scan_disable` | no | `codeql` |
 | `scan_fail_on_findings` | no | `true` |
 | `summary_comment` | no | `true` |
 | `quality_gate` | no | `true` |

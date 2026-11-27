@@ -68,7 +68,7 @@ jobs:
           --health-cmd "wget -q -O /dev/null http://127.0.0.1:4873/-/ping"
           --health-interval 2s --health-timeout 5s --health-retries 30
     steps:
-      # actions/checkout v4.2.2
+      # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - uses: skathio/hashira/.github/actions/npm-release@v3
         id: release

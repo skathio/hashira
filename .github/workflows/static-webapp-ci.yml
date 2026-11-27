@@ -187,10 +187,10 @@ on:
         type: string
         default: ""
       scan_disable:
-        description: "Comma-separated list of scans to skip (D10c). Default 'codeql,actionlint' — pass '' to enable all. Values: codeql,osv,gitleaks,dependency-review,actionlint."
+        description: "Comma-separated list of scans to skip (D10c). Default 'codeql' (actionlint runs by default since v3.4.0) — pass '' to enable all. Values: codeql,osv,gitleaks,dependency-review,actionlint."
         required: false
         type: string
-        default: "codeql,actionlint"
+        default: "codeql"
       scan_fail_on_findings:
         description: "Fail the scan-suite job, and so the ci / passed check, when a scanner reports findings or an error. Default true. false keeps every enabled scanner running and reported as fail in the job summary and the CI summary comment, without failing the job. A scanner turned off with scan_disable does not run at all."
         required: false
@@ -229,14 +229,14 @@ jobs:
       # The hashira commit every job checks out into .hashira/.
       library_sha: ${{ steps.library.outputs.sha }}
     steps:
-      # actions/checkout v4.2.2 — consumer's tree.
+      # actions/checkout v7.0.1 — consumer's tree.
       # persist-credentials:false per iter-4.2 review Minor #2 (defense-in-depth:
       # build_command / test_command run in these jobs and the default git
       # credential could be exfiltrated if the trust contract is violated).
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      # actions/setup-node v4.1.0
+      # actions/setup-node v7.1.0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: ${{ inputs.node_version }}
@@ -284,7 +284,7 @@ jobs:
           fi
           echo "sha=${WORKFLOW_SHA}" >> "${GITHUB_OUTPUT}"
       - name: Checkout hashira library at its own commit
-        # actions/checkout v4.2.2
+        # actions/checkout v7.0.1
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: skathio/hashira
@@ -322,20 +322,20 @@ jobs:
     permissions:
       contents: read # checkout of the caller's tree
     steps:
-      # actions/checkout v4.2.2 — consumer's tree.
+      # actions/checkout v7.0.1 — consumer's tree.
       # persist-credentials:false per iter-4.2 review Minor #2 (defense-in-depth:
       # build_command / test_command run in these jobs and the default git
       # credential could be exfiltrated if the trust contract is violated).
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      # actions/setup-node v4.1.0
+      # actions/setup-node v7.1.0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: ${{ inputs.node_version }}
       # Library self-checkout at this workflow's own commit (see header).
       - name: Checkout hashira library at its own commit
-        # actions/checkout v4.2.2
+        # actions/checkout v7.0.1
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: skathio/hashira
@@ -398,20 +398,20 @@ jobs:
       # instead of showing 0.0% as if it were a measurement.
       coverage_files: ${{ steps.coverage.outputs.files }}
     steps:
-      # actions/checkout v4.2.2 — consumer's tree.
+      # actions/checkout v7.0.1 — consumer's tree.
       # persist-credentials:false per iter-4.2 review Minor #2 (defense-in-depth:
       # build_command / test_command run in these jobs and the default git
       # credential could be exfiltrated if the trust contract is violated).
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      # actions/setup-node v4.1.0
+      # actions/setup-node v7.1.0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: ${{ inputs.node_version }}
       # Library self-checkout at this workflow's own commit (see header).
       - name: Checkout hashira library at its own commit
-        # actions/checkout v4.2.2
+        # actions/checkout v7.0.1
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: skathio/hashira
@@ -466,20 +466,20 @@ jobs:
       # scanner was skipped or failed.
       scan_summary: ${{ steps.scan.outputs.summary }}
     steps:
-      # actions/checkout v4.2.2 — consumer's tree.
+      # actions/checkout v7.0.1 — consumer's tree.
       # persist-credentials:false per iter-4.2 review Minor #2 (defense-in-depth:
       # build_command / test_command run in these jobs and the default git
       # credential could be exfiltrated if the trust contract is violated).
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      # actions/setup-node v4.1.0 — visibility-detect shim runs via `node`.
+      # actions/setup-node v7.1.0 — visibility-detect shim runs via `node`.
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: ${{ inputs.node_version }}
       # Library self-checkout at this workflow's own commit (see header).
       - name: Checkout hashira library at its own commit
-        # actions/checkout v4.2.2
+        # actions/checkout v7.0.1
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: skathio/hashira
@@ -516,19 +516,19 @@ jobs:
       result: ${{ steps.gate.outputs.result }}
       violations: ${{ steps.gate.outputs.violations }}
     steps:
-      # actions/checkout v4.2.2 — consumer's tree. Full history so the pull
+      # actions/checkout v7.0.1 — consumer's tree. Full history so the pull
       # request's base commit is present without a credentialed fetch.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
           persist-credentials: false
-      # actions/setup-node v4.1.0 — the gate installs and runs SoMi with npm/node.
+      # actions/setup-node v7.1.0 — the gate installs and runs SoMi with npm/node.
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: ${{ inputs.node_version }}
       # Library self-checkout at this workflow's own commit (see header).
       - name: Checkout hashira library at its own commit
-        # actions/checkout v4.2.2
+        # actions/checkout v7.0.1
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: skathio/hashira
@@ -585,7 +585,7 @@ jobs:
           fi
           echo "sha=${WORKFLOW_SHA}" >> "${GITHUB_OUTPUT}"
       - name: Checkout hashira library at its own commit
-        # actions/checkout v4.2.2
+        # actions/checkout v7.0.1
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: skathio/hashira

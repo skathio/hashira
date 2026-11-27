@@ -85,6 +85,12 @@ python3 tests/shape-lints/gate-lints.py --self-test
 python3 tests/catalog/shape-validate.py --self-test
 python3 tests/templates/identity-lint.py --self-test
 python3 tests/shape-lints/fixture-diff.py --self-test
+# Pin version comments: offline (no comment, or one SHA with two) and online (each comment names a tag on its SHA,
+# read from the GitHub API with GITHUB_TOKEN), and the lint's self-test
+python3 tests/shape-lints/pin-comments.py --offline
+GITHUB_TOKEN="$(gh auth token)" python3 tests/shape-lints/pin-comments.py
+python3 tests/shape-lints/pin-comments.py --self-test
+python3 tests/shape-lints/test_pin_comments_and_scan_default.py
 # The library self-checkout contract (unittest)
 python3 tests/library-self-sha/test_library_self_sha.py
 # The v3 caller templates and docs contract (unittest)
@@ -116,7 +122,7 @@ GitHub Actions.
 
 ## CI
 
-`_self-ci.yml` runs on every pull request and every push to main, 60 jobs: actionlint, the unit tests and shape
+`_self-ci.yml` runs on every pull request and every push to main, 63 jobs: actionlint, the unit tests and shape
 lints above, hashira's own site build and its tests (`hashira-site`), the release checks (`release-logic-unit-tests`,
 `release-lint`, `release-lint-self-test`), and smoke jobs that run the composite actions against fixtures
 (`tests/pages-fixture`, `tests/run-tests-dotnet`, `tests/npm-release/dry-run-fixture`). Every job must be green

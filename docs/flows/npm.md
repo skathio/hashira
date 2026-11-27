@@ -100,7 +100,7 @@ jobs:
       id-token: write # npm trusted publishing exchanges an OIDC token
       pull-requests: read # release notes read the merged pull requests
     steps:
-      # actions/checkout v4.2.2
+      # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - uses: skathio/hashira/.github/actions/npm-release@v3
         with:
@@ -172,7 +172,7 @@ field-by-field against the actual shipped YAML.
 | `node_version` | string | `"20"` | Node major to install via `actions/setup-node`. Trusted input. |
 | `test_command` | string | `"npm test"` | Shell command that runs the consumer's tests. **Trusted input**: it runs as raw shell, so do NOT pass values derived from PR titles, issue bodies, branch names, or other externally controlled context. |
 | `coverage_path` | string | `""` | Path to the coverage file the tests write. Empty uses the flow's standard path: `coverage/lcov.info` for npm and static-webapp, `coverage/cobertura.xml` for NuGet. Consumed by `coverage-report`, which runs inside the `test` job. Trusted input. |
-| `scan_disable` | string | `"codeql,actionlint"` | Comma-separated list of scans to skip (D10c). Pass `""` to enable everything. Values: `codeql`, `osv`, `gitleaks`, `dependency-review`, `actionlint`. |
+| `scan_disable` | string | `"codeql"` | Comma-separated list of scans to skip (D10c). actionlint runs by default since v3.4.0; add it back to skip it. Pass `""` to enable everything. Values: `codeql`, `osv`, `gitleaks`, `dependency-review`, `actionlint`. |
 | `scan_fail_on_findings` | boolean | `true` | Fail the `scan-suite` job, and so the `ci / passed` check, when a scanner reports findings or an error. `false` keeps every enabled scanner running and reported as fail in the job summary and the CI summary comment, without failing the job. A scanner turned off with `scan_disable` does not run at all. |
 | `summary_comment` | boolean | `true` | Keep one CI summary comment on the pull request, written by the `passed` job. `false` writes the same summary to the `passed` job's summary instead and posts no comment. The `passed` job keeps `pull-requests: write` either way, so the caller's grant does not change. |
 | `bump` | string | `""` | One of `patch`\|`minor`\|`major`. Empty falls back to the caller's `workflow_dispatch` input `bump`; a value passed with `with:` wins. When neither is set, as on routine pull_request and push runs, no release is cut. When set, the `version` job resolves the next version, shows it in the run summary and stamps it into the packed release artifact, never into the checked-out tree. |

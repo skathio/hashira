@@ -170,12 +170,12 @@ jobs:
           echo "sha=${WORKFLOW_SHA}" >> "${GITHUB_OUTPUT}"
       # The caller's tree. No persisted credential, since the caller's build commands run in
       # this job.
-      # actions/checkout v4.2.2
+      # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
       - name: Checkout hashira library at its own commit
-        # actions/checkout v4.2.2
+        # actions/checkout v7.0.1
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: skathio/hashira
@@ -193,12 +193,12 @@ jobs:
             echo "::error::pages-site: .hashira is at ${actual}, expected ${EXPECTED_SHA}."
             exit 1
           fi
-      # actions/setup-node v4.1.0
+      # actions/setup-node v7.1.0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: ${{ inputs.node_version }}
       - if: ${{ inputs.dotnet_version != '' }}
-        # actions/setup-dotnet v4.1.0
+        # actions/setup-dotnet v6.1.0
         uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73
         with:
           dotnet-version: ${{ inputs.dotnet_version }}

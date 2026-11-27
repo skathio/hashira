@@ -175,10 +175,10 @@ on:
         type: string
         default: ""
       scan_disable:
-        description: "Comma-separated list of scans to skip (D10c). Default 'codeql,actionlint' — pass '' to enable all. Values: codeql,osv,gitleaks,dependency-review,actionlint."
+        description: "Comma-separated list of scans to skip (D10c). Default 'codeql' (actionlint runs by default since v3.4.0) — pass '' to enable all. Values: codeql,osv,gitleaks,dependency-review,actionlint."
         required: false
         type: string
-        default: "codeql,actionlint"
+        default: "codeql"
       scan_fail_on_findings:
         description: "Fail the scan-suite job, and so the ci / passed check, when a scanner reports findings or an error. Default true. false keeps every enabled scanner running and reported as fail in the job summary and the CI summary comment, without failing the job. A scanner turned off with scan_disable does not run at all."
         required: false
@@ -240,9 +240,9 @@ jobs:
       # The project every job restores, builds, tests and packs.
       project_path: ${{ steps.project.outputs.path }}
     steps:
-      # actions/checkout v4.2.2 — consumer's tree.
+      # actions/checkout v7.0.1 — consumer's tree.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      # actions/setup-dotnet v4.1.0
+      # actions/setup-dotnet v6.1.0
       - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73
         with:
           dotnet-version: ${{ inputs.dotnet_version }}
@@ -328,7 +328,7 @@ jobs:
           fi
           echo "sha=${WORKFLOW_SHA}" >> "${GITHUB_OUTPUT}"
       - name: Checkout hashira library at its own commit
-        # actions/checkout v4.2.2
+        # actions/checkout v7.0.1
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: skathio/hashira
@@ -374,7 +374,7 @@ jobs:
     outputs:
       resolved_version: ${{ steps.resolve.outputs.version }}
     steps:
-      # actions/checkout v4.2.2 — consumer's tree. Full history + tags
+      # actions/checkout v7.0.1 — consumer's tree. Full history + tags
       # (fetch-depth: 0, fetch-tags: true) so the resolver can see the real
       # tag list via `git tag --list` below; the other jobs' shallow
       # checkout is intentionally left as-is (they don't need tag history).
@@ -384,7 +384,7 @@ jobs:
           fetch-tags: true
       # Library self-checkout at this workflow's own commit (see header).
       - name: Checkout hashira library at its own commit
-        # actions/checkout v4.2.2
+        # actions/checkout v7.0.1
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: skathio/hashira
@@ -395,11 +395,11 @@ jobs:
           # run hashira's own tests out of .hashira/.
           sparse-checkout: .github
           persist-credentials: false
-      # actions/setup-dotnet v4.1.0 — needed for `dotnet pack` below.
+      # actions/setup-dotnet v6.1.0 — needed for `dotnet pack` below.
       - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73
         with:
           dotnet-version: ${{ inputs.dotnet_version }}
-      # actions/setup-node v4.1.0 — version-resolver's shim shells out to
+      # actions/setup-node v7.1.0 — version-resolver's shim shells out to
       # `node` (D8's resolver action; same precedent as npm-package-ci.yml).
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
@@ -505,7 +505,7 @@ jobs:
           fi
           echo "nuget-package-ci: packed .nupkg version ${PACKED_VERSION} matches resolved version" >> "${GITHUB_STEP_SUMMARY}"
       - name: Upload packed .nupkg (same-run CI->CD artifact handoff)
-        # actions/upload-artifact v4.4.3 — same pin already verified and in
+        # actions/upload-artifact v7.0.2 — same pin already verified and in
         # use at .github/actions/coverage-report/action.yml and
         # npm-package-ci.yml's iter-2.2 `version` job; reused here rather
         # than introducing a new pin to the verified-pin set.
@@ -561,9 +561,9 @@ jobs:
     permissions:
       contents: read
     steps:
-      # actions/checkout v4.2.2 — consumer's tree.
+      # actions/checkout v7.0.1 — consumer's tree.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      # actions/setup-dotnet v4.1.0
+      # actions/setup-dotnet v6.1.0
       - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73
         with:
           dotnet-version: ${{ inputs.dotnet_version }}
@@ -602,15 +602,15 @@ jobs:
       # instead of showing 0.0% as if it were a measurement.
       coverage_files: ${{ steps.coverage.outputs.files }}
     steps:
-      # actions/checkout v4.2.2 — consumer's tree.
+      # actions/checkout v7.0.1 — consumer's tree.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      # actions/setup-dotnet v4.1.0
+      # actions/setup-dotnet v6.1.0
       - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73
         with:
           dotnet-version: ${{ inputs.dotnet_version }}
       # Library self-checkout at this workflow's own commit (see header).
       - name: Checkout hashira library at its own commit
-        # actions/checkout v4.2.2
+        # actions/checkout v7.0.1
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: skathio/hashira
@@ -640,7 +640,7 @@ jobs:
           command: ${{ inputs.test_filter == '' && format('dotnet test ''{0}'' --configuration Release --collect:"XPlat Code Coverage" --results-directory TestResults', needs.setup.outputs.project_path) || format('dotnet test ''{0}'' --configuration Release --filter ''{1}'' --collect:"XPlat Code Coverage" --results-directory TestResults', needs.setup.outputs.project_path, inputs.test_filter) }}
           coverage_path: ${{ inputs.coverage_path || 'coverage/cobertura.xml' }}
           results_directory: TestResults
-      # actions/setup-node v4.1.0 — coverage-report's parser shim needs a
+      # actions/setup-node v7.1.0 — coverage-report's parser shim needs a
       # `node` binary on PATH. ubuntu-latest ships one, but pin it explicitly
       # so the dependency is visible (mirrors _self-ci.yml's actions-smoke job).
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
@@ -680,11 +680,11 @@ jobs:
       # scanner was skipped or failed.
       scan_summary: ${{ steps.scan.outputs.summary }}
     steps:
-      # actions/checkout v4.2.2 — consumer's tree.
+      # actions/checkout v7.0.1 — consumer's tree.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       # Library self-checkout at this workflow's own commit (see header).
       - name: Checkout hashira library at its own commit
-        # actions/checkout v4.2.2
+        # actions/checkout v7.0.1
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: skathio/hashira
@@ -721,13 +721,13 @@ jobs:
       result: ${{ steps.gate.outputs.result }}
       violations: ${{ steps.gate.outputs.violations }}
     steps:
-      # actions/checkout v4.2.2 — consumer's tree. Full history so the pull
+      # actions/checkout v7.0.1 — consumer's tree. Full history so the pull
       # request's base commit is present without a credentialed fetch.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
           persist-credentials: false
-      # actions/setup-node v4.1.0 — the gate installs and runs SoMi with
+      # actions/setup-node v7.1.0 — the gate installs and runs SoMi with
       # npm/node. This flow has no node_version input, so it pins Node 20
       # like its other node steps.
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
@@ -735,7 +735,7 @@ jobs:
           node-version: '20'
       # Library self-checkout at this workflow's own commit (see header).
       - name: Checkout hashira library at its own commit
-        # actions/checkout v4.2.2
+        # actions/checkout v7.0.1
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: skathio/hashira
@@ -792,7 +792,7 @@ jobs:
           fi
           echo "sha=${WORKFLOW_SHA}" >> "${GITHUB_OUTPUT}"
       - name: Checkout hashira library at its own commit
-        # actions/checkout v4.2.2
+        # actions/checkout v7.0.1
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: skathio/hashira

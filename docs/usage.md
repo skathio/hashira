@@ -760,7 +760,7 @@ runs five security scans against the consumer's repo:
 | `osv` | OSV-Scanner — known-vulnerable dependencies | No |
 | `gitleaks` | Secrets committed to git history | No |
 | `dependency-review` | New dependency changes on PRs (CVE / license) | No (PR-only) |
-| `actionlint` | GitHub Actions workflow lint | **Yes** |
+| `actionlint` | GitHub Actions workflow lint | No (since v3.4.0) |
 
 The `scan_disable` input is a **comma-separated string** of scan names to
 skip (CSV-string format chosen over a list to keep the reusable-workflow
@@ -768,15 +768,21 @@ input contract scalar).
 
 ### Default value
 
-`scan_disable: 'codeql,actionlint'`
+`scan_disable: 'codeql'`
 
 - **`codeql` is skipped by default** because most consumer repos don't have
   CodeQL enabled (Settings → Security → Code scanning). Running CodeQL
   against a repo where it isn't enabled emits a confusing permission error
   rather than a useful finding.
-- **`actionlint` is skipped by default** because the consumer's repo may not
-  be a workflow library — actionlint findings against application-shaped
-  workflows are typically noise rather than signal.
+
+> **Changed in v3.4.0.** `actionlint` runs by default in `npm-package-ci`,
+> `nuget-package-ci` and `static-webapp-ci`: their `scan_disable` default
+> changed from `'codeql,actionlint'` to `'codeql'`. Every consumer repo has
+> workflows (it calls these), and a broken workflow is worth a red check. A
+> repo whose workflows have actionlint findings goes red when it picks up
+> v3.4.0. Fix the findings, or keep the old behaviour while you do with
+> `scan_disable: 'codeql,actionlint'`. The `scan-suite` action's own
+> `scan_disable` default is unchanged.
 
 ### Enabling everything
 
@@ -794,7 +800,7 @@ Append the scan name(s) to the default CSV:
 
 ```yaml
 with:
-  scan_disable: 'codeql,actionlint,osv'    # also skip OSV-Scanner
+  scan_disable: 'codeql,osv'    # also skip OSV-Scanner
 ```
 
 ### Findings fail the scan-suite job
@@ -827,7 +833,7 @@ repo while you fix what a scanner found, add that scanner to `scan_disable`
 
 ```yaml
 with:
-  scan_disable: 'codeql,actionlint,osv'    # OSV findings no longer fail CI
+  scan_disable: 'codeql,osv'    # OSV findings no longer fail CI
 ```
 
 To keep every scanner running and reported but stop findings from failing

@@ -152,7 +152,7 @@ on.
 | `output_dir` | string | `''` | Directory containing the built site (passed through to `pages-upload`'s `path` input). Empty (default) triggers autodetect among `dist/`, `build/`, `out/`, `public/` (first found wins). **MUST be a workspace-relative directory without `..` segments or a leading `/`.** |
 | `test_command` | string | `'npm test'` | Shell command that runs the consumer's tests. **Trusted input**: it runs as raw shell, so do NOT pass values derived from PR titles, issue bodies, branch names, or other externally controlled context. |
 | `coverage_path` | string | `''` | Path to the coverage file the tests write. Empty uses the flow's standard path: `coverage/lcov.info` for npm and static-webapp, `coverage/cobertura.xml` for NuGet. Consumed by `coverage-report`, which runs inside the `test` job. Trusted input. |
-| `scan_disable` | string | `'codeql,actionlint'` | Comma-separated list of scans to skip (D10c). Pass `''` to enable all. Values: `codeql`, `osv`, `gitleaks`, `dependency-review`, `actionlint`. |
+| `scan_disable` | string | `'codeql'` | Comma-separated list of scans to skip (D10c). actionlint runs by default since v3.4.0; add it back to skip it. Pass `''` to enable all. Values: `codeql`, `osv`, `gitleaks`, `dependency-review`, `actionlint`. |
 | `scan_fail_on_findings` | boolean | `true` | Fail the `scan-suite` job, and so the `ci / passed` check, when a scanner reports findings or an error. `false` keeps every enabled scanner running and reported as fail in the job summary and the CI summary comment, without failing the job. A scanner turned off with `scan_disable` does not run at all. |
 | `summary_comment` | boolean | `true` | Keep one CI summary comment on the pull request, written by the `passed` job. `false` writes the same summary to the `passed` job's summary instead and posts no comment. The `passed` job keeps `pull-requests: write` either way, so the caller's grant does not change. |
 | `quality_gate` | boolean | `true` | Run SoMi's quality gate (the `quality-gate` job) on what a pull request changes. `false` skips the job. The gate runs only on `pull_request` events; on `push` and `workflow_dispatch` it passes and writes "skipped: quality gate runs on pull requests" to the job summary. |
@@ -233,7 +233,7 @@ Why each is needed (and what breaks without it):
   so without it the workflow fails to start.
 - **`security-events: write` on `ci`** — for CodeQL when enabled via
   `scan_disable`. Unused under the default
-  `scan_disable='codeql,actionlint'` but granted so consumers who flip
+  `scan_disable='codeql'` but granted so consumers who flip
   `scan_disable` to `''` don't hit a permissions error.
 - **`id-token: write` + `pages: write` on `deploy`** — required by
   `actions/deploy-pages` (invoked inside `pages-deploy`) to authenticate

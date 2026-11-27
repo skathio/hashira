@@ -59,7 +59,7 @@ jobs:
             echo "::error::release.yml releases main only; this run is on ${REF}."
             exit 1
           fi
-      # actions/checkout v4.2.2. Full history, so every tag is here.
+      # actions/checkout v7.0.1. Full history, so every tag is here.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
@@ -183,12 +183,12 @@ jobs:
     permissions:
       contents: read   # checkout only: this job runs third-party npm code, so it holds nothing else
     steps:
-      # actions/checkout v4.2.2
+      # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ needs.check.outputs.sha }}
           persist-credentials: false
-      # actions/setup-node v4.1.0. VitePress 1.6 needs a current Node.
+      # actions/setup-node v7.1.0. VitePress 1.6 needs a current Node.
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: '24'
@@ -214,7 +214,7 @@ jobs:
             echo "::error::release.yml releases main only; this run is on ${REF}."
             exit 1
           fi
-      # actions/checkout v4.2.2. Full history, so the plan sees every tag as it is now.
+      # actions/checkout v7.0.1. Full history, so the plan sees every tag as it is now.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ needs.check.outputs.sha }}
@@ -367,7 +367,7 @@ jobs:
     permissions:
       contents: read   # checkout, and the tags as origin has them now
     steps:
-      # actions/checkout v4.2.2. Full history, so every tag is here.
+      # actions/checkout v7.0.1. Full history, so every tag is here.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0

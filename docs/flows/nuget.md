@@ -93,9 +93,9 @@ jobs:
       contents: write # create the release tag and GitHub Release
       pull-requests: read # release notes read the merged pull requests
     steps:
-      # actions/checkout v4.2.2
+      # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      # actions/setup-dotnet v4.1.0
+      # actions/setup-dotnet v6.0.0
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68
         with:
           dotnet-version: '8.0.x'
@@ -202,7 +202,7 @@ against the actual shipped YAML.
 | `project_path` | string | `""` | Path to the `.csproj` or `.sln` to restore, build, test and pack. Empty uses the single `.csproj` in the repository (searched recursively, `.git/` and `.hashira/` skipped) whose file name matches neither `*Test*.csproj` nor `*.Tests.csproj`; zero or several such files fail the `setup` job with an error listing them. **Trusted input**: interpolated into `dotnet` CLI argv. |
 | `test_filter` | string | `""` | Optional `dotnet test --filter` expression. Empty string runs all tests. **Trusted input**. |
 | `coverage_path` | string | `""` | Path to the coverage file the tests write. Empty uses the flow's standard path: `coverage/lcov.info` for npm and static-webapp, `coverage/cobertura.xml` for NuGet. Consumed by `coverage-report`, which runs inside the `test` job. Trusted input. |
-| `scan_disable` | string | `"codeql,actionlint"` | Comma-separated list of scans to skip (D10c). Pass `""` to enable everything. Values: `codeql`, `osv`, `gitleaks`, `dependency-review`, `actionlint`. |
+| `scan_disable` | string | `"codeql"` | Comma-separated list of scans to skip (D10c). actionlint runs by default since v3.4.0; add it back to skip it. Pass `""` to enable everything. Values: `codeql`, `osv`, `gitleaks`, `dependency-review`, `actionlint`. |
 | `scan_fail_on_findings` | boolean | `true` | Fail the `scan-suite` job, and so the `ci / passed` check, when a scanner reports findings or an error. `false` keeps every enabled scanner running and reported as fail in the job summary and the CI summary comment, without failing the job. A scanner turned off with `scan_disable` does not run at all. |
 | `summary_comment` | boolean | `true` | Keep one CI summary comment on the pull request, written by the `passed` job. `false` writes the same summary to the `passed` job's summary instead and posts no comment. The `passed` job keeps `pull-requests: write` either way, so the caller's grant does not change. |
 | `bump` | string | `""` | One of `patch`\|`minor`\|`major`. Empty falls back to the caller's `workflow_dispatch` input `bump`; a value passed with `with:` wins. When neither is set, as on routine pull_request and push runs, no release is cut. When set, the `version` job resolves the next version, shows it in the run summary and stamps it into the packed release artifact, never into the checked-out tree. |
