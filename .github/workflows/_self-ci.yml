@@ -804,25 +804,16 @@ jobs:
           set -euo pipefail
           echo "npm-release-dry-run-auth-modes: all 3 action invocations passed (dry-run path exercised by HASHIRA_NPM_RELEASE_DRY_RUN=1 for auth=auto/token/oidc)"
 
-  npm-release-smoke-oidc-fails-loud:
-    name: npm-release-smoke-oidc-fails-loud
+  # Packs and uploads the tarball npm-release-smoke-oidc-fails-loud downloads. Its own job, as
+  # in a real caller (npm-package-ci uploads in `ci`, npm-release downloads in `publish`): a
+  # download in the same job a second after the upload could miss the artifact while GitHub's
+  # artifact listing caught up, and fail the test for a reason that is not the one it checks.
+  npm-release-smoke-oidc-pack:
+    name: npm-release-smoke-oidc-pack
     runs-on: ubuntu-latest
     permissions:
-      contents: read
-      # Deliberately NOT granting id-token: write — this job proves auth=oidc
-      # fails loud when no OIDC token is reachable, which requires the
-      # GitHub-provided ACTIONS_ID_TOKEN_REQUEST_* vars to be genuinely absent,
-      # not merely unused.
+      contents: read # nothing is checked out; the job's token needs no other grant
     steps:
-      # actions/checkout v7.0.1
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      # D14 self-checkout: composite actions are referenced from .hashira/.
-      - name: Checkout library into .hashira
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.sha }}
-          path: .hashira
-          persist-credentials: false
       # actions/setup-node v7.1.0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
@@ -862,7 +853,34 @@ jobs:
           name: npm-tarball
           path: ${{ runner.temp }}/npm-release-oidc-test-pack-output/*.tgz
           if-no-files-found: error
-          retention-days: 1
+          # A week, not a day: "Re-run failed jobs" on the test job later does not re-run this
+          # job, and still needs this artifact.
+          retention-days: 7
+
+  npm-release-smoke-oidc-fails-loud:
+    name: npm-release-smoke-oidc-fails-loud
+    needs: npm-release-smoke-oidc-pack
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Deliberately NOT granting id-token: write — this job proves auth=oidc
+      # fails loud when no OIDC token is reachable, which requires the
+      # GitHub-provided ACTIONS_ID_TOKEN_REQUEST_* vars to be genuinely absent,
+      # not merely unused.
+    steps:
+      # actions/checkout v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      # D14 self-checkout: composite actions are referenced from .hashira/.
+      - name: Checkout library into .hashira
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: .hashira
+          persist-credentials: false
+      # actions/setup-node v7.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: '24'
       # Pass-2 regression lock (Blocker/Major): poison the cwd with a
       # project `.npmrc` (fake token A) and an `npm_config_*` env var (fake
       # token B) — the two leak paths fixed via clean-cwd + scrub +
