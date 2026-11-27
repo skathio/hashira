@@ -79,4 +79,23 @@ function escapeHtml(text) {
   return String(text).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 }
 
-module.exports = { rewriteLink, isUnpublished, githubSlug, escapeBraces, escapeHtml };
+// The in-page #anchors of a rendered page that match no id on it, decoded, each once. An
+// anchor that is not valid percent-encoding is compared as written.
+const ENTITY = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" };
+const unescapeHtml = (s) => s.replace(/&(?:#(\d+)|#x([0-9a-f]+)|(amp|lt|gt|quot|apos));/gi, (m, d, h, n) => (n ? ENTITY[n.toLowerCase()] : String.fromCodePoint(d ? Number(d) : parseInt(h, 16))));
+
+function decodeAnchor(anchor) {
+  try {
+    return decodeURIComponent(anchor);
+  } catch {
+    return anchor;
+  }
+}
+
+function missingAnchors(html) {
+  const ids = new Set([...html.matchAll(/\sid="([^"]*)"/g)].map((m) => unescapeHtml(m[1])));
+  const anchors = [...html.matchAll(/\shref="#([^"]+)"/g)].map((m) => decodeAnchor(unescapeHtml(m[1])));
+  return [...new Set(anchors.filter((a) => !ids.has(a)))];
+}
+
+module.exports = { rewriteLink, isUnpublished, githubSlug, escapeBraces, escapeHtml, missingAnchors };

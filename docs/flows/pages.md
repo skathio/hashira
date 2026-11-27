@@ -151,7 +151,8 @@ a pull request can edit, checked before anything is installed.
 | Field | Type | Limit | Default |
 |-------|------|-------|---------|
 | `name` | string | 1 to 40 characters | `name` of `.github/homepage.json`, else the repo name |
-| `description` | string | at most 200 characters | `''` |
+| `$schema` | string | 1 to 2048 characters | none: read by editors only |
+| `description` | string | at most 200 characters | `Guides for <name>`, also when `''` |
 | `base` | string | at most 100 characters, starts and ends with `/`, letters, digits and `. _ ~ % -` between single `/`s | `/<repo>/docs/` |
 | `home_page` | `.md` path under `docs/` | must exist | `getting-started.md` |
 | `sidebar` | list of pages `{ "file", "label" }`, groups `{ "label", "items", "collapsed" }` and folder sections `{ "label", "dir", "collapsed" }` | at most 100 entries in each list, groups nested at most 3 deep, `file` a `.md` path under `docs/`, `dir` a folder path under `docs/`, `label` 1 to 60 characters, `collapsed` a boolean | `[]` |
@@ -163,11 +164,27 @@ a pull request can edit, checked before anything is installed.
 | `logo` | repo-relative `.svg` or `.png` | must exist | `image` of `.github/homepage.json`, else none |
 | `theme_css` | repo-relative `.css` | must exist | none |
 
+The file may name its JSON Schema, which hashira publishes next to the
+action, so an editor checks it as you type. The schema gives the same verdict
+as the build on every field and limit; only the checks that need the repo
+(a named file exists, stays in the repo, is not both in `sidebar` and
+`unpublished`) are the build's alone:
+
+```json
+{ "$schema": "https://raw.githubusercontent.com/skathio/hashira/v3/.github/actions/docs-build/pages.schema.json" }
+```
+
 The file itself may be at most 64 KB. An unknown field fails, at the top
 level and inside a `sidebar` entry (a group's or a folder section's too), a
 `nav` entry or `home_link`.
 
 - **`name`** is the docs' site title and the brand of the header.
+- **`description`** is each page's `<meta name="description">` and
+  `og:description`. Left out or empty, it is `Guides for <name>`. Each page
+  also gets `og:title` (its first heading and `name`), `og:url` and a
+  canonical link, both the page's GitHub Pages address,
+  `https://<owner>.github.io<base><page>`. With a custom domain, GitHub
+  Pages redirects that address to it.
 - **`base`** is where the docs are served. The landing is the folder above
   it: `/<repo>/` for the default `/<repo>/docs/`.
 - **`home_page`** opens at the docs base. It is published as the docs'
@@ -285,11 +302,36 @@ renamed with the code. Two ways keep the sidebar in step with it:
 Keep the generating commands in a script of the repo, so a local build runs
 the same steps.
 
+### Local preview
+
+`lib/cli.js` is the entry point `docs-build`'s `action.yml` runs, so a local
+check or build is the one CI runs. From the repo root, with hashira checked
+out next to it (or at a ref of your choice, in any folder):
+
+```sh
+# Check .github/pages.json and the files under docs/: no install, nothing written.
+node ../hashira/.github/actions/docs-build/lib/cli.js --check
+# Build the docs as CI does into a new folder (npm, and network once, needed).
+node ../hashira/.github/actions/docs-build/lib/cli.js --out preview/docs --pre-build ./scripts/api-docs.sh
+```
+
+`--out` takes a repo-relative folder that must not exist yet, as
+`output_dir` does, and `--pre-build` is `pre_build_command`. The page URLs
+come from `GITHUB_REPOSITORY` (`owner/name`) when it is set, else from the
+GitHub repo of the `origin` remote. To preview the landing too, copy the kit
+at a ref into the site's `_kit/` with one command, then serve the folder
+above `docs/` (`site/` must not keep `_kit/`, so add it to `.gitignore`):
+
+```sh
+REF=v3.4.0; mkdir -p site/_kit && curl -fsSL "https://codeload.github.com/skathio/hashira/tar.gz/${REF}" | tar -xz -C site/_kit --strip-components=5 "hashira-${REF#v}/.github/actions/site-kit/kit"
+```
+
 ### How the docs read
 
 The pages are the `docs/` files as GitHub renders them. Heading ids follow
 GitHub's rule, so a link's `#anchor` lands on the site as it does on
-GitHub. A link to another published page opens that page; a link that
+GitHub. An in-page `#anchor` that matches no id on its page gives a
+`::warning::` naming the page and the anchor; the build goes on. A link to another published page opens that page; a link that
 leaves `docs/`, or reaches an unpublished page or a folder with no index
 page, opens the file on GitHub, at `HEAD`. A link to a folder of the repo,
 such as `../templates` or `../tests/`, opens it as a folder (`tree/HEAD/...`):
@@ -318,6 +360,11 @@ files (images, fonts, PDF, text and CSV), with no `[` or `]` in a name:
 VitePress runs code it finds beside the pages, so any other file fails the
 build, before it starts and again after `pre_build_command`. `docs/public/`
 is for files served as they are, so a `.md` there fails too.
+An SVG under `docs/`, `docs/public/` included, or written there by
+`pre_build_command` fails the build, naming the file, when it holds a
+`<script>` element, an `on*` event handler or a `javascript:` URL: a browser
+that opens the file on its own would run it with the docs' origin. Images
+may be PNG, JPEG, GIF, WebP, AVIF, SVG, ICO or BMP, inlined or as files.
 Local search is on, and VitePress's dead-link check fails the build on a
 link to a page that does not exist. The docs and the landing share one
 theme choice: the `theme` key in `localStorage`. Both have the same
@@ -325,6 +372,13 @@ three-state control. Each press goes from auto to the theme the system does
 not show, then to the system's own theme, then back to auto. So the first
 press always changes what the page shows. In auto the page follows the
 system theme as it changes.
+
+Migrating from a VitePress config of your own: heading ids follow GitHub's
+slug rule here, not VitePress's default slugify. GitHub keeps each run of
+hyphens (`## Hello, World & Co.` is `#hello-world--co`, where VitePress made
+`#hello-world-co`) and keeps accented letters as they are, so check the `#anchors`
+your pages and other sites link to; the anchor warnings name each one on a
+page that no longer matches.
 
 ## 4. The landing page and the site kit
 
@@ -477,6 +531,7 @@ and stops the build before anything is deployed.
 | `docs-build: <page>: <!--@include--> is not supported` | A published page includes another file. |
 | `docs-build: <page>: image "<src>" must be a URL or a path to a file in the docs, with no query` | An image path that leaves the docs or carries a Vite query such as `?raw`. |
 | `docs-build: <page>: <tag> is not written by Markdown` / `does not close the open tag` | A page renders HTML that Markdown does not write, such as a tag in a plugin's title. |
+| `docs-build: docs/<path>.svg: an SVG that could run a script is not published: ...` | An SVG with a `<script>`, an `on*` handler or a `javascript:` URL. |
 | `docs-build: <page>: <problem>` (from the built-page check) | A built page holds a script, handler, frame, form or file reference that VitePress did not write. |
 | `<field>: <path> resolves into .git` / `resolves to a file of another kind` | A `logo` or `theme_css` symlink into `.git` or `node_modules`, or to a file with another extension. |
 | `docs-build: <page>: front matter in <language> is not supported` | Front matter in JavaScript, JSON or another language than YAML. |

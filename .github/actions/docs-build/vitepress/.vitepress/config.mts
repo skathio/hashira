@@ -11,7 +11,8 @@ const { escapeHtml, githubSlug, rewriteLink } = load('../../lib/links.js')
 const { configureMarkdown } = load('../../lib/markdown.js')
 const { siteConfig } = load('../../lib/site-config.js')
 const { dropCheckDarkMode, themeFromLanding } = load('../../lib/theme-bridge.js')
-const { checkBuiltPage, descriptionTag, escapeInlineMetadata } = load('../../lib/html-safety.js')
+const { checkBuiltPage, escapeInlineMetadata } = load('../../lib/html-safety.js')
+const { pageHead, siteDescription } = load('../../lib/page-meta.js')
 
 // The docs-build action copies this folder into a work folder under RUNNER_TEMP, stages the
 // caller's docs/ in src/, and writes build.json (lib/prepare.js): the checked pages.json, the
@@ -62,7 +63,7 @@ export default defineConfig({
   base: config.base,
   rewrites,
   title: config.name,
-  description: config.description,
+  description: siteDescription(config),
   head: [
     ...(logo ? [['link', { rel: 'icon', href: `${config.base}${build.logo}`, type: logoType }] as [string, Record<string, string>]] : []),
     // theme_css, served as it is from public/ (lib/prepare.js), after VitePress's stylesheet.
@@ -71,7 +72,9 @@ export default defineConfig({
   ],
   // pages.json values reach the HTML escaped: the description through an escaped head tag,
   // and the inline site data with no `</script>` that could end its script (lib/html-safety.js).
-  transformHead: ({ description }) => [descriptionTag(description)],
+  // Each page also gets its link preview and canonical URL (lib/page-meta.js).
+  transformHead: ({ pageData, title, description }) =>
+    pageHead({ origin: build.origin, base: config.base, relativePath: pageData.relativePath, title, description }),
   // Each built page then holds only what VitePress and this config write (lib/html-safety.js).
   transformHtml: (html, _id, { page }) => {
     const out = escapeInlineMetadata(dropCheckDarkMode(html))

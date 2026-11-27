@@ -190,6 +190,9 @@ function repoName(root) {
 // ---------- the fields ----------
 
 const FIELDS = {
+  // The JSON Schema an editor checks the file against (pages.schema.json, next to action.yml).
+  // It is read by editors only; the build ignores it.
+  $schema: (ctx, v) => checkString('$schema', v, { min: 1, max: 2048 }),
   name: (ctx, v) => checkString('name', v, { min: 1, max: 40 }),
   description: (ctx, v) => checkString('description', v, { max: 200 }),
   base: (ctx, v) => {
@@ -348,9 +351,10 @@ function loadPagesConfig(repoRoot) {
   const config = withDefaults(pages, readHomepage(root), repoName(root));
   const ctx = { root, realRoot: fs.realpathSync(root) };
   for (const [field, check] of Object.entries(FIELDS)) {
-    if (config[field] !== null || field in pages) check(ctx, config[field]);
+    if (config[field] != null || field in pages) check(ctx, config[field]);
   }
   checkSidebarPublished(config);
+  delete config.$schema;
   return config;
 }
 

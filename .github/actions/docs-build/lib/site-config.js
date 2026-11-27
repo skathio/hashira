@@ -10,6 +10,7 @@ const path = require('node:path');
 const { h1Label } = require('./h1-label');
 const { escapeHtml, isUnpublished } = require('./links');
 const { GENERATED_SIDEBAR, loadGeneratedSidebar, sidebarFiles } = require('./pages-config');
+const { svgProblems } = require('./html-safety');
 
 const INDEX = 'index.md';
 const posix = path.posix;
@@ -186,13 +187,24 @@ function refuseFrontMatterCode(dir, pages, prefix) {
   }
 }
 
+// An SVG is published as a file a browser may open on its own, with the docs' origin: one
+// that could run a script fails the build, naming the file (lib/html-safety.js svgProblems).
+function refuseUnsafeSvgs(dir, files, prefix) {
+  for (const rel of files.filter((f) => /\.svg$/i.test(f))) {
+    const problems = svgProblems(fs.readFileSync(path.join(dir, rel), 'utf8'));
+    if (problems.length > 0) fail(`${prefix}${rel}: an SVG that could run a script is not published: ${problems.slice(0, 3).join('; ')}.`);
+  }
+}
+
 function siteConfig(build) {
   const { config, stage } = build;
   // pre_build_command may have added files since prepare.js checked the stage.
   // prepare.js stages theme_css itself, the one CSS file served as it is.
   // The generated sidebar is read here, never published.
   const own = new Set([build.themeCss ? `public/${build.themeCss}` : null, GENERATED_SIDEBAR]);
-  checkStagedFiles(allFiles(stage).filter((rel) => !own.has(rel) && !isUnpublished(rel, config.unpublished)), '');
+  const staged = allFiles(stage).filter((rel) => !own.has(rel) && !isUnpublished(rel, config.unpublished));
+  checkStagedFiles(staged, '');
+  refuseUnsafeSvgs(stage, staged, '');
   const pages = stagedPages(stage, config.unpublished);
   refuseFrontMatterCode(stage, pages, '');
   refuseIncludes(stage, pages);
@@ -208,4 +220,4 @@ function siteConfig(build) {
   };
 }
 
-module.exports = { checkStagedFiles, refuseFrontMatterCode, siteConfig, isUnpublished, stagedPages, landingOf, landingHref, indexRewrite, sidebarItems, navItems, pageLink };
+module.exports = { checkStagedFiles, refuseFrontMatterCode, refuseUnsafeSvgs, siteConfig, isUnpublished, stagedPages, landingOf, landingHref, indexRewrite, sidebarItems, navItems, pageLink };

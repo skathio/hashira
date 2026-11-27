@@ -34,52 +34,15 @@ outputs:
 runs:
   using: composite
   steps:
-    - name: Check output_dir and pages.json, and stage the docs
-      id: prep
-      shell: bash
-      env:
-        DB_OUTPUT_DIR: ${{ inputs.output_dir }}
-        DB_ACTION: ${{ github.action_path }}
-      run: node "${DB_ACTION}/lib/prepare.js"
-
-    - name: Run pre_build_command
-      if: inputs.pre_build_command != ''
-      shell: bash
-      env:
-        DB_PRE: ${{ inputs.pre_build_command }}
-        DOCS_STAGE: ${{ steps.prep.outputs.stage }}
-      run: |
-        set +e
-        bash -eo pipefail -c "${DB_PRE}"
-        rc=$?
-        if [ "${rc}" -ne 0 ]; then
-          echo "::error::docs-build: pre_build_command exited with code ${rc}." >&2
-          exit "${rc}"
-        fi
-
-    - name: Install VitePress from hashira's lockfile
-      shell: bash
-      env:
-        DB_WORK: ${{ steps.prep.outputs.work }}
-      # --ignore-scripts: no dependency runs an install script. --include=dev
-      # keeps NODE_ENV=production in a caller's job from skipping VitePress.
-      run: cd "${DB_WORK}/vitepress" && npm ci --ignore-scripts --include=dev --no-audit --no-fund
-
+    # lib/cli.js is the entry point a local check or build runs too (docs/flows/pages.md), so
+    # CI and a local run cannot drift. It refuses an output_dir that exists (before and after
+    # pre_build_command), checks pages.json and docs/, stages them, runs pre_build_command
+    # with DOCS_STAGE set, installs VitePress with `npm ci --ignore-scripts` and builds.
     - name: Build the docs
       id: build
       shell: bash
       env:
-        DB_WORK: ${{ steps.prep.outputs.work }}
         DB_OUTPUT_DIR: ${{ inputs.output_dir }}
-      run: |
-        set -euo pipefail
-        node "${DB_WORK}/vitepress/node_modules/vitepress/bin/vitepress.js" build "${DB_WORK}/vitepress"
-        # pre_build_command may have created output_dir since the first check.
-        if [ -e "${DB_OUTPUT_DIR}" ] || [ -L "${DB_OUTPUT_DIR}" ]; then
-          echo "::error::docs-build: output_dir '${DB_OUTPUT_DIR}' already exists; docs-build never writes over it." >&2
-          exit 1
-        fi
-        mkdir -p "$(dirname "${DB_OUTPUT_DIR}")"
-        cp -R "${DB_WORK}/dist" "${DB_OUTPUT_DIR}"
-        echo "output_dir=${DB_OUTPUT_DIR}" >> "${GITHUB_OUTPUT}"
-        echo "docs-build: wrote the docs site to '${DB_OUTPUT_DIR}'" >> "${GITHUB_STEP_SUMMARY}"
+        DB_PRE: ${{ inputs.pre_build_command }}
+        DB_ACTION: ${{ github.action_path }}
+      run: node "${DB_ACTION}/lib/cli.js" --out "${DB_OUTPUT_DIR}" --pre-build "${DB_PRE}"

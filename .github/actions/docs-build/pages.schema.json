@@ -1,0 +1,348 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/skathio/hashira/v3/.github/actions/docs-build/pages.schema.json",
+  "title": ".github/pages.json",
+  "description": "The docs site that hashira's docs-build action builds (docs/flows/pages.md). docs-build checks the file with the same rules (lib/pages-config.js), and also checks that the named files exist, stay in the repo and are not both in sidebar and unpublished. The file may be at most 64 KB.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2048,
+      "description": "This schema, for editors; the build ignores it."
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 40,
+      "description": "The site title and the header's brand, 1 to 40 characters. Default: name of .github/homepage.json, else the repo name."
+    },
+    "description": {
+      "type": "string",
+      "maxLength": 200,
+      "description": "At most 200 characters. Empty or left out: \"Guides for <name>\"."
+    },
+    "base": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100,
+      "pattern": "^/(?:(?!\\.{1,2}/)[A-Za-z0-9._~%-]+/)*$",
+      "description": "Where the docs are served: starts and ends with '/', letters, digits and . _ ~ % - between single '/'s. Default /<repo>/docs/."
+    },
+    "home_page": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500,
+      "pattern": "^(?:(?!\\.\\.?(?:/|$))[^/\\\\\\u0000]+/)*(?!\\.\\.?(?:/|$))[^/\\\\\\u0000]+$",
+      "allOf": [
+        {
+          "pattern": "\\.[mM][dD]$"
+        }
+      ],
+      "description": "The .md page under docs/ that opens at the docs base. Default getting-started.md."
+    },
+    "sidebar": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "$ref": "#/$defs/entry0"
+      },
+      "description": "Pages, groups and folder sections, in order; every other page follows by path."
+    },
+    "unpublished": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 500,
+        "pattern": "^(?:(?!\\.\\.?(?:/|$))[^/\\\\\\u0000]+/)*(?!\\.\\.?(?:/|$))[^/\\\\\\u0000]+/?$",
+        "description": "A page or folder under docs/."
+      },
+      "description": "Pages or folders under docs/ that get no page."
+    },
+    "nav": {
+      "type": "array",
+      "maxItems": 8,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "label",
+          "href"
+        ],
+        "description": "A header link.",
+        "properties": {
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 30,
+            "description": "The link text, 1 to 30 characters."
+          },
+          "href": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048,
+            "pattern": "^(?:https://|http://|/|\\./|\\.\\./|#)[^\\\\\\u0000-\\u001f\\u007f]*$",
+            "description": "Starts with https://, http://, /, ./, ../ or #, with no backslash or control character. A docs header resolves it against the landing."
+          }
+        }
+      },
+      "description": "The header links, shown on the docs and read by the landing <site-nav>."
+    },
+    "home_link": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "label",
+        "href"
+      ],
+      "description": "The header link to the owner home page.",
+      "properties": {
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 30,
+          "description": "The link text, 1 to 30 characters."
+        },
+        "href": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048,
+          "pattern": "^(?:https://|http://|/|\\./|\\.\\./|#)[^\\\\\\u0000-\\u001f\\u007f]*$",
+          "description": "Starts with https://, http://, /, ./, ../ or #, with no backslash or control character. A docs header resolves it against the landing."
+        }
+      }
+    },
+    "accent": {
+      "type": "string",
+      "pattern": "^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$",
+      "description": "#rgb or #rrggbb. Default: colour of .github/homepage.json, else #1e7d69."
+    },
+    "accent_dark": {
+      "type": "string",
+      "pattern": "^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$",
+      "description": "#rgb or #rrggbb, the accent in dark mode. Default: accent."
+    },
+    "logo": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500,
+      "pattern": "^(?:(?!\\.\\.?(?:/|$))[^/\\\\\\u0000]+/)*(?!\\.\\.?(?:/|$))[^/\\\\\\u0000]+$",
+      "allOf": [
+        {
+          "pattern": "\\.(?:[sS][vV][gG]|[pP][nN][gG])$"
+        }
+      ],
+      "description": "A repo-relative .svg or .png. Default: image of .github/homepage.json."
+    },
+    "theme_css": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500,
+      "pattern": "^(?:(?!\\.\\.?(?:/|$))[^/\\\\\\u0000]+/)*(?!\\.\\.?(?:/|$))[^/\\\\\\u0000]+$",
+      "allOf": [
+        {
+          "pattern": "\\.[cC][sS][sS]$"
+        }
+      ],
+      "description": "A repo-relative .css file loaded after the shared theme."
+    }
+  },
+  "$defs": {
+    "page": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "file",
+        "label"
+      ],
+      "description": "A page.",
+      "properties": {
+        "file": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500,
+          "pattern": "^(?:(?!\\.\\.?(?:/|$))[^/\\\\\\u0000]+/)*(?!\\.\\.?(?:/|$))[^/\\\\\\u0000]+$",
+          "allOf": [
+            {
+              "pattern": "\\.[mM][dD]$"
+            }
+          ],
+          "description": "A .md path under docs/."
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60,
+          "description": "The sidebar label, 1 to 60 characters."
+        }
+      }
+    },
+    "folder": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "label",
+        "dir"
+      ],
+      "description": "A folder section: the published pages under dir, in path order, each under its first H1.",
+      "properties": {
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60,
+          "description": "The section label, 1 to 60 characters."
+        },
+        "dir": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500,
+          "pattern": "^(?:(?!\\.\\.?(?:/|$))[^/\\\\\\u0000]+/)*(?!\\.\\.?(?:/|$))[^/\\\\\\u0000]+/?$",
+          "description": "A folder path under docs/."
+        },
+        "collapsed": {
+          "type": "boolean",
+          "description": "Left out: always open. false: open and foldable. true: starts folded."
+        }
+      }
+    },
+    "entry0": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/page"
+        },
+        {
+          "$ref": "#/$defs/folder"
+        },
+        {
+          "$ref": "#/$defs/group0"
+        }
+      ]
+    },
+    "group0": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "label",
+        "items"
+      ],
+      "description": "A group at nesting level 1 (of at most 3).",
+      "properties": {
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60,
+          "description": "The group label, 1 to 60 characters."
+        },
+        "items": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 100,
+          "items": {
+            "$ref": "#/$defs/entry1"
+          }
+        },
+        "collapsed": {
+          "type": "boolean",
+          "description": "Left out: always open. false: open and foldable. true: starts folded."
+        }
+      }
+    },
+    "entry1": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/page"
+        },
+        {
+          "$ref": "#/$defs/folder"
+        },
+        {
+          "$ref": "#/$defs/group1"
+        }
+      ]
+    },
+    "group1": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "label",
+        "items"
+      ],
+      "description": "A group at nesting level 2 (of at most 3).",
+      "properties": {
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60,
+          "description": "The group label, 1 to 60 characters."
+        },
+        "items": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 100,
+          "items": {
+            "$ref": "#/$defs/entry2"
+          }
+        },
+        "collapsed": {
+          "type": "boolean",
+          "description": "Left out: always open. false: open and foldable. true: starts folded."
+        }
+      }
+    },
+    "entry2": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/page"
+        },
+        {
+          "$ref": "#/$defs/folder"
+        },
+        {
+          "$ref": "#/$defs/group2"
+        }
+      ]
+    },
+    "group2": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "label",
+        "items"
+      ],
+      "description": "A group at nesting level 3 (of at most 3).",
+      "properties": {
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60,
+          "description": "The group label, 1 to 60 characters."
+        },
+        "items": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 100,
+          "items": {
+            "$ref": "#/$defs/entry3"
+          }
+        },
+        "collapsed": {
+          "type": "boolean",
+          "description": "Left out: always open. false: open and foldable. true: starts folded."
+        }
+      }
+    },
+    "entry3": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/page"
+        },
+        {
+          "$ref": "#/$defs/folder"
+        }
+      ]
+    }
+  }
+}

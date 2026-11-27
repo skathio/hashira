@@ -314,7 +314,7 @@ jobs:
         # Files are listed by name: Node 20's `node --test` takes no globs.
         run: |
           set -euo pipefail
-          node --test tests/docs-build/pages-config.test.js tests/docs-build/pages-config-edges.test.js tests/docs-build/pages-rules.test.js tests/docs-build/docs-build-lib.test.js tests/docs-build/markdown.test.js tests/docs-build/built-html.test.js tests/docs-build/links.test.mjs tests/docs-build/sidebar-generated.test.js tests/pages-site/request-line-gaps.test.js
+          node --test tests/docs-build/pages-config.test.js tests/docs-build/pages-config-edges.test.js tests/docs-build/pages-rules.test.js tests/docs-build/docs-build-lib.test.js tests/docs-build/markdown.test.js tests/docs-build/built-html.test.js tests/docs-build/links.test.mjs tests/docs-build/sidebar-generated.test.js tests/docs-build/page-meta-cli.test.js tests/pages-site/request-line-gaps.test.js
 
   docs-build-action:
     name: docs-build-action
@@ -344,6 +344,14 @@ jobs:
         run: |
           set -euo pipefail
           node --test tests/docs-build/docs-nav-sidebar.test.js
+      # lib/cli.js --check and --out (the entry point action.yml runs), the pages.json JSON
+      # Schema against pages-config.js, the anchor warnings, the og and canonical tags, and the
+      # SVG and image checks.
+      - name: Run the docs-build CLI, schema, page meta and SVG rules
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --test tests/docs-build/cli-schema-meta.test.js
 
   site-kit-unit-tests:
     name: site-kit-unit-tests

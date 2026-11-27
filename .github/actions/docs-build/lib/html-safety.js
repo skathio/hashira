@@ -40,8 +40,10 @@ const ATTR = /([^\s"'>/=]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+)))?/g;
 const FORBIDDEN_TAGS = new Set(['iframe', 'frame', 'frameset', 'object', 'embed', 'applet', 'form', 'base', 'portal']);
 const FORBIDDEN_ATTRS = new Set(['srcdoc', 'formaction', 'srcset']);
 const MEDIA_TAGS = new Set(['img', 'source', 'video', 'audio', 'track', 'input']);
-const IMAGE_DATA = /^data:image\/(?:png|jpe?g|gif|webp|avif|svg\+xml)[;,]/;
-const IMAGE_FILE = /\.(?:png|jpe?g|gif|webp|avif|svg|ico)$/i;
+// Vite inlines an image below 4 KB as a data: URL of its MIME type, so a small .ico is
+// data:image/x-icon (or vnd.microsoft.icon) and a small .bmp data:image/bmp.
+const IMAGE_DATA = /^data:image\/(?:png|jpe?g|gif|webp|avif|svg\+xml|bmp|x-icon|vnd\.microsoft\.icon)[;,]/;
+const IMAGE_FILE = /\.(?:png|jpe?g|gif|webp|avif|svg|ico|bmp)$/i;
 const ACTIVE_SCHEME = /^(?:javascript|vbscript|data):/;
 
 const NAMED = { colon: ':', tab: '\t', newline: '\n', amp: '&', quot: '"', apos: "'", lt: '<', gt: '>', sol: '/' };
@@ -96,13 +98,17 @@ function tagProblems(html, base) {
     if (FORBIDDEN_TAGS.has(tag)) problems.push(`<${tag}> is not allowed`);
     const list = attributes(attrs);
     if (tag === 'meta' && list.some(([name]) => name === 'http-equiv')) problems.push('<meta http-equiv> is not allowed');
-    if (tag === 'script') continue;
-    for (const [name, value] of list) {
-      const problem = attributeProblem(tag, name, value, base);
-      if (problem) problems.push(problem);
-    }
+    if (tag !== 'script') problems.push(...attributeProblems(tag, list, base));
   }
   return problems;
+}
+
+// The page's canonical URL is the one <link> that names a full https URL (lib/page-meta.js).
+const canonicalProblem = (value) => (/^https:\/\//.test(schemeOf(value)) ? null : `<link rel="canonical"> href ${JSON.stringify(value.slice(0, 80))} is not an https URL`);
+
+function attributeProblems(tag, list, base) {
+  const canonical = tag === 'link' && list.some(([name, value]) => name === 'rel' && value.trim().toLowerCase() === 'canonical');
+  return list.map(([name, value]) => (canonical && name === 'href' ? canonicalProblem(value) : attributeProblem(tag, name, value, base))).filter(Boolean);
 }
 
 // Returns the page's problems, one line each; an empty list means the page is VitePress's own.
@@ -162,4 +168,28 @@ function checkRenderedHtml(html) {
   return [...new Set(problems)];
 }
 
-module.exports = { escapeInlineMetadata, descriptionTag, checkBuiltPage, checkRenderedHtml };
+// ---------- SVG files under docs/ ----------
+//
+// An SVG under docs/ is published as a file of its own, and a browser that opens it runs its
+// scripts with the docs' origin. So an SVG may hold no <script> element (any namespace prefix,
+// a comment or CDATA included: the check reads the raw text and fails closed), no on* handler,
+// and no attribute value that names a javascript: URL once entities and whitespace are gone.
+// A NUL byte means the file is not UTF-8 text the check can read, so it fails too.
+const SVG_SCRIPT = /<\s*(?:[\w.-]+:)?script\b/i;
+const SVG_TAG = /<([a-zA-Z][\w:.-]*)((?:[^>"']|"[^"]*"|'[^']*')*)>/g;
+
+// Returns the SVG text's problems, one line each; empty means it holds no script.
+function svgProblems(text) {
+  if (text.includes('\0')) return ['it is not UTF-8 text'];
+  const problems = [];
+  if (SVG_SCRIPT.test(text)) problems.push('it holds a <script> element');
+  for (const [, tag, attrs] of text.matchAll(SVG_TAG)) {
+    for (const [name, value] of attributes(attrs)) {
+      if (/^(?:[\w.-]+:)?on/.test(name)) problems.push(`<${tag}> has the handler ${name}`);
+      else if (schemeOf(value).includes('javascript:')) problems.push(`<${tag}> ${name} names a javascript: URL`);
+    }
+  }
+  return [...new Set(problems)];
+}
+
+module.exports = { escapeInlineMetadata, descriptionTag, checkBuiltPage, checkRenderedHtml, svgProblems };

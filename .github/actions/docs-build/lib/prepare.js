@@ -13,7 +13,8 @@ const path = require('node:path');
 
 const { loadPagesConfig } = require('./pages-config');
 const { accentCss, contrastWarnings } = require('./accent');
-const { checkStagedFiles, isUnpublished, refuseFrontMatterCode } = require('./site-config');
+const { checkStagedFiles, isUnpublished, refuseFrontMatterCode, refuseUnsafeSvgs } = require('./site-config');
+const { siteOrigin } = require('./page-meta');
 
 const ACTION_DIR = path.resolve(__dirname, '..');
 const INDEX = 'index.md';
@@ -124,8 +125,9 @@ function writeTheme(root, config, vitepress, stage) {
   return config.theme_css ? publish(root, stage, { from: config.theme_css, name: THEME_CSS, what: 'theme_css' }) : null;
 }
 
-function prepare(root, out) {
-  checkOutputDir(root, out);
+// Every check that needs only the repo, with nothing written: pages.json, and the files under
+// docs/ that would be published. `cli.js --check` runs this alone.
+function inspect(root) {
   const config = loadPagesConfig(root);
   const docs = path.join(root, 'docs');
   if (!fs.existsSync(docs) || !fs.statSync(docs).isDirectory()) fail(`docs/ not found in ${root}.`);
@@ -133,13 +135,20 @@ function prepare(root, out) {
   checkIndex(config, published);
   checkStagedFiles(published, 'docs/');
   refuseFrontMatterCode(docs, published.filter((rel) => rel.endsWith('.md')), 'docs/');
+  refuseUnsafeSvgs(docs, published, 'docs/');
+  return { config, docs, published };
+}
+
+function prepare(root, out) {
+  checkOutputDir(root, out);
+  const { config, docs, published } = inspect(root);
   const work = fs.mkdtempSync(path.join(process.env.RUNNER_TEMP || os.tmpdir(), 'docs-build-'));
   copyToolchain(work);
   const vitepress = path.join(work, 'vitepress');
   const stage = path.join(vitepress, 'src');
   const logo = stageDocs(root, config, published, stage);
   const themeCss = writeTheme(root, config, vitepress, stage);
-  const build = { config, logo, themeCss, repo: repoUrl(), docs, stage, dist: path.join(work, 'dist'), cache: path.join(work, 'cache') };
+  const build = { config, logo, themeCss, repo: repoUrl(), origin: siteOrigin(process.env.GITHUB_REPOSITORY), docs, stage, dist: path.join(work, 'dist'), cache: path.join(work, 'cache') };
   fs.writeFileSync(path.join(vitepress, '.vitepress', 'build.json'), `${JSON.stringify(build, null, 2)}\n`);
   return { work, stage, warnings: contrastWarnings(config.accent, config.accent_dark) };
 }
@@ -159,4 +168,4 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { prepare, checkOutputDir, docsFiles, isUnpublished };
+module.exports = { prepare, inspect, checkOutputDir, docsFiles, isUnpublished };

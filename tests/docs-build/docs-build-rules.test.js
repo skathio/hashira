@@ -365,7 +365,12 @@ test('(7) hashira keeps VitePress 1.6.4 with the vite 6.4.6 override and a lockf
 });
 
 test('(7) the toolchain is installed with npm ci --ignore-scripts and never with npm install', () => {
-  const scripts = runSteps(actionSpec()).map((s) => s.run).join('\n');
+  // action.yml runs lib/cli.js, which installs the toolchain with the arguments in NPM_CI.
+  const { NPM_CI } = require(path.join(ACTION_DIR, 'lib', 'cli.js'));
+  const cliSource = fs.readFileSync(path.join(ACTION_DIR, 'lib', 'cli.js'), 'utf8');
+  assert.doesNotMatch(cliSource, /'npm', \[?'(?:install|i|add)'/, 'cli.js runs npm install');
+  assert.match(cliSource, /run\('npm ci', 'npm', NPM_CI,/);
+  const scripts = [...runSteps(actionSpec()).map((s) => s.run), `npm ${NPM_CI.join(' ')}`].join('\n');
   const installs = [...scripts.matchAll(/\bnpm\s+(ci|install|i|add)\b[^\n]*/g)].map((m) => m[0]);
   assert.ok(installs.length > 0, 'no npm ci in the action');
   for (const line of installs) {
