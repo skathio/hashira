@@ -9,7 +9,7 @@
 // they collapse behind a disclosure button (aria-expanded; Escape closes it).
 //
 // Its items come from an inline <script type="application/json"> child holding pages.json's
-// field names (name, logo, nav, home_link, accent) plus `root` (the brand's href, default
+// field names (name, logo, nav, home_link, accent, accent_dark) plus `root` (the brand's href, default
 // "./") and `docs` (the Docs href, or true for "docs/"); from attributes of the same names
 // (`nav` and `home_link` as JSON); or from the `config` property (an object), which React 19
 // sets directly. Attributes win over the property, the property over the JSON child.
@@ -33,7 +33,7 @@
   'use strict';
   if (window.customElements.get('site-nav')) return;
 
-  var FIELDS = ['name', 'logo', 'root', 'docs', 'nav', 'home_link', 'accent'];
+  var FIELDS = ['name', 'logo', 'root', 'docs', 'nav', 'home_link', 'accent', 'accent_dark'];
   var OBSERVED = FIELDS.concat(['scrollspy', 'role']);
   var JSON_FIELDS = { nav: true, home_link: true };
   var ACCENT = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/;
@@ -65,6 +65,7 @@
     'button{font:inherit;color:var(--ink);background:none;border:1px solid var(--line);',
     'border-radius:var(--radius-sm,8px);padding:4px 12px;cursor:pointer;white-space:nowrap}',
     '.menu{display:none;align-items:center;gap:6px;flex-shrink:0}.menu svg{display:block}',
+    '.toggle{display:inline-flex;align-items:center;gap:6px}.toggle[hidden]{display:none}.ti svg{display:block}',
     '.collapsed .menu{display:inline-flex}.collapsed .link{display:none}',
     // Collapsed, the brand takes the free space from a zero basis, so the open menu's links wrap
     // onto rows of their own while the top row stays one line.
@@ -154,16 +155,18 @@
     return href ? link({ label: 'Docs', href: href }, 'docs') : null;
   }
 
-  // The label's leading glyph stays on a phone-sized bar; its word (`.tl`) hides there.
+  // The icon (theme.js's fixed SVG) stays on a phone-sized bar; the word (`.tl`) hides there.
+  // Without theme.js the toggle stays hidden and empty.
   function showTheme(button) {
     var api = window.siteTheme || null;
-    var current = api ? api.get() : 'auto';
-    var label = api ? api.label(current) : 'Theme';
-    var cut = label.indexOf(' ');
     button.hidden = !api;
     button.textContent = '';
-    if (cut > 0) button.appendChild(el('span', { 'aria-hidden': 'true' }, label.slice(0, cut + 1)));
-    button.appendChild(el('span', { class: 'tl' }, cut > 0 ? label.slice(cut + 1) : label));
+    if (!api) return;
+    var current = api.get();
+    var icon = el('span', { class: 'ti', 'aria-hidden': 'true' });
+    icon.innerHTML = api.icon(current);
+    button.appendChild(icon);
+    button.appendChild(el('span', { class: 'tl' }, api.word(current)));
     button.setAttribute('aria-label', 'Theme: ' + current);
   }
 
@@ -174,10 +177,14 @@
     return b;
   }
 
-  function applyAccent(accent) {
-    if (typeof accent === 'string' && ACCENT.test(accent)) {
-      document.documentElement.style.setProperty('--site-accent', accent);
-    }
+  // accent is the light-mode colour and accent_dark the dark one (tokens.css falls back to
+  // accent when it is unset). Anything but #rgb or #rrggbb is ignored, so no value reaches CSS.
+  function setAccent(name, value) {
+    if (typeof value === 'string' && ACCENT.test(value)) document.documentElement.style.setProperty(name, value);
+  }
+  function applyAccent(config) {
+    setAccent('--site-accent', config.accent);
+    setAccent('--site-accent-dark', config.accent_dark);
   }
 
   // The bar's children, flat: brand, menu button, links, spacer, then the right group.
@@ -272,7 +279,8 @@
         return;
       }
       var hit = path[0];
-      if (hit === this._toggle && window.siteTheme) window.siteTheme.next();
+      // The toggle holds an icon and a word, so a click usually lands on something inside it.
+      if (path.indexOf(this._toggle) >= 0 && window.siteTheme) window.siteTheme.next();
       else if (this._menu && path.indexOf(this._menu) >= 0) this._setOpen(!this._isOpen());
       else if (hit && hit.getAttribute && hit.getAttribute('part') === 'link') this._setOpen(false);
     }
@@ -324,7 +332,7 @@
       this._menu = parts.menu;
       this._toggle = parts.toggle;
       showTheme(this._toggle);
-      applyAccent(config.accent);
+      applyAccent(config);
       this._fit();
       this._spyOn(this.hasAttribute('scrollspy'));
       if (this._spying) this._spy();

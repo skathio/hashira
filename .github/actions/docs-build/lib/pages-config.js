@@ -45,6 +45,11 @@ function checkArray(field, value, max) {
   if (value.length > max) fail(`${field} must have at most ${max} entries, got ${value.length}`);
 }
 
+function checkAccent(field, value) {
+  expectType(field, value, 'string');
+  if (!ACCENT_RE.test(value)) fail(`${field} must be #rgb or #rrggbb, got ${JSON.stringify(value)}`);
+}
+
 function checkKeys(field, obj, allowed) {
   for (const key of Object.keys(obj)) {
     if (!allowed.includes(key)) fail(`unknown field ${field ? `${field}.` : ''}${key} (allowed: ${allowed.join(', ')})`);
@@ -208,10 +213,9 @@ const FIELDS = {
     v.forEach((entry, i) => checkLink(`nav[${i}]`, entry, 30));
   },
   home_link: (ctx, v) => checkLink('home_link', v, 30),
-  accent: (ctx, v) => {
-    expectType('accent', v, 'string');
-    if (!ACCENT_RE.test(v)) fail(`accent must be #rgb or #rrggbb, got ${JSON.stringify(v)}`);
-  },
+  accent: (ctx, v) => checkAccent('accent', v),
+  // The dark-mode accent; left out, the docs keep using `accent` in both modes.
+  accent_dark: (ctx, v) => checkAccent('accent_dark', v),
   logo: (ctx, v) => {
     checkRelative('logo', v);
     checkExtension('logo', v, ['.svg', '.png']);
@@ -259,6 +263,7 @@ function withDefaults(pages, homepage, repo) {
     nav: [],
     home_link: null,
     accent: DEFAULT_ACCENT,
+    accent_dark: null,
     logo: null,
     theme_css: null,
     ...tile,

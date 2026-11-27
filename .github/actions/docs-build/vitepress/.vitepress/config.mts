@@ -10,7 +10,7 @@ const load = createRequire(import.meta.url)
 const { escapeHtml, githubSlug, rewriteLink } = load('../../lib/links.js')
 const { configureMarkdown } = load('../../lib/markdown.js')
 const { siteConfig } = load('../../lib/site-config.js')
-const { dropCheckDarkMode, themeFromLanding, themeToLanding } = load('../../lib/theme-bridge.js')
+const { dropCheckDarkMode, themeFromLanding } = load('../../lib/theme-bridge.js')
 const { checkBuiltPage, descriptionTag, escapeInlineMetadata } = load('../../lib/html-safety.js')
 
 // The docs-build action copies this folder into a work folder under RUNNER_TEMP, stages the
@@ -42,7 +42,7 @@ const logoType = build.logo?.endsWith('.svg') ? 'image/svg+xml' : 'image/png'
 
 // VitePress minifies each head script with Vite's esbuild transform before writing it. The
 // built-page check allows these scripts as VitePress writes them, so it minifies them the same way.
-const headScripts = [themeFromLanding, themeToLanding]
+const headScripts = [themeFromLanding]
 const builtHeadScripts = await Promise.all(
   headScripts.map(async (code) => (await transformWithEsbuild(code, 'inline-script.js', { minify: true })).code.trim()),
 )
@@ -104,7 +104,12 @@ export default defineConfig({
       // VitePress prefixes the docs base to every absolute nav link, which would turn a
       // landing link such as /site/blog/ into /site/docs/site/blog/. RawLink is VitePress's
       // VPLink, except that it keeps the href of a target="_self" link as built.
-      alias: [{ find: /^.*\/VPLink\.vue$/, replacement: fileURLToPath(new URL('./theme/RawLink.vue', import.meta.url)) }],
+      // ThemeSwitch is the landing pages' three-state theme control (auto, light, dark) in
+      // place of VitePress's two-state switch, on the shared `theme` key.
+      alias: [
+        { find: /^.*\/VPLink\.vue$/, replacement: fileURLToPath(new URL('./theme/RawLink.vue', import.meta.url)) },
+        { find: /^.*\/VPSwitchAppearance\.vue$/, replacement: fileURLToPath(new URL('./theme/ThemeSwitch.vue', import.meta.url)) },
+      ],
     },
   },
   markdown: {

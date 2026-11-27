@@ -466,7 +466,9 @@ jobs:
   # hashira's own Pages site, built the way site.yml builds it: pages-site.yml's site step, then
   # site-kit and docs-build, whose VitePress dead-link check stays on, so a dead link or a build
   # error fails the pull request. Then the tests of tests/pages-site/, which build it again in a
-  # copy of the tree and check every URL and anchor of the published site.
+  # copy of the tree and check every URL and anchor of the published site. theme-and-accent.test.js
+  # also builds fixture docs sites and presses the landing and docs theme controls in a real
+  # headless Chrome, the google-chrome ubuntu-latest ships.
   hashira-site:
     name: hashira-site
     runs-on: ubuntu-latest

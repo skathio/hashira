@@ -675,7 +675,7 @@ function loadDocs(storage, prefersDark) {
   scripts.forEach((m) => vm.runInContext(m[2], sandbox));
   const darkAtFirstPaint = root.classes.has('dark');
   listeners.forEach((fn) => fn());
-  // What VitePress's appearance toggle does on a click: store its own key and flip the class.
+  // What VitePress does when its own key changes: store it and flip the class.
   const toggle = (dark) => {
     storage?.setItem(VP_KEY, dark ? 'dark' : 'light');
     root.classList.toggle('dark', dark);
@@ -697,13 +697,16 @@ test('(16) no stored theme, auto, or any other value follows the system', () => 
   }
 });
 
-test('(16) a toggle in the docs is written back to the theme key', () => {
-  const storage = makeStorage({ theme: 'light' });
+// The docs' theme control (ThemeSwitch.vue) stores a choice itself, and theme-and-accent.test.js
+// presses it in Chrome. The head scripts must never turn a class change into a choice: in auto
+// the class follows the system, and storing it would pin the theme the system happened to show.
+test('(16) a class change in the docs, such as a system theme change in auto, stores no choice', () => {
+  const storage = makeStorage({});
   const docs = loadDocs(storage, false);
   docs.toggle(true);
-  assert.equal(storage.getItem('theme'), 'dark');
+  assert.equal(storage.getItem('theme'), null);
   docs.toggle(false);
-  assert.equal(storage.getItem('theme'), 'light');
+  assert.equal(storage.getItem('theme'), null);
 });
 
 test('(16) with storage unavailable the docs follow the system and the head scripts throw nothing', () => {

@@ -12,7 +12,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 const { loadPagesConfig } = require('./pages-config');
-const { accentCss } = require('./accent');
+const { accentCss, contrastWarnings } = require('./accent');
 const { checkStagedFiles, isUnpublished, refuseFrontMatterCode } = require('./site-config');
 
 const ACTION_DIR = path.resolve(__dirname, '..');
@@ -120,7 +120,7 @@ const THEME_CSS = 'site-theme.css';
 
 // The shared theme imports accent.css, so the site's accent comes after the shared colours.
 function writeTheme(root, config, vitepress, stage) {
-  fs.writeFileSync(path.join(vitepress, '.vitepress', 'theme', 'accent.css'), accentCss(config.accent));
+  fs.writeFileSync(path.join(vitepress, '.vitepress', 'theme', 'accent.css'), accentCss(config.accent, config.accent_dark));
   return config.theme_css ? publish(root, stage, { from: config.theme_css, name: THEME_CSS, what: 'theme_css' }) : null;
 }
 
@@ -141,12 +141,13 @@ function prepare(root, out) {
   const themeCss = writeTheme(root, config, vitepress, stage);
   const build = { config, logo, themeCss, repo: repoUrl(), docs, stage, dist: path.join(work, 'dist'), cache: path.join(work, 'cache') };
   fs.writeFileSync(path.join(vitepress, '.vitepress', 'build.json'), `${JSON.stringify(build, null, 2)}\n`);
-  return { work, stage };
+  return { work, stage, warnings: contrastWarnings(config.accent, config.accent_dark) };
 }
 
 function main() {
   try {
-    const { work, stage } = prepare(process.cwd(), process.env.DB_OUTPUT_DIR || '');
+    const { work, stage, warnings } = prepare(process.cwd(), process.env.DB_OUTPUT_DIR || '');
+    for (const w of warnings) process.stdout.write(`::warning::${w}\n`);
     if (process.env.GITHUB_OUTPUT) fs.appendFileSync(process.env.GITHUB_OUTPUT, `work=${work}\nstage=${stage}\n`);
     process.stdout.write(`docs-build: staged the docs in ${stage}\n`);
   } catch (err) {

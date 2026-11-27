@@ -12,10 +12,10 @@ const path = require('node:path');
 
 const LIB = path.join(__dirname, '..', '..', '.github', 'actions', 'docs-build', 'lib');
 const { checkBuiltPage } = require(path.join(LIB, 'html-safety.js'));
-const { themeFromLanding, themeToLanding } = require(path.join(LIB, 'theme-bridge.js'));
+const { themeFromLanding } = require(path.join(LIB, 'theme-bridge.js'));
 
 const BASE = '/site/docs/';
-const opts = { base: BASE, inlineScripts: [themeFromLanding, themeToLanding] };
+const opts = { base: BASE, inlineScripts: [themeFromLanding] };
 
 // The shape of a page VitePress 1.6 builds, with this config's head scripts.
 const page = (body = '<p>Hi</p>') => [
@@ -25,7 +25,7 @@ const page = (body = '<p>Hi</p>') => [
   `<link rel="icon" href="${BASE}mark.svg" type="image/svg+xml">`,
   `<script type="module" src="${BASE}assets/app.x.js"></script>`,
   `<link rel="modulepreload" href="${BASE}assets/chunks/theme.x.js">`,
-  `<script>${themeFromLanding}</script><script>${themeToLanding}</script>`,
+  `<script>${themeFromLanding}</script>`,
   '<script id="check-mac-os">document.documentElement.classList.toggle("mac",/Mac|iPhone|iPod|iPad/i.test(navigator.platform));</script>',
   '</head><body><div id="app">',
   `<img class="VPImage logo" src="${BASE}mark.svg" alt data-v-1>`,
@@ -77,7 +77,7 @@ for (const [name, body] of Object.entries(bad)) {
 }
 
 test('an inline script differing from the allowed ones by one character fails', () => {
-  const html = page().replace(themeToLanding, `${themeToLanding};x()`);
+  const html = page().replace(themeFromLanding, `${themeFromLanding};x()`);
   assert.ok(checkBuiltPage(html, opts).length > 0);
 });
 

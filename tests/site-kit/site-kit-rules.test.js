@@ -848,6 +848,20 @@ test('(16) the toggle stores only light, dark or auto under "theme", and reaches
   assert.deepEqual(browser.writes.filter((v) => !['light', 'dark', 'auto'].includes(v)), []);
 });
 
+// A pointer lands on the glyph or the word inside the button far more often than on its padding.
+test('(16) a click on the text inside the toggle presses it', async () => {
+  const browser = await page({ config: CONFIG, stored: 'auto' });
+  // The toggle renders its spans again after each press, so they are looked up each time.
+  const spans = () => toggleOf(browser.nav).childNodes.filter((n) => n.localName === 'span');
+  assert.ok(spans().length > 0, 'the toggle holds no span to click');
+  for (let i = 0; i < spans().length; i++) {
+    const before = browser.store.get('theme') ?? 'auto';
+    const span = spans()[i];
+    span.click();
+    assert.notEqual(browser.store.get('theme') ?? 'auto', before, `a click on <span class="${span.getAttribute('class') ?? ''}"> did nothing`);
+  }
+});
+
 test('(16) from an unknown stored value, the toggle writes a valid choice', async () => {
   const browser = await page({ config: CONFIG, stored: 'purple' });
   toggleOf(browser.nav).click();

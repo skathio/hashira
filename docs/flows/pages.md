@@ -159,6 +159,7 @@ a pull request can edit, checked before anything is installed.
 | `nav` | list of `{ "label", "href" }` | at most 8 entries, `label` 1 to 30 characters | `[]` |
 | `home_link` | `{ "label", "href" }` | `label` 1 to 30 characters | none |
 | `accent` | `#rgb` or `#rrggbb` | — | `colour` of `.github/homepage.json`, else `#1e7d69` |
+| `accent_dark` | `#rgb` or `#rrggbb` | — | none: `accent` in dark mode too |
 | `logo` | repo-relative `.svg` or `.png` | must exist | `image` of `.github/homepage.json`, else none |
 | `theme_css` | repo-relative `.css` | must exist | none |
 
@@ -180,10 +181,16 @@ level and inside a `sidebar`, `nav` or `home_link` entry.
   `http://`, `/`, `./`, `../` or `#`, and holds no backslash or control
   character; a docs header resolves it against the
   landing, so `#flows` opens the landing's `flows` section.
-- **`accent`** is the brand colour. The default `#1e7d69` keeps hashira's
-  own pair: the darker green in light mode, a lighter one in dark mode. Any
-  other colour is used in both modes, with the hover and soft shades mixed
-  from it.
+- **`accent`** is the brand colour in light mode, and **`accent_dark`** the
+  one in dark mode. The default `#1e7d69` with no `accent_dark` keeps
+  hashira's own pair: the darker green in light mode, a lighter one
+  (`#4fd1b5`) in dark mode. Another `accent` with no `accent_dark` is used in
+  both modes. Each mode's hover and soft shades are mixed from that mode's
+  colour. Links are text in the accent, so the build prints a `::warning`
+  (and still succeeds) when a mode's link colour has less than 4.5:1
+  contrast against that mode's canvas (`#f7f6f2` light, `#101216` dark):
+  pick a darker `accent` or a lighter `accent_dark`. Give `<site-nav>` the
+  same pair as `accent` and `accent_dark`.
 - **`logo`** is copied into the docs and shown as the logo and the favicon.
 - **`theme_css`** is published as it is, as `site-theme.css` at the docs
   base, and loaded after the shared theme, so its rules win. The build does
@@ -244,7 +251,11 @@ build, before it starts and again after `pre_build_command`. `docs/public/`
 is for files served as they are, so a `.md` there fails too.
 Local search is on, and VitePress's dead-link check fails the build on a
 link to a page that does not exist. The docs and the landing share one
-theme choice: the `theme` key in `localStorage`.
+theme choice: the `theme` key in `localStorage`. Both have the same
+three-state control. Each press goes from auto to the theme the system does
+not show, then to the system's own theme, then back to auto. So the first
+press always changes what the page shows. In auto the page follows the
+system theme as it changes.
 
 ## 4. The landing page and the site kit
 
@@ -259,8 +270,13 @@ from the landing page:
 
 - **`tokens.css`**: the colour, type and spacing variables in light, system
   dark and forced dark. Set `--site-accent` (and `--site-accent-dark`) on
-  `:root` for another accent.
-- **`theme.js`**: auto, light or dark under the `theme` key. Load it in
+  `:root` for another accent. `<site-nav>` sets both from its `accent` and
+  `accent_dark`.
+- **`theme.js`**: auto, light or dark under the `theme` key, with the cycle
+  in section 3. It sets `data-theme="light|dark"` on `<html>` for a choice
+  (none in auto) and `data-theme-resolved="light|dark"` for the theme the
+  page shows, which follows `prefers-color-scheme` while in auto. Style on
+  `data-theme-resolved` when a rule needs the shown theme. Load it in
   `<head>` with no `defer`, `async` or `type=module`, so a stored choice
   applies before first paint.
 - **`site-nav.js`**: the `<site-nav>` header. Give it the same `name`, `nav`
@@ -385,7 +401,7 @@ and stops the build before anything is deployed.
 | `<field> must not be empty` / `must be at most <n> characters` / `must have at most <n> entries` | A value outside the limits in section 3. |
 | `base must start and end with '/'` / `base must be a URL path of letters, digits and . _ ~ % -` | `base` is not a plain path folder. |
 | `<field>.href must start with one of https:// http:// / ./ ../ #` | A header link with another scheme, such as `javascript:`. |
-| `accent must be #rgb or #rrggbb` | A colour in another form. |
+| `accent must be #rgb or #rrggbb` / `accent_dark must be #rgb or #rrggbb` | A colour in another form. |
 | `logo must end in .svg or .png` / `theme_css must end in .css` / `home_page must end in .md` / `sidebar[<i>].file must end in .md` | A file of another kind. |
 | `<field> must be a relative path` / `must not contain a '..' segment` / `must not contain a backslash or NUL` | A path that could leave the repo. |
 | `<field> must be a normalized path, with no '.' or empty segment` | A path with another spelling, such as `./a.md` or `a//b.md`. |
