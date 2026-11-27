@@ -35,7 +35,7 @@ try {
 } catch (err) {
   failBuild((err as Error).message)
 }
-const { rewrites, isFolder } = site
+const { rewrites, isFolder, isRepoDir } = site
 const unpublished: string[] = config.unpublished
 const logo = build.logo ? `/${build.logo}` : undefined
 const logoType = build.logo?.endsWith('.svg') ? 'image/svg+xml' : 'image/png'
@@ -123,6 +123,6 @@ export default defineConfig({
     attrs: { disable: true },
     // Heading ids follow GitHub's rule, so a link's #anchor lands here as it does there.
     anchor: { slugify: githubSlug },
-    config: (md) => configureMarkdown(md, { srcDir, rewrite: (page, href) => rewriteLink(page, href, { repo: build.repo, unpublished, rewrites, isFolder }) }),
+    config: (md) => configureMarkdown(md, { srcDir, rewrite: (page, href) => rewriteLink(page, href, { repo: build.repo, unpublished, rewrites, isFolder, isRepoDir }) }),
   },
 })

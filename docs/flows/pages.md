@@ -154,7 +154,7 @@ a pull request can edit, checked before anything is installed.
 | `description` | string | at most 200 characters | `''` |
 | `base` | string | at most 100 characters, starts and ends with `/`, letters, digits and `. _ ~ % -` between single `/`s | `/<repo>/docs/` |
 | `home_page` | `.md` path under `docs/` | must exist | `getting-started.md` |
-| `sidebar` | list of `{ "file", "label" }` | at most 100 entries, `file` a `.md` path under `docs/`, `label` 1 to 60 characters | `[]` |
+| `sidebar` | list of pages `{ "file", "label" }`, groups `{ "label", "items", "collapsed" }` and folder sections `{ "label", "dir", "collapsed" }` | at most 100 entries in each list, groups nested at most 3 deep, `file` a `.md` path under `docs/`, `dir` a folder path under `docs/`, `label` 1 to 60 characters, `collapsed` a boolean | `[]` |
 | `unpublished` | list of paths under `docs/` | at most 100 entries | `[]` |
 | `nav` | list of `{ "label", "href" }` | at most 8 entries, `label` 1 to 30 characters | `[]` |
 | `home_link` | `{ "label", "href" }` | `label` 1 to 30 characters | none |
@@ -164,16 +164,33 @@ a pull request can edit, checked before anything is installed.
 | `theme_css` | repo-relative `.css` | must exist | none |
 
 The file itself may be at most 64 KB. An unknown field fails, at the top
-level and inside a `sidebar`, `nav` or `home_link` entry.
+level and inside a `sidebar` entry (a group's or a folder section's too), a
+`nav` entry or `home_link`.
 
 - **`name`** is the docs' site title and the brand of the header.
 - **`base`** is where the docs are served. The landing is the folder above
   it: `/<repo>/` for the default `/<repo>/docs/`.
 - **`home_page`** opens at the docs base. It is published as the docs'
   `index.html`, so a `docs/index.md` next to it fails the build.
-- **`sidebar`** lists pages in order with a short label. Every other
-  published page follows, by path, under its first H1. A `sidebar` file
-  that is missing, or also in `unpublished`, fails the build.
+- **`sidebar`** lists pages in order with a short label. An entry is one of
+  three shapes, and one entry mixing them (a `file` with `items`, say) fails:
+  - a page, `{ "file": "guide.md", "label": "Guide" }`;
+  - a group, `{ "label": "Flows", "items": [ ... ], "collapsed": false }`,
+    whose `items` are entries of any shape. Groups nest up to 3 levels, and a
+    group needs at least one item;
+  - a folder section, `{ "label": "API", "dir": "api/", "collapsed": true }`,
+    which lists the published pages under `docs/api/` (sub-folders included)
+    in path order, each under its first H1. It also takes the pages
+    `pre_build_command` writes there, and leaves out a page the sidebar
+    already lists as a page or in an earlier folder section. A folder section
+    with no page left to list fails the build.
+
+  `collapsed` left out gives a group that is always open; `false` one that
+  opens and can be folded; `true` one that starts folded. Every other
+  published page follows the sidebar, by path, under its first H1, so each
+  page is listed once. A `sidebar` file that is missing, or also in
+  `unpublished`, fails the build. A `pre_build_command` may write a generated
+  sidebar instead (see "API reference with docfx or typedoc" below).
 - **`unpublished`** names pages, or folders (`internal` or `internal/`),
   that get no page and no search entry. A link to one opens it on GitHub.
 - **`nav`** and **`home_link`** are the header links, shown on the docs and
@@ -181,6 +198,18 @@ level and inside a `sidebar`, `nav` or `home_link` entry.
   `http://`, `/`, `./`, `../` or `#`, and holds no backslash or control
   character; a docs header resolves it against the
   landing, so `#flows` opens the landing's `flows` section.
+- **The docs header's width budget.** VitePress shows its header links one by
+  one from 768px up and folds them into its menu only below that, so a long
+  row would scroll the page sideways at tablet widths. With up to 2 `nav`
+  entries the header holds them, Docs and `home_link` one by one, as before.
+  With 3 or more it holds one dropdown labelled with `name`, which lists the
+  `nav` entries, followed by Docs and `home_link`; a long `name` is cut
+  short with an ellipsis in the dropdown's button. Docs is marked as the
+  current section on every docs page. Keep `name` short, since the site title
+  shows it in full: with 8 `nav` entries the header fits from 768px up with a
+  `name` of up to about 20 characters and a short `home_link` label, such as
+  `← skathio`. With 2 entries or fewer, the labels in the row count as well. The landing's `<site-nav>` folds its links into a
+  menu of its own when they do not fit.
 - **`accent`** is the brand colour in light mode, and **`accent_dark`** the
   one in dark mode. The default `#1e7d69` with no `accent_dark` keeps
   hashira's own pair: the darker green in light mode, a lighter one
@@ -199,9 +228,10 @@ level and inside a `sidebar`, `nav` or `home_link` entry.
   one in `docs/public/`.
 
 Paths are relative to the repo (`logo`, `theme_css`) or to `docs/`
-(`home_page`, `sidebar` files, `unpublished`): no leading `/`, no `..`
-segment, no `.` or empty segment (`./a.md`, `a//b.md`), no backslash, and no
-symlink that leaves the repo. A folder in `unpublished` may end in one `/`.
+(`home_page`, `sidebar` files and `dir`s, `unpublished`): no leading `/`, no
+`..` segment, no `.` or empty segment (`./a.md`, `a//b.md`), no backslash,
+and no symlink that leaves the repo. A folder in `unpublished`, or a `dir`,
+may end in one `/`.
 
 Hashira's own file, for reference:
 
@@ -219,13 +249,52 @@ Hashira's own file, for reference:
 }
 ```
 
+### API reference with docfx or typedoc
+
+A generated API reference has a page per type, too many to list by hand and
+renamed with the code. Two ways keep the sidebar in step with it:
+
+- **A folder section.** Have `pre_build_command` write the Markdown into the
+  stage, and list the folder in `pages.json`:
+
+  ```yaml
+  # in the caller of pages-site.yml (or docs-build)
+  pre_build_command: ./scripts/api-docs.sh   # e.g. typedoc --plugin typedoc-plugin-markdown --out "$DOCS_STAGE/api"
+  ```
+
+  ```json
+  { "sidebar": [{ "file": "getting-started.md", "label": "Getting started" },
+                { "label": "API", "dir": "api/", "collapsed": true }] }
+  ```
+
+  Each generated page is listed under its first H1, in path order.
+
+- **A generated sidebar.** When the tool also knows the grouping (namespaces,
+  modules), `pre_build_command` may write the whole sidebar to
+  `$DOCS_STAGE/.sidebar.json`: a JSON array of entries in the same shape as
+  `pages.json`'s `sidebar`. When the file is there it replaces `pages.json`'s
+  `sidebar`. It is data, not code: it is checked with the same rules and
+  limits (64 KB, 100 entries in each list, 3 levels, the unknown-field rule),
+  its errors name `DOCS_STAGE/.sidebar.json`, every page it names must be in
+  the stage after `pre_build_command`, it must be a regular file (not a
+  symlink), and it is never published. Only `pre_build_command` can write it:
+  a `docs/.sidebar.json` in the repo is not staged, so a pull request that
+  edits data files cannot set it. A docfx build, for example, can convert its
+  `toc.yml` into this file with a short script.
+
+Keep the generating commands in a script of the repo, so a local build runs
+the same steps.
+
 ### How the docs read
 
 The pages are the `docs/` files as GitHub renders them. Heading ids follow
 GitHub's rule, so a link's `#anchor` lands on the site as it does on
 GitHub. A link to another published page opens that page; a link that
 leaves `docs/`, or reaches an unpublished page or a folder with no index
-page, opens the file on GitHub. Raw HTML, `{attr="..."}` blocks and
+page, opens the file on GitHub, at `HEAD`. A link to a folder of the repo,
+such as `../templates` or `../tests/`, opens it as a folder (`tree/HEAD/...`):
+the build looks the path up in the checkout, so the link needs no trailing
+`/`, and one that ends in `/` always opens as a folder. Raw HTML, `{attr="..."}` blocks and
 `${{ }}` render as text, and front matter adds nothing to the page: a
 page's title is its first heading. Only YAML front matter is read: a page
 whose opening `---` names another language, such as `---js`, fails the
@@ -415,6 +484,11 @@ and stops the build before anything is deployed.
 | `docs/<path> is a symlink into <folder>, which is never published.` | A symlink under `docs/` into `.git`, another dot folder or `node_modules`. |
 | `<field>: <path> not found` / `resolves outside the repo` / `is not a file` | A `logo`, `theme_css` or `home_page` that is not a file in the repo. |
 | `sidebar: files not found in docs/: <files>` | A `sidebar` page is missing. |
+| `sidebar[<i>] must have exactly one of file (a page), items (a group) or dir (a folder section)` | A sidebar entry of no shape, or mixing two. |
+| `sidebar[<i>]...: sidebar groups nest at most 3 levels deep` / `sidebar[<i>].items must not be empty` | A group nested 4 deep, or one with no items. |
+| `sidebar folder section <dir> lists no page` | No published page under the folder that the sidebar does not already list. |
+| `sidebar files missing from the docs after pre_build_command: <files>` | A sidebar page, from `pages.json` or the generated sidebar, is not in the stage. |
+| `DOCS_STAGE/.sidebar.json: <problem>` | The generated sidebar is not valid: the same messages as for `sidebar`, or `is not a regular file`. |
 | `sidebar files are also in unpublished: <files>` | A page both listed and hidden. |
 | `.github/homepage.json: invalid JSON` | The homepage tile file the defaults come from is broken. |
 | `.github/homepage.json: must hold a JSON object` / `.github/homepage.json: is <n> bytes; the limit is 64 KB` | The homepage tile file is a list or a value, or over 64 KB. |

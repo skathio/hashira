@@ -34,11 +34,12 @@ const isUnpublished = (rel, unpublished) => unpublished.some((u) => rel === u ||
 //
 // A link that leaves docs/, or reaches an unpublished page, goes to the file on GitHub with its
 // ?query and #anchor; the path stays as the page wrote it, escapes included. A link to the repo
-// root opens the repo. A link to a folder of docs/ that has no page (isFolder says which) opens
-// that folder on GitHub, as it does when the page is read there. A link to a page that
+// root opens the repo, and one to a folder opens it as a folder: a path that ends in '/' names
+// one, and so does any other that isRepoDir finds is a folder of the checkout. A link to a folder of docs/ that has no page (isFolder
+// says which) opens that folder on GitHub, as it does when the page is read there. A link to a page that
 // `rewrites` moved follows it. Every other relative link is left to VitePress's dead-link
 // check, and so is one that leaves the repo.
-function rewriteLink(page, href, { repo, ref = 'HEAD', unpublished = [], rewrites = {}, isFolder = () => false } = {}) {
+function rewriteLink(page, href, { repo, ref = 'HEAD', unpublished = [], rewrites = {}, isFolder = () => false, isRepoDir = () => false } = {}) {
   const target = resolveLink(page, href);
   if (!target || target.path === '..' || target.path.startsWith('../')) {
     return null;
@@ -49,7 +50,7 @@ function rewriteLink(page, href, { repo, ref = 'HEAD', unpublished = [], rewrite
     return github('tree', '');
   }
   if (!path.startsWith('docs/') || isUnpublished(path.slice('docs/'.length), unpublished)) {
-    return github('blob', written);
+    return github(path.endsWith('/') || isRepoDir(path) ? 'tree' : 'blob', written);
   }
   if (path.endsWith('/') && isFolder(path)) {
     return github('tree', written);

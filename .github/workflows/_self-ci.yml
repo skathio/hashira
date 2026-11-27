@@ -314,7 +314,7 @@ jobs:
         # Files are listed by name: Node 20's `node --test` takes no globs.
         run: |
           set -euo pipefail
-          node --test tests/docs-build/pages-config.test.js tests/docs-build/pages-config-edges.test.js tests/docs-build/pages-rules.test.js tests/docs-build/docs-build-lib.test.js tests/docs-build/markdown.test.js tests/docs-build/built-html.test.js tests/docs-build/links.test.mjs tests/pages-site/request-line-gaps.test.js
+          node --test tests/docs-build/pages-config.test.js tests/docs-build/pages-config-edges.test.js tests/docs-build/pages-rules.test.js tests/docs-build/docs-build-lib.test.js tests/docs-build/markdown.test.js tests/docs-build/built-html.test.js tests/docs-build/links.test.mjs tests/docs-build/sidebar-generated.test.js tests/pages-site/request-line-gaps.test.js
 
   docs-build-action:
     name: docs-build-action
@@ -337,6 +337,13 @@ jobs:
         run: |
           set -euo pipefail
           node --test tests/docs-build/docs-build-rules.test.js tests/docs-build/config-hardening.test.js
+      # The docs header at 768, 1024 and 1280 with 8 nav entries, opened in the google-chrome
+      # ubuntu-latest ships, plus the grouped, folder and generated sidebar and the folder links.
+      - name: Run the docs header, sidebar and folder link rules
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --test tests/docs-build/docs-nav-sidebar.test.js
 
   site-kit-unit-tests:
     name: site-kit-unit-tests
