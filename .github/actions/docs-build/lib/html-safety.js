@@ -190,23 +190,35 @@ const SVG_EMBEDS = new Set(['foreignobject', 'iframe', 'embed', 'object']);
 // that swallows the real tag after it. One left open is not a token, so the scan reads into it.
 const SVG_TOKEN = /<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>|<\?[\s\S]*?\?>|<([a-zA-Z][\w:.-]*)((?:[^>"']|"[^"]*"|'[^']*')*)>/g;
 
-// Returns the SVG text's problems, one line each; empty means it holds no script.
-function svgProblems(text) {
-  if (text.includes('\0')) return ['it is not UTF-8 text'];
+// The problems a whole-text pattern finds: a script element, a declaration, a stylesheet or XSLT.
+function svgTextProblems(text) {
   const problems = [];
   if (SVG_SCRIPT.test(text)) problems.push('it holds a <script> element');
   const declaration = text.match(SVG_DECLARATION);
   if (declaration) problems.push(`it holds a <!${declaration[1].toUpperCase()}> declaration`);
   if (SVG_STYLESHEET.test(text)) problems.push('it holds an <?xml-stylesheet?> instruction');
   if (SVG_XSLT.test(text)) problems.push('it holds XSLT');
+  return problems;
+}
+
+// The problems of one tag: an embedded document, a handler, srcdoc or a javascript: URL.
+function svgTagProblems(tag, attrs) {
+  const problems = [];
+  if (SVG_EMBEDS.has(tag.toLowerCase().replace(/^[\w.-]+:/, ''))) problems.push(`it holds a <${tag}> element`);
+  for (const [name, value] of attributes(attrs)) {
+    if (/^(?:[\w.-]+:)?on/.test(name)) problems.push(`<${tag}> has the handler ${name}`);
+    else if (/^(?:[\w.-]+:)?srcdoc$/.test(name)) problems.push(`<${tag}> has a srcdoc attribute`);
+    else if (schemeOf(value).includes('javascript:')) problems.push(`<${tag}> ${name} names a javascript: URL`);
+  }
+  return problems;
+}
+
+// Returns the SVG text's problems, one line each; empty means it holds no script.
+function svgProblems(text) {
+  if (text.includes('\0')) return ['it is not UTF-8 text'];
+  const problems = svgTextProblems(text);
   for (const [, tag, attrs] of text.matchAll(SVG_TOKEN)) {
-    if (!tag) continue;
-    if (SVG_EMBEDS.has(tag.toLowerCase().replace(/^[\w.-]+:/, ''))) problems.push(`it holds a <${tag}> element`);
-    for (const [name, value] of attributes(attrs)) {
-      if (/^(?:[\w.-]+:)?on/.test(name)) problems.push(`<${tag}> has the handler ${name}`);
-      else if (/^(?:[\w.-]+:)?srcdoc$/.test(name)) problems.push(`<${tag}> has a srcdoc attribute`);
-      else if (schemeOf(value).includes('javascript:')) problems.push(`<${tag}> ${name} names a javascript: URL`);
-    }
+    if (tag) problems.push(...svgTagProblems(tag, attrs));
   }
   return [...new Set(problems)];
 }
