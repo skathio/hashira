@@ -21,7 +21,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      # actions/checkout v4.2.2
+      # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       # Pin actionlint by downloading the release binary at a fixed version +
       # verifying the SHA-256 of the archive. Chosen over `rhysd/actionlint@<sha>`
@@ -60,7 +60,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      # actions/checkout v4.2.2
+      # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - name: List composite-action directories (scaffold smoke)
         run: |
@@ -81,9 +81,9 @@ jobs:
     permissions:
       contents: read
     steps:
-      # actions/checkout v4.2.2
+      # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      # actions/setup-node v4.1.0 — needed only for a recent enough node
+      # actions/setup-node v7.1.0 — needed only for a recent enough node
       # to have `node --test` (>= 18). Default ubuntu-latest node would
       # also work but pinning makes the matrix explicit.
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
@@ -111,17 +111,17 @@ jobs:
     permissions:
       contents: read
     steps:
-      # actions/checkout v4.2.2
+      # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       # D14 self-checkout: composite actions reference library from .hashira/
       - name: Checkout library into .hashira
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           path: .hashira
           persist-credentials: false
 
-      # actions/setup-node v4.1.0 — coverage-report depends on a `node`
+      # actions/setup-node v7.1.0 — coverage-report depends on a `node`
       # binary on PATH for its parser shim. Run setup-node BEFORE invoking
       # coverage-report so the dependency is explicit in the self-CI shape
       # (rather than relying on the preinstalled ubuntu-latest Node).
@@ -183,7 +183,7 @@ jobs:
           test -f "${out}" || { echo "run-tests-js: expected coverage at ${out}"; exit 1; }
 
       # --- run-tests-dotnet smoke against the .NET fixture --------------
-      # actions/setup-dotnet v4.1.0 — ubuntu-latest images ship SDKs but
+      # actions/setup-dotnet v6.1.0 — ubuntu-latest images ship SDKs but
       # pinning the action ensures a deterministic 8.x version for the
       # fixture's <TargetFramework>net8.0</TargetFramework>.
       - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73
@@ -210,9 +210,9 @@ jobs:
     permissions:
       contents: read
     steps:
-      # actions/checkout v4.2.2
+      # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      # actions/setup-node v4.1.0
+      # actions/setup-node v7.1.0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: '20'
@@ -236,9 +236,9 @@ jobs:
     permissions:
       contents: read
     steps:
-      # actions/checkout v4.2.2
+      # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      # actions/setup-node v4.1.0
+      # actions/setup-node v7.1.0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: '20'
@@ -262,9 +262,9 @@ jobs:
     permissions:
       contents: read
     steps:
-      # actions/checkout v4.2.2
+      # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      # actions/setup-node v4.1.0. Node 20 is the oldest Node the lib/ code
+      # actions/setup-node v7.1.0. Node 20 is the oldest Node the lib/ code
       # must keep working on.
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
@@ -282,9 +282,9 @@ jobs:
     permissions:
       contents: read
     steps:
-      # actions/checkout v4.2.2
+      # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      # actions/setup-node v4.1.0. Node 20 is the oldest Node the lib/ code
+      # actions/setup-node v7.1.0. Node 20 is the oldest Node the lib/ code
       # must keep working on.
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
@@ -302,9 +302,9 @@ jobs:
     permissions:
       contents: read
     steps:
-      # actions/checkout v4.2.2
+      # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      # actions/setup-node v4.1.0. Node 20 is the oldest Node the lib/ code
+      # actions/setup-node v7.1.0. Node 20 is the oldest Node the lib/ code
       # must keep working on.
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
@@ -314,7 +314,7 @@ jobs:
         # Files are listed by name: Node 20's `node --test` takes no globs.
         run: |
           set -euo pipefail
-          node --test tests/docs-build/pages-config.test.js tests/docs-build/pages-config-edges.test.js tests/docs-build/pages-rules.test.js tests/docs-build/docs-build-lib.test.js tests/docs-build/markdown.test.js tests/docs-build/built-html.test.js tests/docs-build/links.test.mjs tests/pages-site/request-line-gaps.test.js
+          node --test tests/docs-build/pages-config.test.js tests/docs-build/pages-config-edges.test.js tests/docs-build/pages-rules.test.js tests/docs-build/docs-build-lib.test.js tests/docs-build/markdown.test.js tests/docs-build/built-html.test.js tests/docs-build/links.test.mjs tests/docs-build/sidebar-generated.test.js tests/docs-build/page-meta-cli.test.js tests/pages-site/request-line-gaps.test.js
 
   docs-build-action:
     name: docs-build-action
@@ -326,9 +326,9 @@ jobs:
     permissions:
       contents: read
     steps:
-      # actions/checkout v4.2.2
+      # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      # actions/setup-node v4.1.0
+      # actions/setup-node v7.1.0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: '24'
@@ -337,19 +337,36 @@ jobs:
         run: |
           set -euo pipefail
           node --test tests/docs-build/docs-build-rules.test.js tests/docs-build/config-hardening.test.js
+      # The docs header at 768, 1024 and 1280 with 8 nav entries, opened in the google-chrome
+      # ubuntu-latest ships, plus the grouped, folder and generated sidebar and the folder links.
+      - name: Run the docs header, sidebar and folder link rules
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --test tests/docs-build/docs-nav-sidebar.test.js
+      # lib/cli.js --check and --out (the entry point action.yml runs), the pages.json JSON
+      # Schema against pages-config.js, the anchor warnings, the og and canonical tags, and the
+      # SVG and image checks.
+      - name: Run the docs-build CLI, schema, page meta and SVG rules
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --test tests/docs-build/cli-schema-meta.test.js
 
   site-kit-unit-tests:
     name: site-kit-unit-tests
     # Runs the site-kit action's copy step with bash (reading action.yml with
     # PyYAML, preinstalled on the runner) and loads kit/theme.js and
-    # kit/site-nav.js into a small fake browser.
+    # kit/site-nav.js into a small fake browser. site-nav-layout.test.js lays
+    # <site-nav> out in a real headless Chrome (widths, overflow, ::slotted,
+    # the accessibility tree), using the google-chrome ubuntu-latest ships.
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
-      # actions/checkout v4.2.2
+      # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      # actions/setup-node v4.1.0. Node 20 is the oldest Node the tests must
+      # actions/setup-node v7.1.0. Node 20 is the oldest Node the tests must
       # keep working on.
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
@@ -359,21 +376,26 @@ jobs:
         # Files are listed by name: Node 20's `node --test` takes no globs.
         run: |
           set -euo pipefail
-          node --test tests/site-kit/site-kit-rules.test.js tests/site-kit/site-kit-action-edges.test.js
+          node --test tests/site-kit/site-kit-rules.test.js tests/site-kit/site-kit-action-edges.test.js \
+            tests/site-kit/site-nav-layout.test.js
 
   pages-site-workflow:
     name: pages-site-workflow
     # Reads pages-site.yml with PyYAML (preinstalled on the runner) and runs
     # its jobs' steps with bash the way a runner would: the ref checks, the
     # site build or copy, site-kit's real copy step and deploy's latest-release
-    # check against a local git repo. Plus the shape lints it must keep.
+    # check against a local git repo. Plus the shape lints it must keep, the released-approval
+    # helper's decisions, and the rule that no job running a caller's code holds id-token or pages.
+    # Then the features (scan before gate, deploy: false, prebuilt, approval, source, the build
+    # secret, the kit-reference check) run the same way, plus one docs-build run through cli.js,
+    # which installs VitePress from its lockfile (network once).
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
-      # actions/checkout v4.2.2
+      # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      # actions/setup-node v4.1.0. Node 20 is the oldest Node the tests must
+      # actions/setup-node v7.1.0. Node 20 is the oldest Node the tests must
       # keep working on.
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
@@ -382,7 +404,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          node --test tests/pages-site/pages-site-rules.test.js
+          node --test tests/pages-site/pages-site-rules.test.js tests/pages-site/released-approval.test.js tests/pages-site/grants-and-approval.test.js tests/pages-site/kit-refs.test.js tests/pages-site/pages-site-features.test.js \
+            tests/pages-site/pages-hardening.test.js tests/pages-site/review-svg-and-ignore.test.js
 
   release-logic-unit-tests:
     name: release-logic-unit-tests
@@ -392,11 +415,11 @@ jobs:
     permissions:
       contents: read
     steps:
-      # actions/checkout v4.2.2
+      # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      # actions/setup-node v4.1.0. Node 20 is the oldest Node the release
+      # actions/setup-node v7.1.0. Node 20 is the oldest Node the release
       # logic must keep working on.
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
@@ -420,7 +443,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      # actions/checkout v4.2.2
+      # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
@@ -449,7 +472,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      # actions/checkout v4.2.2
+      # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
@@ -462,19 +485,21 @@ jobs:
   # hashira's own Pages site, built the way site.yml builds it: pages-site.yml's site step, then
   # site-kit and docs-build, whose VitePress dead-link check stays on, so a dead link or a build
   # error fails the pull request. Then the tests of tests/pages-site/, which build it again in a
-  # copy of the tree and check every URL and anchor of the published site.
+  # copy of the tree and check every URL and anchor of the published site. theme-and-accent.test.js
+  # also builds fixture docs sites and presses the landing and docs theme controls in a real
+  # headless Chrome, the google-chrome ubuntu-latest ships.
   hashira-site:
     name: hashira-site
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
-      # actions/checkout v4.2.2
+      # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
       # VitePress 1.6 and the folder form of `node --test tests/pages-site/` need a current Node.
-      # actions/setup-node v4.1.0
+      # actions/setup-node v7.1.0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: '24'
@@ -502,13 +527,13 @@ jobs:
       # which need no grant.
       contents: read
     steps:
-      # actions/checkout v4.2.2. Full history so the pull request's base
+      # actions/checkout v7.0.1. Full history so the pull request's base
       # commit is present without a credentialed fetch.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
           persist-credentials: false
-      # actions/setup-node v4.1.0. The gate installs and runs SoMi with
+      # actions/setup-node v7.1.0. The gate installs and runs SoMi with
       # npm/node; Node 20 is the oldest Node the consumer workflows default to.
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
@@ -528,9 +553,9 @@ jobs:
     permissions:
       contents: read
     steps:
-      # actions/checkout v4.2.2
+      # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      # actions/setup-node v4.1.0
+      # actions/setup-node v7.1.0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: '20'
@@ -555,16 +580,16 @@ jobs:
       # job below can reuse the same shape.
       security-events: write
     steps:
-      # actions/checkout v4.2.2
+      # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       # D14 self-checkout: composite actions reference library from .hashira/
       - name: Checkout library into .hashira
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           path: .hashira
           persist-credentials: false
-      # actions/setup-node v4.1.0 (for visibility-detect shim invocations).
+      # actions/setup-node v7.1.0 (for visibility-detect shim invocations).
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: '20'
@@ -587,6 +612,15 @@ jobs:
           echo "${SUMMARY}" | grep -P '^gitleaks\tran\t'
           # dependency-review will be skipped (not a PR event) on push.
           echo "${SUMMARY}" | grep -P '^dependency-review\t(ran|skipped)\t'
+      # OSV over docs-build's VitePress lockfile, failing on findings: every consumer's docs
+      # build installs exactly that tree, so a known vulnerability in it fails this repo's CI
+      # before it ships. release.yml's docs job runs the same scan before publish.
+      - name: Run OSV over the VitePress lockfile, failing on findings
+        uses: ./.hashira/.github/actions/scan-suite
+        with:
+          scan_disable: 'codeql,gitleaks,dependency-review,actionlint'
+          osv_paths: .github/actions/docs-build/vitepress
+          fail_on_findings: 'true'
 
   scan-suite-override:
     name: scan-suite-override
@@ -595,16 +629,16 @@ jobs:
       contents: read
       security-events: write
     steps:
-      # actions/checkout v4.2.2
+      # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       # D14 self-checkout: composite actions reference library from .hashira/
       - name: Checkout library into .hashira
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           path: .hashira
           persist-credentials: false
-      # actions/setup-node v4.1.0
+      # actions/setup-node v7.1.0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: '20'
@@ -628,7 +662,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      # actions/checkout v4.2.2
+      # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - name: Run npm-release action shape-validation shim
         shell: bash
@@ -651,16 +685,16 @@ jobs:
       # not the CI->CD artifact handoff.
       HASHIRA_NPM_RELEASE_DRY_RUN: '1'
     steps:
-      # actions/checkout v4.2.2
+      # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       # D14 self-checkout: composite actions are referenced from .hashira/.
       - name: Checkout library into .hashira
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           path: .hashira
           persist-credentials: false
-      # actions/setup-node v4.1.0
+      # actions/setup-node v7.1.0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: '24'
@@ -677,7 +711,7 @@ jobs:
           npm pack --pack-destination "${RUNNER_TEMP}/npm-release-dry-run-pack-output" \
             ./tests/npm-release/dry-run-fixture
       - name: Upload fixture tarball as 'npm-release-dry-run-tarball'
-        # actions/upload-artifact v4.4.3 — same pin already verified and in
+        # actions/upload-artifact v7.0.2 — same pin already verified and in
         # use at npm-package-ci.yml / nuget-package-ci.yml / coverage-report.
         # Not 'npm-tarball': the dry run skips the download, and only
         # npm-release-smoke-oidc-fails-loud downloads that name. A second
@@ -716,16 +750,16 @@ jobs:
     env:
       HASHIRA_NPM_RELEASE_DRY_RUN: '1'
     steps:
-      # actions/checkout v4.2.2
+      # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       # D14 self-checkout: composite actions are referenced from .hashira/.
       - name: Checkout library into .hashira
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           path: .hashira
           persist-credentials: false
-      # actions/setup-node v4.1.0
+      # actions/setup-node v7.1.0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: '24'
@@ -738,7 +772,7 @@ jobs:
             ./tests/npm-release/dry-run-fixture
       - name: Upload fixture tarball as 'npm-release-dry-run-auth-modes-tarball'
         # Its own name for the same reason as npm-release-dry-run's upload.
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: npm-release-dry-run-auth-modes-tarball
           path: ${{ runner.temp }}/npm-release-dry-run-pack-output/*.tgz
@@ -780,16 +814,16 @@ jobs:
       # GitHub-provided ACTIONS_ID_TOKEN_REQUEST_* vars to be genuinely absent,
       # not merely unused.
     steps:
-      # actions/checkout v4.2.2
+      # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       # D14 self-checkout: composite actions are referenced from .hashira/.
       - name: Checkout library into .hashira
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           path: .hashira
           persist-credentials: false
-      # actions/setup-node v4.1.0
+      # actions/setup-node v7.1.0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: '24'
@@ -823,7 +857,7 @@ jobs:
           npm pack --pack-destination "${RUNNER_TEMP}/npm-release-oidc-test-pack-output" \
             "${RUNNER_TEMP}/npm-release-oidc-test-pkg"
       - name: Upload fixture tarball as 'npm-tarball'
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: npm-tarball
           path: ${{ runner.temp }}/npm-release-oidc-test-pack-output/*.tgz
@@ -885,7 +919,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      # actions/checkout v4.2.2
+      # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - name: Verify python3 + pyyaml availability
         shell: bash
@@ -912,16 +946,16 @@ jobs:
       # runner. Matches the documented test override.
       HASHIRA_FORCE_PRIVATE_NO_GHAS: '1'
     steps:
-      # actions/checkout v4.2.2
+      # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       # D14 self-checkout: composite actions reference library from .hashira/
       - name: Checkout library into .hashira
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           path: .hashira
           persist-credentials: false
-      # actions/setup-node v4.1.0
+      # actions/setup-node v7.1.0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: '20'
@@ -945,9 +979,9 @@ jobs:
     permissions:
       contents: read
     steps:
-      # actions/checkout v4.2.2
+      # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      # actions/setup-node v4.1.0
+      # actions/setup-node v7.1.0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: '20'
@@ -963,21 +997,21 @@ jobs:
     permissions:
       contents: read
     steps:
-      # actions/checkout v4.2.2
+      # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       # D14 self-checkout: composite actions reference library from .hashira/
       - name: Checkout library into .hashira
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           path: .hashira
           persist-credentials: false
-      # actions/setup-node v4.1.0 (the action's MinVer-detect step shells
+      # actions/setup-node v7.1.0 (the action's MinVer-detect step shells
       # out to `node` against the shim).
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: '20'
-      # actions/setup-dotnet v4.1.0 — reuses iter-1.2-verified pin per D11.
+      # actions/setup-dotnet v6.1.0 — reuses iter-1.2-verified pin per D11.
       - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73
         with:
           dotnet-version: '8.0.x'
@@ -1043,7 +1077,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      # actions/checkout v4.2.2
+      # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - name: Verify python3 + pyyaml availability
         shell: bash
@@ -1073,11 +1107,11 @@ jobs:
       # branching for every `auth` value safely, with no real OIDC/network call.
       HASHIRA_NUGET_PUSH_DRY_RUN: '1'
     steps:
-      # actions/checkout v4.2.2
+      # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       # D14 self-checkout: composite actions reference library from .hashira/
       - name: Checkout library into .hashira
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           path: .hashira
@@ -1115,11 +1149,11 @@ jobs:
     permissions:
       contents: read
     steps:
-      # actions/checkout v4.2.2
+      # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       # D14 self-checkout: composite actions reference library from .hashira/
       - name: Checkout library into .hashira
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           path: .hashira
@@ -1181,11 +1215,11 @@ jobs:
       # does NOT enable Pages on itself.
       HASHIRA_PAGES_UPLOAD_DRY_RUN: '1'
     steps:
-      # actions/checkout v4.2.2
+      # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       # D14 self-checkout: composite actions reference library from .hashira/
       - name: Checkout library into .hashira
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           path: .hashira
@@ -1222,11 +1256,11 @@ jobs:
     env:
       HASHIRA_PAGES_UPLOAD_DRY_RUN: '1'
     steps:
-      # actions/checkout v4.2.2
+      # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       # D14 self-checkout: composite actions reference library from .hashira/
       - name: Checkout library into .hashira
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           path: .hashira
@@ -1277,7 +1311,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      # actions/checkout v4.2.2
+      # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - name: Verify python3 + pyyaml availability
         shell: bash
@@ -1301,7 +1335,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      # actions/checkout v4.2.2
+      # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - name: Verify python3 + pyyaml availability
         shell: bash
@@ -1335,11 +1369,11 @@ jobs:
     permissions:
       contents: read
     steps:
-      # actions/checkout v4.2.2
+      # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       # D14 self-checkout: composite actions reference library from .hashira/
       - name: Checkout library into .hashira
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           path: .hashira
@@ -1404,11 +1438,11 @@ jobs:
     env:
       HASHIRA_PAGES_DEPLOY_DRY_RUN: '1'
     steps:
-      # actions/checkout v4.2.2
+      # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       # D14 self-checkout: composite actions reference library from .hashira/
       - name: Checkout library into .hashira
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           path: .hashira
@@ -1449,7 +1483,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      # actions/checkout v4.2.2
+      # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - name: Verify python3 + pyyaml availability
         shell: bash
@@ -1470,7 +1504,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      # actions/checkout v4.2.2
+      # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - name: Verify python3 + pyyaml availability
         shell: bash
@@ -1493,7 +1527,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      # actions/checkout v4.2.2. Full history so the test can find the
+      # actions/checkout v7.0.1. Full history so the test can find the
       # merge base with main when it looks for newly added lib/ files.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -1586,7 +1620,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      # actions/checkout v4.2.2
+      # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - name: Verify python3 + pyyaml availability
         shell: bash
@@ -1615,7 +1649,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      # actions/checkout v4.2.2
+      # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - name: Verify python3 + pyyaml availability
         shell: bash
@@ -1650,7 +1684,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      # actions/checkout v4.2.2
+      # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - name: Verify python3 + pyyaml availability
         shell: bash
@@ -1679,7 +1713,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      # actions/checkout v4.2.2
+      # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - name: Verify python3 + pyyaml availability
         shell: bash
@@ -1701,7 +1735,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      # actions/checkout v4.2.2
+      # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - name: Verify python3 + pyyaml availability
         shell: bash
@@ -1722,7 +1756,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      # actions/checkout v4.2.2
+      # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - name: Verify python3 + pyyaml availability
         shell: bash
@@ -1746,7 +1780,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      # actions/checkout v4.2.2
+      # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - name: Verify python3 + pyyaml availability
         shell: bash
@@ -1769,9 +1803,9 @@ jobs:
     permissions:
       contents: read
     steps:
-      # actions/checkout v4.2.2
+      # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      # actions/setup-node v4.1.0
+      # actions/setup-node v7.1.0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: '20'
@@ -1796,9 +1830,9 @@ jobs:
     permissions:
       contents: read
     steps:
-      # actions/checkout v4.2.2
+      # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      # actions/setup-node v4.1.0
+      # actions/setup-node v7.1.0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: '20'
@@ -1822,9 +1856,9 @@ jobs:
     permissions:
       contents: read
     steps:
-      # actions/checkout v4.2.2
+      # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      # actions/setup-node v4.1.0
+      # actions/setup-node v7.1.0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: '20'
@@ -1847,7 +1881,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      # actions/checkout v4.2.2
+      # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - name: Verify python3 + pyyaml availability
         shell: bash
@@ -1868,7 +1902,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      # actions/checkout v4.2.2
+      # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - name: Verify python3 + pyyaml availability
         shell: bash
@@ -1890,7 +1924,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      # actions/checkout v4.2.2
+      # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - name: Verify python3 + pyyaml availability
         shell: bash
@@ -1913,7 +1947,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      # actions/checkout v4.2.2
+      # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - name: Verify python3 + pyyaml availability
         shell: bash
@@ -1935,7 +1969,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      # actions/checkout v4.2.2
+      # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - name: Verify python3 + pyyaml availability
         shell: bash
@@ -1948,6 +1982,71 @@ jobs:
           set -euo pipefail
           python3 tests/shape-lints/fixture-diff.py --self-test
 
+  pin-comments-lint:
+    name: pin-comments-lint
+    # Each SHA pin's version comment must name a tag on that SHA, read from
+    # the GitHub API, and one SHA must carry one comment everywhere, so a
+    # reviewer and a Dependabot diff see the version a pin really is. Its own
+    # job, because it is the one lint that needs the network and a token.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # actions/checkout v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Run the pin-comments lint
+        shell: bash
+        env:
+          # Reads public tag refs only; the token lifts the API's rate limit.
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 tests/shape-lints/pin-comments.py
+
+  pin-comments-lint-self-test:
+    name: pin-comments-lint-self-test
+    # Proves the lint fails on a pin with no comment, one SHA with two
+    # comments, and comments naming a tag on another SHA or no tag, with a
+    # fake tag table, so it needs no network.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # actions/checkout v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Run the pin-comments lint --self-test
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tests/shape-lints/pin-comments.py --self-test
+
+  pin-comments-and-scan-default-contract:
+    name: pin-comments-and-scan-default-contract
+    # The pin-comment rules checked independently of the lint (tags read
+    # with git ls-remote), the lint run against broken copies of the repo,
+    # and the 'codeql' scan_disable default of the three CI workflows with
+    # their docs, catalog and changelog. Needs PyYAML, preinstalled.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # actions/checkout v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Run the pin-comments and scan_disable default contract tests
+        shell: bash
+        env:
+          # The lint's online runs read public tag refs; the token lifts the API's rate limit.
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 tests/shape-lints/test_pin_comments_and_scan_default.py
+
   consumer-integration-unit-tests:
     name: consumer-integration-unit-tests
     # The consumer-integration job's helpers, against a local bare repo and
@@ -1956,9 +2055,9 @@ jobs:
     permissions:
       contents: read
     steps:
-      # actions/checkout v4.2.2
+      # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      # actions/setup-node v4.1.0. Node 20 is the oldest Node the helpers
+      # actions/setup-node v7.1.0. Node 20 is the oldest Node the helpers
       # must keep working on.
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
@@ -1986,7 +2085,7 @@ jobs:
       # Read this repo, and the public fixture repos through the API.
       contents: read
     steps:
-      # actions/checkout v4.2.2
+      # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
@@ -2059,11 +2158,11 @@ jobs:
       # Only lock.js reads hashira's runs with it; fixture calls never see it.
       HASHIRA_TOKEN: ${{ github.token }}
     steps:
-      # actions/checkout v4.2.2
+      # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      # actions/setup-node v4.1.0
+      # actions/setup-node v7.1.0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: '20'

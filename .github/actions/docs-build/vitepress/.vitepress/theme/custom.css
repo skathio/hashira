@@ -39,3 +39,15 @@
   --vp-c-brand-soft: #0d2b26;
   --vp-button-brand-text: #06201b;
 }
+
+/* Past 2 nav entries the header's links sit in one dropdown labelled with the site name
+   (lib/site-config.js). A long name is cut short there, so the bar still fits from 768px up;
+   the full name stays in the button's text for screen readers and in the site title. */
+.VPNavBarMenuGroup .text > span:not([class]) {
+  display: inline-block;
+  max-width: 10em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}

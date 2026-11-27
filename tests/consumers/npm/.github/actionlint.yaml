@@ -1,0 +1,7 @@
+# actionlint 1.7.7, which hashira's scan-suite pins, does not know the `command` key of a
+# service container yet. GitHub Actions runs it (the fake registry below starts that way), so
+# this one message is ignored for this one file; every other check still applies.
+paths:
+  .github/workflows/ci.yml:
+    ignore:
+      - 'unexpected key "command" for "services" section'

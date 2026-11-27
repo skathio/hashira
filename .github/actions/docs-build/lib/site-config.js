@@ -9,6 +9,8 @@ const path = require('node:path');
 
 const { h1Label } = require('./h1-label');
 const { escapeHtml, isUnpublished } = require('./links');
+const { GENERATED_SIDEBAR, loadGeneratedSidebar, sidebarFiles } = require('./pages-config');
+const { svgProblems } = require('./html-safety');
 
 const INDEX = 'index.md';
 const posix = path.posix;
@@ -59,22 +61,51 @@ function indexRewrite(config, pages) {
 
 const pageLink = (md, rewrites) => `/${(Object.hasOwn(rewrites, md) ? rewrites[md] : md).replace(/(index)?\.md$/, '')}`;
 
-// The sidebar entries of pages.json in order, then every other published page by path under
-// its first H1. Labels are HTML-escaped: VitePress renders sidebar text as HTML.
+// The sidebar entries in order, then every other published page by path under its first H1.
+// config.sidebar is pages.json's, or the one pre_build_command generated. A group keeps its
+// entries; a folder section lists the pages under its dir, in path order under their H1, that
+// no page entry and no earlier folder section lists. Labels are HTML-escaped: VitePress
+// renders sidebar text as HTML.
 function sidebarItems(config, pages, stage, rewrites) {
-  const missing = config.sidebar.map((e) => e.file).filter((f) => !pages.includes(f));
+  const { sidebar } = config;
+  const named = sidebarFiles(sidebar);
+  const missing = named.filter((f) => !pages.includes(f));
   if (missing.length) fail(`sidebar files missing from the docs after pre_build_command: ${missing.join(', ')}`);
-  const listed = new Set(config.sidebar.map((e) => e.file));
-  const rest = pages.filter((f) => !listed.has(f)).map((f) => ({ file: f, html: h1Label(fs.readFileSync(path.join(stage, f), 'utf8'), escapeHtml(f)) }));
-  return [...config.sidebar.map((e) => ({ file: e.file, html: escapeHtml(e.label) })), ...rest].map((e) => ({ text: e.html, link: pageLink(e.file, rewrites) }));
+  const listed = new Set(named);
+  const page = (f) => ({ text: h1Label(fs.readFileSync(path.join(stage, f), 'utf8'), escapeHtml(f)), link: pageLink(f, rewrites) });
+  const folder = (dir) => {
+    const prefix = dir.replace(/\/?$/, '/');
+    const found = pages.filter((f) => f.startsWith(prefix) && !listed.has(f));
+    if (found.length === 0) fail(`sidebar folder section ${prefix} lists no page: none is published there that the sidebar does not already list.`);
+    found.forEach((f) => listed.add(f));
+    return found.map(page);
+  };
+  const render = (entry) => {
+    if (entry.file) return { text: escapeHtml(entry.label), link: pageLink(entry.file, rewrites) };
+    const collapsed = typeof entry.collapsed === 'boolean' ? { collapsed: entry.collapsed } : {};
+    return { text: escapeHtml(entry.label), ...collapsed, items: entry.items ? entry.items.map(render) : folder(entry.dir) };
+  };
+  const items = sidebar.map(render);
+  return [...items, ...pages.filter((f) => !listed.has(f)).map(page)];
 }
+
+// VitePress's top bar shows its links one by one and only folds them into its menu below
+// 768px, so past this many nav entries they go into one dropdown labelled with the site name,
+// and the bar keeps the site title, the dropdown, Docs and home_link, in <site-nav>'s order.
+const NAV_IN_BAR = 2;
 
 // The header, in <site-nav>'s order: the nav links, Docs, then home_link (the brand is
 // VitePress's logo link and the theme toggle follows the menu). target _self keeps each
 // landing link out of VitePress's router, and the theme's RawLink keeps its href as built.
+// Docs is active on every docs page through activeMatch, which VitePress tests as a regular
+// expression against the page path.
 function navItems(config, landing) {
   const toLanding = (e) => ({ text: escapeHtml(e.label), link: landingHref(e.href, landing), target: '_self' });
-  return [...config.nav.map(toLanding), { text: 'Docs', link: '/' }, ...(config.home_link ? [toLanding(config.home_link)] : [])];
+  const docs = { text: 'Docs', link: '/', activeMatch: '^/' };
+  const links = config.nav.map(toLanding);
+  const home = config.home_link ? [toLanding(config.home_link)] : [];
+  const bar = links.length <= NAV_IN_BAR ? links : [{ text: escapeHtml(config.name), items: links }];
+  return [...bar, docs, ...home];
 }
 
 // A link to a folder of docs/ with no index page of its own opens that folder on GitHub.
@@ -83,6 +114,22 @@ function folderCheck(docs, stage) {
   return (repoPath) => {
     const sub = repoPath.slice('docs/'.length);
     return (isDir(path.join(docs, sub)) || isDir(path.join(stage, sub))) && !fs.existsSync(path.join(stage, sub, INDEX));
+  };
+}
+
+// A link that leaves docs/ (or reaches an unpublished page) opens on GitHub as a folder when
+// the repo path it names is a folder of the checkout, whether or not it ends in '/'. Only a
+// path whose real location stays inside the checkout counts.
+function repoDirCheck(docs) {
+  const root = path.dirname(docs);
+  const realRoot = fs.realpathSync(root);
+  return (repoPath) => {
+    try {
+      const real = fs.realpathSync(path.join(root, repoPath));
+      return (real === realRoot || real.startsWith(realRoot + path.sep)) && fs.statSync(real).isDirectory();
+    } catch {
+      return false;
+    }
   };
 }
 
@@ -140,12 +187,24 @@ function refuseFrontMatterCode(dir, pages, prefix) {
   }
 }
 
+// An SVG is published as a file a browser may open on its own, with the docs' origin: one
+// that could run a script fails the build, naming the file (lib/html-safety.js svgProblems).
+function refuseUnsafeSvgs(dir, files, prefix) {
+  for (const rel of files.filter((f) => /\.svg$/i.test(f))) {
+    const problems = svgProblems(fs.readFileSync(path.join(dir, rel), 'utf8'));
+    if (problems.length > 0) fail(`${prefix}${rel}: an SVG that could run a script is not published: ${problems.slice(0, 3).join('; ')}.`);
+  }
+}
+
 function siteConfig(build) {
   const { config, stage } = build;
   // pre_build_command may have added files since prepare.js checked the stage.
   // prepare.js stages theme_css itself, the one CSS file served as it is.
-  const own = build.themeCss ? `public/${build.themeCss}` : null;
-  checkStagedFiles(allFiles(stage).filter((rel) => rel !== own && !isUnpublished(rel, config.unpublished)), '');
+  // The generated sidebar is read here, never published.
+  const own = new Set([build.themeCss ? `public/${build.themeCss}` : null, GENERATED_SIDEBAR]);
+  const staged = allFiles(stage).filter((rel) => !own.has(rel) && !isUnpublished(rel, config.unpublished));
+  checkStagedFiles(staged, '');
+  refuseUnsafeSvgs(stage, staged, '');
   const pages = stagedPages(stage, config.unpublished);
   refuseFrontMatterCode(stage, pages, '');
   refuseIncludes(stage, pages);
@@ -154,10 +213,11 @@ function siteConfig(build) {
   return {
     rewrites,
     landing,
-    sidebar: sidebarItems(config, pages, stage, rewrites),
+    sidebar: sidebarItems({ ...config, sidebar: loadGeneratedSidebar(stage) ?? config.sidebar }, pages, stage, rewrites),
     nav: navItems(config, landing),
     isFolder: folderCheck(build.docs, stage),
+    isRepoDir: repoDirCheck(build.docs),
   };
 }
 
-module.exports = { checkStagedFiles, refuseFrontMatterCode, siteConfig, isUnpublished, stagedPages, landingOf, landingHref, indexRewrite, sidebarItems, navItems, pageLink };
+module.exports = { checkStagedFiles, refuseFrontMatterCode, refuseUnsafeSvgs, siteConfig, isUnpublished, stagedPages, landingOf, landingHref, indexRewrite, sidebarItems, navItems, pageLink };

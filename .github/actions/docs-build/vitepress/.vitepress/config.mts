@@ -10,8 +10,9 @@ const load = createRequire(import.meta.url)
 const { escapeHtml, githubSlug, rewriteLink } = load('../../lib/links.js')
 const { configureMarkdown } = load('../../lib/markdown.js')
 const { siteConfig } = load('../../lib/site-config.js')
-const { dropCheckDarkMode, themeFromLanding, themeToLanding } = load('../../lib/theme-bridge.js')
-const { checkBuiltPage, descriptionTag, escapeInlineMetadata } = load('../../lib/html-safety.js')
+const { dropCheckDarkMode, themeFromLanding } = load('../../lib/theme-bridge.js')
+const { checkBuiltPage, escapeInlineMetadata } = load('../../lib/html-safety.js')
+const { pageHead, siteDescription } = load('../../lib/page-meta.js')
 
 // The docs-build action copies this folder into a work folder under RUNNER_TEMP, stages the
 // caller's docs/ in src/, and writes build.json (lib/prepare.js): the checked pages.json, the
@@ -35,14 +36,14 @@ try {
 } catch (err) {
   failBuild((err as Error).message)
 }
-const { rewrites, isFolder } = site
+const { rewrites, isFolder, isRepoDir } = site
 const unpublished: string[] = config.unpublished
 const logo = build.logo ? `/${build.logo}` : undefined
 const logoType = build.logo?.endsWith('.svg') ? 'image/svg+xml' : 'image/png'
 
 // VitePress minifies each head script with Vite's esbuild transform before writing it. The
 // built-page check allows these scripts as VitePress writes them, so it minifies them the same way.
-const headScripts = [themeFromLanding, themeToLanding]
+const headScripts = [themeFromLanding]
 const builtHeadScripts = await Promise.all(
   headScripts.map(async (code) => (await transformWithEsbuild(code, 'inline-script.js', { minify: true })).code.trim()),
 )
@@ -62,7 +63,7 @@ export default defineConfig({
   base: config.base,
   rewrites,
   title: config.name,
-  description: config.description,
+  description: siteDescription(config),
   head: [
     ...(logo ? [['link', { rel: 'icon', href: `${config.base}${build.logo}`, type: logoType }] as [string, Record<string, string>]] : []),
     // theme_css, served as it is from public/ (lib/prepare.js), after VitePress's stylesheet.
@@ -71,7 +72,9 @@ export default defineConfig({
   ],
   // pages.json values reach the HTML escaped: the description through an escaped head tag,
   // and the inline site data with no `</script>` that could end its script (lib/html-safety.js).
-  transformHead: ({ description }) => [descriptionTag(description)],
+  // Each page also gets its link preview and canonical URL (lib/page-meta.js).
+  transformHead: ({ pageData, title, description }) =>
+    pageHead({ origin: build.origin, base: config.base, relativePath: pageData.relativePath, title, description }),
   // Each built page then holds only what VitePress and this config write (lib/html-safety.js).
   transformHtml: (html, _id, { page }) => {
     const out = escapeInlineMetadata(dropCheckDarkMode(html))
@@ -104,7 +107,12 @@ export default defineConfig({
       // VitePress prefixes the docs base to every absolute nav link, which would turn a
       // landing link such as /site/blog/ into /site/docs/site/blog/. RawLink is VitePress's
       // VPLink, except that it keeps the href of a target="_self" link as built.
-      alias: [{ find: /^.*\/VPLink\.vue$/, replacement: fileURLToPath(new URL('./theme/RawLink.vue', import.meta.url)) }],
+      // ThemeSwitch is the landing pages' three-state theme control (auto, light, dark) in
+      // place of VitePress's two-state switch, on the shared `theme` key.
+      alias: [
+        { find: /^.*\/VPLink\.vue$/, replacement: fileURLToPath(new URL('./theme/RawLink.vue', import.meta.url)) },
+        { find: /^.*\/VPSwitchAppearance\.vue$/, replacement: fileURLToPath(new URL('./theme/ThemeSwitch.vue', import.meta.url)) },
+      ],
     },
   },
   markdown: {
@@ -118,6 +126,6 @@ export default defineConfig({
     attrs: { disable: true },
     // Heading ids follow GitHub's rule, so a link's #anchor lands here as it does there.
     anchor: { slugify: githubSlug },
-    config: (md) => configureMarkdown(md, { srcDir, rewrite: (page, href) => rewriteLink(page, href, { repo: build.repo, unpublished, rewrites, isFolder }) }),
+    config: (md) => configureMarkdown(md, { srcDir, rewrite: (page, href) => rewriteLink(page, href, { repo: build.repo, unpublished, rewrites, isFolder, isRepoDir }) }),
   },
 })

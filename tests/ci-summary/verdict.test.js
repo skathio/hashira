@@ -132,6 +132,22 @@ test('version skipped with no bump set (neither input nor event) passes', () => 
   assert.equal(out.conclusion, 'success');
 });
 
+test("version skipped with bump 'none' (the templates' no-release choice) passes", () => {
+  for (const [inputs, event] of [[{ bump: '' }, { inputs: { bump: 'none' } }], [{ bump: 'none' }, { inputs: { bump: '' } }], [{ bump: 'none' }, { inputs: { bump: 'patch' } }]]) {
+    const needs = allSuccess(NPM_JOBS);
+    needs.version.result = 'skipped';
+    const out = evaluate({ needs, inputs: { ...inputs, quality_gate: true }, event });
+    assert.equal(out.conclusion, 'success', JSON.stringify({ inputs, event }));
+  }
+});
+
+test("version skipped while the input is empty and the event's bump is 'patch' still fails passed", () => {
+  const needs = allSuccess(NPM_JOBS);
+  needs.version.result = 'skipped';
+  assert.equal(evaluate({ needs, inputs: { bump: '', quality_gate: true }, event: { inputs: { bump: 'patch' } } }).conclusion, 'failure');
+  assert.equal(evaluate({ needs, inputs: { bump: 'nonee', quality_gate: true }, event: {} }).conclusion, 'failure');
+});
+
 test('version skipped while inputs.bump is set fails passed', () => {
   const needs = allSuccess(NPM_JOBS);
   needs.version.result = 'skipped';

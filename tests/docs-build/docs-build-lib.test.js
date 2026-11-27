@@ -18,7 +18,7 @@ const LIB = path.join(__dirname, '..', '..', '.github', 'actions', 'docs-build',
 const { escapeBraces, escapeHtml, githubSlug, rewriteLink } = require(path.join(LIB, 'links'));
 const { h1Label } = require(path.join(LIB, 'h1-label'));
 const site = require(path.join(LIB, 'site-config'));
-const { accentCss } = require(path.join(LIB, 'accent'));
+const { accentCss, contrast, contrastWarnings, CANVAS, MIN_CONTRAST } = require(path.join(LIB, 'accent'));
 const { dropCheckDarkMode } = require(path.join(LIB, 'theme-bridge'));
 const { prepare, checkOutputDir } = require(path.join(LIB, 'prepare'));
 
@@ -131,6 +131,46 @@ test('the default accent keeps the shared palette; another sets every brand shad
   assert.match(css, /:root \{[^}]*--vp-c-brand-1: #c0ffee;/);
   assert.match(css, /\.dark \{[^}]*--vp-c-brand-soft:/);
   assert.throws(() => accentCss('red;}body{x'), /accent/);
+});
+
+test('accent_dark sets the dark brand shades; with the default accent the light palette stays shared', () => {
+  const pair = accentCss('#c0ffee', '#123abc');
+  assert.match(pair, /:root \{[^}]*--vp-c-brand-1: #c0ffee;[^}]*--vp-c-brand-2: color-mix\(in srgb, #c0ffee 85%, #000\);/);
+  assert.match(pair, /\.dark \{[^}]*--vp-c-brand-1: #123abc;[^}]*--vp-c-brand-soft: color-mix\(in srgb, #123abc 18%, var\(--vp-c-bg\)\);/);
+  const darkOnly = accentCss('#1e7d69', '#abc');
+  assert.doesNotMatch(darkOnly, /:root/);
+  assert.match(darkOnly, /\.dark \{[^}]*--vp-c-brand-1: #abc;/);
+  // A custom accent with no accent_dark is used in both modes, as before accent_dark existed.
+  assert.match(accentCss('#c0ffee'), /\.dark \{[^}]*--vp-c-brand-1: #c0ffee;/);
+  assert.throws(() => accentCss('#c0ffee', 'red;}body{x'), /accent_dark/);
+});
+
+test("the contrast check's canvases are the shared theme's --vp-c-bg in each mode", () => {
+  const css = fs.readFileSync(path.join(LIB, '..', 'vitepress', '.vitepress', 'theme', 'custom.css'), 'utf8');
+  const bg = (block) => css.match(new RegExp(`${block}\\s*\\{[^}]*--vp-c-bg:\\s*(#[0-9a-fA-F]{3,6})`))[1];
+  assert.deepEqual(CANVAS, { light: bg(':root'), dark: bg('\\.dark') });
+});
+
+test('contrast follows WCAG 2: black on white is 21:1, a colour on itself 1:1', () => {
+  assert.equal(Math.round(contrast('#000', '#fff') * 100) / 100, 21);
+  assert.equal(contrast('#f7f6f2', '#f7f6f2'), 1);
+});
+
+test('a contrast warning names the field and mode only below 4.5:1', () => {
+  assert.deepEqual(contrastWarnings('#1e7d69'), [], 'the default pair');
+  assert.deepEqual(contrastWarnings('#1e7d69', '#4fd1b5'), []);
+  const light = contrastWarnings('#4fd1b5', '#4fd1b5');
+  assert.equal(light.length, 1);
+  assert.match(light[0], /accent #4fd1b5 .*light canvas/);
+  const dark = contrastWarnings('#1e7d69', '#1e7d69');
+  assert.equal(dark.length, 1);
+  assert.match(dark[0], /accent_dark #1e7d69 .*dark canvas/);
+  // A custom accent with no accent_dark is the dark link colour too, and is checked there.
+  const both = contrastWarnings('#777777');
+  assert.equal(both.length, 2);
+  assert.match(both[1], /accent \(no accent_dark is set\) #777777 .*dark canvas/);
+  assert.ok(both.every((w) => !w.includes('\n')));
+  assert.ok(contrast('#1e7d69', CANVAS.light) >= MIN_CONTRAST);
 });
 
 test("VitePress's unguarded check-dark-mode script is dropped, the rest kept", () => {

@@ -1,0 +1,114 @@
+// Whether a pages-site.yml run may take `released: true`, which skips the `gate` job's
+// `production` approval. It may only when this very workflow run already holds an approved
+// review for the `production` Environment: the caller's release job passed that approval before
+// calling pages-site.yml. A caller that forwards a dispatch input without such a job is refused,
+// so the caller needs no guard of its own.
+//
+// The decision is pure (decide), the read is one GET of the run's approvals
+// (GET /repos/{owner}/{repo}/actions/runs/{run_id}/approvals), and a refusal is a thrown error,
+// so a caller that forgets to check fails closed. Node 20 compatible: global fetch, no packages.
+// A .cjs file, so a caller whose package.json says "type": "module" cannot turn it into ESM.
+'use strict';
+
+const ENVIRONMENT = 'production';
+const REPO = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+const RUN_ID = /^[1-9]\d{0,19}$/;
+
+function refuse(message) {
+  throw new Error(`pages-site: released refused: ${message}`);
+}
+
+/** The run's approvals, as the API returns them, hold an approved `production` review. */
+function decide(approvals, environment = ENVIRONMENT) {
+  if (!Array.isArray(approvals)) refuse('the run approvals response is not a list');
+  const approved = approvals.some((a) => a !== null && typeof a === 'object'
+    && a.state === 'approved'
+    && Array.isArray(a.environments)
+    && a.environments.some((e) => e !== null && typeof e === 'object' && e.name === environment));
+  if (!approved) {
+    refuse(`this run has no approved review for the '${environment}' environment. released: true `
+      + `is only for a run whose release job already passed the '${environment}' approval before `
+      + `calling pages-site.yml; run it with released: false to wait for the approval at gate, `
+      + `or give '${environment}' required reviewers and approve it in this run.`);
+  }
+  return true;
+}
+
+function approvalsUrl({ apiUrl, repository, runId }) {
+  if (!REPO.test(String(repository))) refuse(`'${repository}' is not an owner/repo name`);
+  if (!RUN_ID.test(String(runId))) refuse(`'${runId}' is not a run id`);
+  const base = String(apiUrl || 'https://api.github.com').replace(/\/+$/, '');
+  if (!/^https:\/\//.test(base)) refuse(`the API URL '${base}' is not https`);
+  return `${base}/repos/${repository}/actions/runs/${runId}/approvals`;
+}
+
+// A rate limit, a server error or a network error may pass: each read is tried up to three
+// times, a few seconds apart. Any other answer (401, 403, 404) is final for that read.
+const RETRY_DELAYS_MS = [2000, 5000];
+const transient = (status) => status === 429 || status >= 500;
+const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// One read with one set of headers, retried while the failure may pass. Returns { body } on
+// success, else { failures } with one line per try.
+async function readWith({ fetch, url, headers, sleep }) {
+  const failures = [];
+  for (let tryNo = 0; tryNo <= RETRY_DELAYS_MS.length; tryNo += 1) {
+    if (tryNo > 0) await sleep(RETRY_DELAYS_MS[tryNo - 1]);
+    const answer = await fetchOnce(fetch, url, headers);
+    if ('body' in answer) return answer;
+    failures.push(answer.failure);
+    if (!answer.again) break;
+  }
+  return { failures };
+}
+
+async function fetchOnce(fetch, url, headers) {
+  try {
+    const res = await fetch(url, { headers });
+    if (res.ok) return { body: await res.json() };
+    return { failure: `HTTP ${res.status}${headers.Authorization ? ' with the job token' : ' unauthenticated'}`, again: transient(res.status) };
+  } catch (err) {
+    return { failure: err && err.message ? err.message : String(err), again: true };
+  }
+}
+
+/**
+ * Reads the run's approvals: with the job's token first, then unauthenticated (released already
+ * needs a public repo for deploy's tag check, and `check` holds no grant, so the token may be
+ * refused). Throws when neither read gives a JSON list.
+ */
+async function readApprovals({ fetch, apiUrl, repository, runId, token, sleep = pause }) {
+  const url = approvalsUrl({ apiUrl, repository, runId });
+  const base = { Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' };
+  const headerSets = token ? [{ ...base, Authorization: `Bearer ${token}` }, base] : [base];
+  const failures = [];
+  for (const headers of headerSets) {
+    const answer = await readWith({ fetch, url, headers, sleep });
+    if ('body' in answer) return answer.body;
+    failures.push(...answer.failures);
+  }
+  return refuse(`could not read ${url} (${failures.join('; ')}). released: true needs a public `
+    + 'repo whose run approvals the API can read; run with released: false to use the gate.');
+}
+
+async function main(env = process.env, fetchImpl = globalThis.fetch) {
+  const approvals = await readApprovals({
+    fetch: fetchImpl,
+    apiUrl: env.GITHUB_API_URL,
+    repository: env.GITHUB_REPOSITORY,
+    runId: env.GITHUB_RUN_ID,
+    token: env.GITHUB_TOKEN,
+  });
+  decide(approvals);
+  return `pages-site: run ${env.GITHUB_RUN_ID} holds an approved '${ENVIRONMENT}' review; released accepted.`;
+}
+
+if (require.main === module) {
+  // stdout, where the runner reads workflow commands such as ::error::.
+  main().then((msg) => process.stdout.write(`${msg}\n`), (err) => {
+    process.stdout.write(`::error::${err.message}\n`);
+    process.exitCode = 1;
+  });
+}
+
+module.exports = { ENVIRONMENT, decide, approvalsUrl, readApprovals, main };

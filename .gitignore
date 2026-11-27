@@ -9,3 +9,6 @@ __pycache__/
 # tests/pages-site/build-site.js writes hashira's Pages site here for a local look; nothing
 # generated is committed.
 /artifacts/
+
+# Browser snapshots and console logs a Playwright MCP session writes; local only, never commit.
+/.playwright-mcp/

@@ -126,7 +126,11 @@ function buildSite() {
     const withValues = Object.fromEntries(Object.entries(step.with ?? {}).map(([k, v]) => [k, norm(evaluate(String(v), ctx))]));
     runAction(name, withValues, build);
   }
-  return { site: path.join(build.ws, ctx.steps.site.outputs.output), outer, log: build.log };
+  const site = path.join(build.ws, ctx.steps.site.outputs.output);
+  // pages-site.yml's build checks the kit references before the upload; so does this build.
+  const broken = require(path.join(REPO, '.github', 'pages-site', 'lib', 'kit-refs.cjs')).check(site);
+  if (broken.length) throw new Error(`the site's kit references are broken:\n${broken.join('\n')}`);
+  return { site, outer, log: build.log };
 }
 
 function main() {

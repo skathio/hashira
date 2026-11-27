@@ -40,8 +40,10 @@ const ATTR = /([^\s"'>/=]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+)))?/g;
 const FORBIDDEN_TAGS = new Set(['iframe', 'frame', 'frameset', 'object', 'embed', 'applet', 'form', 'base', 'portal']);
 const FORBIDDEN_ATTRS = new Set(['srcdoc', 'formaction', 'srcset']);
 const MEDIA_TAGS = new Set(['img', 'source', 'video', 'audio', 'track', 'input']);
-const IMAGE_DATA = /^data:image\/(?:png|jpe?g|gif|webp|avif|svg\+xml)[;,]/;
-const IMAGE_FILE = /\.(?:png|jpe?g|gif|webp|avif|svg|ico)$/i;
+// Vite inlines an image below 4 KB as a data: URL of its MIME type, so a small .ico is
+// data:image/x-icon (or vnd.microsoft.icon) and a small .bmp data:image/bmp.
+const IMAGE_DATA = /^data:image\/(?:png|jpe?g|gif|webp|avif|svg\+xml|bmp|x-icon|vnd\.microsoft\.icon)[;,]/;
+const IMAGE_FILE = /\.(?:png|jpe?g|gif|webp|avif|svg|ico|bmp)$/i;
 const ACTIVE_SCHEME = /^(?:javascript|vbscript|data):/;
 
 const NAMED = { colon: ':', tab: '\t', newline: '\n', amp: '&', quot: '"', apos: "'", lt: '<', gt: '>', sol: '/' };
@@ -96,13 +98,17 @@ function tagProblems(html, base) {
     if (FORBIDDEN_TAGS.has(tag)) problems.push(`<${tag}> is not allowed`);
     const list = attributes(attrs);
     if (tag === 'meta' && list.some(([name]) => name === 'http-equiv')) problems.push('<meta http-equiv> is not allowed');
-    if (tag === 'script') continue;
-    for (const [name, value] of list) {
-      const problem = attributeProblem(tag, name, value, base);
-      if (problem) problems.push(problem);
-    }
+    if (tag !== 'script') problems.push(...attributeProblems(tag, list, base));
   }
   return problems;
+}
+
+// The page's canonical URL is the one <link> that names a full https URL (lib/page-meta.js).
+const canonicalProblem = (value) => (/^https:\/\//.test(schemeOf(value)) ? null : `<link rel="canonical"> href ${JSON.stringify(value.slice(0, 80))} is not an https URL`);
+
+function attributeProblems(tag, list, base) {
+  const canonical = tag === 'link' && list.some(([name, value]) => name === 'rel' && value.trim().toLowerCase() === 'canonical');
+  return list.map(([name, value]) => (canonical && name === 'href' ? canonicalProblem(value) : attributeProblem(tag, name, value, base))).filter(Boolean);
 }
 
 // Returns the page's problems, one line each; an empty list means the page is VitePress's own.
@@ -162,4 +168,67 @@ function checkRenderedHtml(html) {
   return [...new Set(problems)];
 }
 
-module.exports = { escapeInlineMetadata, descriptionTag, checkBuiltPage, checkRenderedHtml };
+// ---------- SVG files under docs/ ----------
+//
+// An SVG under docs/ is published as a file of its own, and a browser that opens it runs its
+// scripts with the docs' origin. So an SVG may hold no <script> element (any namespace prefix,
+// a comment or CDATA included: the check reads the raw text and fails closed), no on* handler,
+// and no attribute value that names a javascript: URL once entities and whitespace are gone.
+// An ENTITY declaration (or a DOCTYPE with an internal subset) could spell any of that through an entity the check never
+// expands, and <iframe>, <embed>, <object> or a srcdoc attribute carry a
+// document of their own, so those are refused too. A NUL byte means the file is not UTF-8 text
+// the check can read, so it fails too.
+// An XML name may start with '_' or any letter, ASCII or not, so a namespace prefix is matched as
+// any run of characters that are not whitespace or markup.
+const NAME_PREFIX = String.raw`(?:[^\s<>/:="'!?]+:)?`;
+const SVG_SCRIPT = new RegExp(String.raw`<\s*${NAME_PREFIX}script(?![^\s/>])`, 'iu');
+// A DOCTYPE with an internal subset ([...]) can declare entities; a plain one, as Illustrator and
+// draw.io write, cannot, and stays allowed.
+const SVG_DECLARATION = /<!\s*(doctype)\b[^>[]*\[|<!\s*(entity)\b/i;
+// An xml-stylesheet processing instruction can point the browser at an XSLT stylesheet (in the
+// file or beside it) that writes any element, a <script> included, so neither is allowed.
+const SVG_STYLESHEET = /<\?\s*xml-stylesheet\b/i;
+const SVG_XSLT = /http:\/\/www\.w3\.org\/1999\/XSL\/Transform/i;
+// <foreignObject> stays allowed: what it holds is scanned like the rest (script, handlers, URLs).
+const SVG_EMBEDS = new Set(['iframe', 'embed', 'object']);
+// The tag scan reads the text in the order an XML parser does: a comment, a CDATA section or a
+// processing instruction is one token, so a quote inside one can never open an attribute value
+// that swallows the real tag after it. One left open is not a token, so the scan reads into it.
+// A bare `<` ends a tag attempt (it is not well-formed XML there, and the scan picks the tag up
+// from that `<`), so a run of unclosed `<x ` openers costs linear time, not quadratic.
+const SVG_TOKEN = /<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>|<\?[\s\S]*?\?>|<([^\s<>/!?"'=][^\s<>/"'=]*)((?:[^<>"']|"[^"]*"|'[^']*')*)>/gu;
+
+// The problems a whole-text pattern finds: a script element, a declaration, a stylesheet or XSLT.
+function svgTextProblems(text) {
+  const problems = [];
+  if (SVG_SCRIPT.test(text)) problems.push('it holds a <script> element');
+  const declaration = text.match(SVG_DECLARATION);
+  if (declaration) problems.push(`it holds a <!${(declaration[1] || declaration[2]).toUpperCase()}> declaration with entities`);
+  if (SVG_STYLESHEET.test(text)) problems.push('it holds an <?xml-stylesheet?> instruction');
+  if (SVG_XSLT.test(text)) problems.push('it holds XSLT');
+  return problems;
+}
+
+// The problems of one tag: an embedded document, a handler, srcdoc or a javascript: URL.
+function svgTagProblems(tag, attrs) {
+  const problems = [];
+  if (SVG_EMBEDS.has(tag.toLowerCase().replace(/^[^:]+:/, ''))) problems.push(`it holds a <${tag}> element`);
+  for (const [name, value] of attributes(attrs)) {
+    if (/^(?:[^:]+:)?on/.test(name)) problems.push(`<${tag}> has the handler ${name}`);
+    else if (/^(?:[^:]+:)?srcdoc$/.test(name)) problems.push(`<${tag}> has a srcdoc attribute`);
+    else if (schemeOf(value).includes('javascript:')) problems.push(`<${tag}> ${name} names a javascript: URL`);
+  }
+  return problems;
+}
+
+// Returns the SVG text's problems, one line each; empty means it holds no script.
+function svgProblems(text) {
+  if (text.includes('\0')) return ['it is not UTF-8 text'];
+  const problems = svgTextProblems(text);
+  for (const [, tag, attrs] of text.matchAll(SVG_TOKEN)) {
+    if (tag) problems.push(...svgTagProblems(tag, attrs));
+  }
+  return [...new Set(problems)];
+}
+
+module.exports = { escapeInlineMetadata, descriptionTag, checkBuiltPage, checkRenderedHtml, svgProblems };

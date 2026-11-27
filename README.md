@@ -50,9 +50,9 @@ on:
   workflow_dispatch:
     inputs:
       bump:
-        description: "Cut a release: patch, minor or major. Empty runs CI only."
+        description: "Cut a release: patch, minor or major. none runs CI only."
         type: choice
-        options: ['', patch, minor, major]
+        options: [none, patch, minor, major]
       seed_version:
         description: "Baseline for the first release when no stable tag exists, e.g. 0.0.0."
         type: string
@@ -76,7 +76,7 @@ jobs:
       id-token: write # npm trusted publishing exchanges an OIDC token
       pull-requests: read # release notes read the merged pull requests
     steps:
-      # actions/checkout v4.2.2
+      # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - uses: skathio/hashira/.github/actions/npm-release@v3
         with:
@@ -106,9 +106,9 @@ on:
   workflow_dispatch:
     inputs:
       bump:
-        description: "Cut a release: patch, minor or major. Empty runs CI only."
+        description: "Cut a release: patch, minor or major. none runs CI only."
         type: choice
-        options: ['', patch, minor, major]
+        options: [none, patch, minor, major]
       seed_version:
         description: "Baseline for the first release when no stable tag exists, e.g. 0.0.0."
         type: string
@@ -131,9 +131,9 @@ jobs:
       contents: write # create the release tag and GitHub Release
       pull-requests: read # release notes read the merged pull requests
     steps:
-      # actions/checkout v4.2.2
+      # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      # actions/setup-dotnet v4.1.0
+      # actions/setup-dotnet v6.0.0
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68
         with:
           dotnet-version: '8.0.x'
@@ -177,8 +177,6 @@ jobs:
     uses: skathio/hashira/.github/workflows/static-webapp-ci.yml@v3
     permissions:
       contents: read # check out the repository
-      id-token: write # upload-pages-artifact authenticates to Pages
-      pages: write # upload-pages-artifact stores the site for deploy
       pull-requests: write # CI summary comment on the pull request
       security-events: write # upload CodeQL results when CodeQL is enabled
   deploy:

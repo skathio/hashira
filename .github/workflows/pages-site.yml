@@ -8,28 +8,62 @@
 #
 # ## Jobs
 #
-#   check  -> refuses any ref but main, before the approval and before any install.
-#   gate   -> waits for the `production` Environment's approval; skipped when `released` is true
-#             (the caller's release job already passed that approval).
-#   build  -> refuses any ref but main again, builds the site, adds the kit and the docs, uploads.
+#   check  -> checks the inputs and decides whether `gate` runs; refuses any ref but main when
+#             deploying, before the approval and before any install, and refuses
+#             `released: true` unless this run already holds an approved `production` review.
+#   source -> picks the commit to build: the run's own (`source: main`) or the highest vX.Y.Z
+#             tag's (`source: latest-release`), and writes "deploying <ref>@<sha>, N commits
+#             after <tag>" to the step summary.
+#   scan   -> scan-suite (OSV and gitleaks by default) on that commit, read only, before `gate`,
+#             so nobody is asked to approve a commit that fails it.
+#   gate   -> waits for the `production` Environment's approval. Skipped for a released run
+#             (`check` verified its approval), for `deploy: false`, and for `approval: merge` on
+#             a push, schedule or repository_dispatch run of main.
+#   build  -> refuses any ref but main again when deploying, installs, builds and tests the
+#             site, adds the kit and the docs, checks the kit references and uploads. Skipped
+#             with `prebuilt`, whose artifact an earlier job of the same run built.
 #   deploy -> deploys; for a released run, only while the commit holds the highest vX.Y.Z tag.
+#             Skipped with `deploy: false`.
 #
 # Why `check` is its own job: an Environment's approval is asked for before any step of the job
 # that names it runs, so a step in `gate` could only refuse a wrong ref after someone approved
 # it. `check` holds no grant and runs no install; `gate` needs it, so a run on another branch
 # fails there and no approval is ever requested.
 #
+# Why `check` verifies `released`: the input skips the approval, and a caller that forwards a
+# `workflow_dispatch` input to it would let whoever dispatches skip it. So `check` reads this
+# run's approvals (GET /repos/{owner}/{repo}/actions/runs/{run_id}/approvals; a called workflow
+# shares its caller's run) and refuses unless one approved the `production` Environment. It
+# fails closed when the API cannot be read. Callers need no guard of their own. The helper is
+# fetched from hashira at `job.workflow_sha` with an unauthenticated git fetch, as deploy's tag
+# check reads tags, so `check` keeps holding no grant.
+#
+# Why `approval: merge` is limited to push, schedule and repository_dispatch on main: those
+# events start only from what is already on main (a merged change, or a token holder's API call),
+# while anyone with write access can dispatch a run. Any other event under `merge` waits at
+# `gate` as `environment` does; an unknown value is refused.
+#
+# `gate`'s skip is decided once, in `check`'s `gate` output; `build` and `deploy` accept a
+# skipped `gate` only when that output is 'false' (or for a released run), so a failed or
+# skipped `check` never lets them through.
+#
 # ## Trust boundary
 #
-# `site_build_command` and `docs_pre_build_command` are raw-shell sinks (D10d): TRUSTED input
-# from the caller's workflow file. They run only in `build`, which holds `contents: read` and no
-# secrets, never in `deploy`. Every input reaches a shell through `env:`, quoted.
+# `install_command`, `site_build_command`, `test_command` and `docs_pre_build_command` are
+# raw-shell sinks (D10d): TRUSTED input from the caller's workflow file. They run only in
+# `build`, which holds `contents: read`, never in `deploy`. Every input reaches a shell through
+# `env:`, quoted. The opt-in `build_token` secret is in the env of the site_build_command step
+# only, not of the install, test or docs steps. install_command runs earlier in the same job and
+# can change what later steps run (GITHUB_ENV, files on disk), so it and its dependencies' install
+# scripts are trusted with the token too. With `deploy: false` on a pull request it reaches that
+# PR's build, so pass it only to builds you trust with it.
 #
 # ## Library self-checkout
 #
-# `build` checks skathio/hashira out into `.hashira/` at `job.workflow_sha`, the commit this file
-# was called at (never `github.sha` or `github.workflow_sha`, which name the caller's commit),
-# and uses site-kit, docs-build and pages-upload from there, as the CI workflows do.
+# `scan` and `build` check skathio/hashira out into `.hashira/` at `job.workflow_sha`, the commit
+# this file was called at (never `github.sha` or `github.workflow_sha`, which name the caller's
+# commit), and use scan-suite, site-kit, docs-build and pages-upload from there, as the CI
+# workflows do.
 name: pages-site
 
 on:
@@ -67,6 +101,50 @@ on:
         description: ".NET SDK version for setup-dotnet, for a site or docs build that needs it. Default '' (no .NET)."
         type: string
         default: ''
+      install_command:
+        description: "Shell command run from the repo root before `site_build_command`, such as 'npm ci'. Default '' (none). Trusted input (raw-shell sink per D10d; do NOT pass values derived from PR titles, issue bodies, branch names, or other externally controlled context)."
+        type: string
+        default: ''
+      test_command:
+        description: "Shell command run from the repo root after `site_build_command`, before the kit and the docs are added. A non-zero exit fails the build. Default '' (none). Trusted input (raw-shell sink per D10d; do NOT pass values derived from PR titles, issue bodies, branch names, or other externally controlled context)."
+        type: string
+        default: ''
+      coverage_path:
+        description: "Coverage file `test_command` writes (lcov, cobertura or opencover), reported by coverage-report in the build's summary. Default '' (no report)."
+        type: string
+        default: ''
+      deploy:
+        description: "Deploy the site. Default true. false builds, checks and uploads the artifact on any ref and event, pull requests included: no main-only check, no `gate` and no deploy."
+        type: boolean
+        default: true
+      prebuilt:
+        description: "Deploy the `artifact_name` artifact an earlier job of the same run uploaded (for example a `deploy: false` call of this workflow) instead of building. Default false. Needs `deploy: true`."
+        type: boolean
+        default: false
+      artifact_name:
+        description: "Name of the Pages artifact the build uploads and the deploy deploys. Default 'github-pages'."
+        type: string
+        default: github-pages
+      approval:
+        description: "Who approves a deploy: 'environment' (default) waits for the `production` Environment at `gate`; 'merge' deploys main with no `gate` on push, schedule and repository_dispatch runs only, and waits at `gate` on any other event. Any other value is refused."
+        type: string
+        default: environment
+      source:
+        description: "What to build: 'main' (default) builds the run's own commit; 'latest-release' builds the highest vX.Y.Z tag's tree while the workflow runs from main, and fails if there is none. Any other value is refused."
+        type: string
+        default: main
+      scan_disable:
+        description: "Comma-separated scan-suite scans to skip in the `scan` job. Default 'codeql,dependency-review,actionlint' (OSV and gitleaks run). CodeQL never runs here, listed or not: the job holds read grants only, and CodeQL needs security-events: write. Values: codeql,osv,gitleaks,dependency-review,actionlint."
+        type: string
+        default: codeql,dependency-review,actionlint
+      scan_fail_on_findings:
+        description: "Fail the `scan` job, before `gate`, when a scanner reports findings or an error. Default true, so nothing is approved or deployed. false reports findings in the job summary and lets the run go on."
+        type: boolean
+        default: true
+    secrets:
+      build_token:
+        description: "Optional. Exposed as BUILD_TOKEN to the `site_build_command` step only (not to install_command, test_command or the docs build), for a build that reads a private package or API."
+        required: false
 
 permissions: {}
 
@@ -76,21 +154,213 @@ jobs:
   check:
     runs-on: ubuntu-latest
     permissions: {}
+    outputs:
+      # 'true' when `gate` must wait for the production approval, 'false' when it is skipped.
+      gate: ${{ steps.plan.outputs.gate }}
     steps:
       - name: Refuse any ref but main
         env:
           REF: ${{ github.ref }}
+          DEPLOY: ${{ inputs.deploy }}
         run: |
+          # A build-only run deploys nothing, so it may run on any ref, pull requests included.
+          if [ "${DEPLOY}" = "false" ]; then
+            echo "pages-site: deploy is false; building ${REF} without deploying."
+            exit 0
+          fi
           if [ "${REF}" != "refs/heads/main" ]; then
             echo "::error::pages-site: deploys main only; this run is on ${REF}."
             exit 1
           fi
+      # Every value that picks a path through the jobs is checked here, before any approval,
+      # and an unknown one is refused rather than read as a default.
+      - name: Check the inputs and decide on the approval
+        id: plan
+        env:
+          REF: ${{ github.ref }}
+          EVENT: ${{ github.event_name }}
+          DEPLOY: ${{ inputs.deploy }}
+          RELEASED: ${{ inputs.released }}
+          PREBUILT: ${{ inputs.prebuilt }}
+          APPROVAL: ${{ inputs.approval }}
+          SOURCE: ${{ inputs.source }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::pages-site: $1"; exit 1; }
+          case "${APPROVAL}" in
+            environment|merge) ;;
+            *) fail "approval must be 'environment' or 'merge', not '${APPROVAL}'." ;;
+          esac
+          case "${SOURCE}" in
+            main|latest-release) ;;
+            *) fail "source must be 'main' or 'latest-release', not '${SOURCE}'." ;;
+          esac
+          if [ "${PREBUILT}" = "true" ] && [ "${DEPLOY}" = "false" ]; then
+            fail "prebuilt deploys an artifact built earlier in the run; with deploy: false there is nothing to do."
+          fi
+          gate=true
+          if [ "${DEPLOY}" = "false" ] || [ "${RELEASED}" = "true" ]; then
+            gate=false
+          elif [ "${APPROVAL}" = "merge" ]; then
+            case "${EVENT}" in
+              push|schedule|repository_dispatch) [ "${REF}" = "refs/heads/main" ] && gate=false ;;
+            esac
+            if [ "${gate}" = "true" ]; then
+              echo "::notice::pages-site: approval: merge deploys without gate only on push, schedule or repository_dispatch runs of main; this ${EVENT} run waits at gate."
+            fi
+          fi
+          echo "gate=${gate}" >> "${GITHUB_OUTPUT}"
+      - name: Fetch the approval check at hashira's own commit
+        if: ${{ inputs.released }}
+        env:
+          # The called workflow file's commit, never the caller's.
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
+          LIBRARY: ${{ github.server_url }}/skathio/hashira.git
+        run: |
+          set -euo pipefail
+          if [[ ! "${WORKFLOW_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::pages-site: job.workflow_sha is '${WORKFLOW_SHA}', not a 40-character commit SHA, so released: true cannot be checked (GitHub Enterprise Server does not provide job.workflow_sha)."
+            exit 1
+          fi
+          git init -q .hashira
+          if ! git -C .hashira fetch -q --depth 1 --no-tags "${LIBRARY}" "${WORKFLOW_SHA}"; then
+            echo "::error::pages-site: could not fetch skathio/hashira at ${WORKFLOW_SHA}, so released: true cannot be checked."
+            exit 1
+          fi
+          git -C .hashira checkout -q FETCH_HEAD -- .github/pages-site/lib
+      # Fails closed: no approved `production` review for this run, or approvals the API will not
+      # give, refuse the run. The token holds no grant (`permissions: {}`); the helper falls back to
+      # an unauthenticated read, which a public repo allows.
+      - name: Refuse released without this run's production approval
+        if: ${{ inputs.released }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+        run: node .hashira/.github/pages-site/lib/released-approval.cjs
+
+  # The commit every later job checks out, so the scan reads the tree that is built and deployed.
+  source:
+    needs: check
+    runs-on: ubuntu-latest
+    permissions:
+      # Full-history checkout: the vX.Y.Z tags and the commits since the latest one.
+      contents: read
+    outputs:
+      sha: ${{ steps.pick.outputs.sha }}
+    steps:
+      # actions/checkout v7.0.1. Nothing runs from the tree; only git reads it.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Pick the commit to build
+        id: pick
+        env:
+          SOURCE: ${{ inputs.source }}
+          DEPLOY: ${{ inputs.deploy }}
+          SHA: ${{ github.sha }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::pages-site: $1"; exit 1; }
+          # The highest vX.Y.Z by version order (v1.10.0 above v1.2.0); pre-releases and other
+          # tags never count.
+          if ! tags="$(git tag -l 'v*')"; then
+            echo "::warning::pages-site: could not list this repo's tags."
+            tags=""
+          fi
+          latest="$(awk '/^v[0-9]+\.[0-9]+\.[0-9]+$/' <<< "${tags}" | sort -V | tail -n 1)"
+          case "${SOURCE}" in
+            main)
+              sha="${SHA}"
+              ref="${REF_NAME}"
+              ;;
+            latest-release)
+              [ -n "${latest}" ] || fail "source: latest-release found no vX.Y.Z tag; nothing is built or deployed."
+              sha="$(git rev-parse "${latest}^{commit}")"
+              ref="${latest}"
+              # A tag is a ref anyone with push access can put on any commit, so the tag's
+              # commit must be on main. The full fetch above writes origin/main; a clone with
+              # only the local branch has refs/heads/main. Neither there fails closed.
+              main_ref=""
+              for candidate in refs/remotes/origin/main refs/heads/main; do
+                if git rev-parse -q --verify "${candidate}^{commit}" > /dev/null; then
+                  main_ref="${candidate}"
+                  break
+                fi
+              done
+              [ -n "${main_ref}" ] || fail "source: latest-release cannot find main (no refs/remotes/origin/main), so it cannot check that ${latest} is on main."
+              git merge-base --is-ancestor "${sha}" "${main_ref}" \
+                || fail "source: latest-release: ${latest} (${sha}) is not on main; only a release tag on main is built."
+              ;;
+            *) fail "source must be 'main' or 'latest-release', not '${SOURCE}'." ;;
+          esac
+          if [ -n "${latest}" ]; then
+            count="$(git rev-list --count "${latest}..${sha}")"
+            noun=commits
+            [ "${count}" = "1" ] && noun=commit
+            since="${count} ${noun} after ${latest}"
+          else
+            since="no vX.Y.Z tag yet"
+          fi
+          # The same "deploying <ref>@<sha>, N commits after <tag>" text on every run, so one
+          # search finds it; a build-only run says in front of it that nothing is deployed.
+          verb=deploying
+          [ "${DEPLOY}" = "false" ] && verb="build only (deploy: false), not deploying"
+          # A branch name is the pusher's text: anything but letters, digits and . _ / + - becomes
+          # _, so it cannot add Markdown or links to the summary.
+          ref="${ref//[^A-Za-z0-9._\/+-]/_}"
+          echo "pages-site: ${verb} ${ref}@${sha}, ${since}" | tee -a "${GITHUB_STEP_SUMMARY}"
+          echo "sha=${sha}" >> "${GITHUB_OUTPUT}"
+
+  # Before `gate`: a commit whose scan fails is never put up for approval. Read only, so CodeQL
+  # (security-events: write) never runs here.
+  scan:
+    needs: [check, source]
+    runs-on: ubuntu-latest
+    permissions:
+      # Checkout of the commit being deployed; the scanners only read it.
+      contents: read
+    steps:
+      - name: Resolve hashira's own commit
+        id: self
+        env:
+          # The called workflow file's commit, never the caller's.
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
+        run: |
+          if [[ ! "${WORKFLOW_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::pages-site: job.workflow_sha is '${WORKFLOW_SHA}', not a 40-character commit SHA, so hashira's composite actions cannot be checked out at the commit this workflow was called at (GitHub Enterprise Server does not provide job.workflow_sha)."
+            exit 1
+          fi
+          echo "sha=${WORKFLOW_SHA}" >> "${GITHUB_OUTPUT}"
+      # actions/checkout v7.0.1. The commit `source` picked.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ needs.source.outputs.sha }}
+          persist-credentials: false
+      - name: Checkout hashira library at its own commit
+        # actions/checkout v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: skathio/hashira
+          ref: ${{ steps.self.outputs.sha }}
+          path: .hashira
+          # Only .github/: the actions need nothing else.
+          sparse-checkout: .github
+          persist-credentials: false
+      - name: Run scan-suite
+        uses: ./.hashira/.github/actions/scan-suite
+        with:
+          # CodeQL is always off: it needs security-events: write, which this job does not hold.
+          scan_disable: ${{ format('codeql,{0}', inputs.scan_disable) }}
+          # Fail closed by default: findings or a scanner error fail this job, before `gate`.
+          fail_on_findings: ${{ inputs.scan_fail_on_findings && 'true' || 'false' }}
 
   # One release, one approval: a hand run waits here for the `production` Environment's owner
-  # approval. A release run (`released: true`) skips it.
+  # approval. `check` decides when it is skipped (see the header).
   gate:
-    needs: check
-    if: ${{ !inputs.released }}
+    needs: [check, scan]
+    if: ${{ !inputs.released && needs.check.outputs.gate != 'false' }}
     runs-on: ubuntu-latest
     environment: production
     permissions: {}
@@ -99,10 +369,11 @@ jobs:
         run: echo "Approved in the production environment."
 
   build:
-    needs: gate
-    # After the approval at `gate`, or with `gate` skipped on a release run. A release run on
-    # another branch reaches this job too, and its own ref check refuses it.
-    if: ${{ !cancelled() && (needs.gate.result == 'success' || (needs.gate.result == 'skipped' && inputs.released)) }}
+    needs: [check, source, scan, gate]
+    # After `check`, `source` and `scan` passed and then the approval at `gate`, or with `gate`
+    # skipped where `check` said so. The needs are named here because a skipped `gate` would
+    # otherwise hide a failed one behind `!cancelled()`.
+    if: ${{ !cancelled() && !inputs.prebuilt && needs.check.result == 'success' && needs.source.result == 'success' && needs.scan.result == 'success' && (needs.gate.result == 'success' || (needs.gate.result == 'skipped' && (inputs.released || needs.check.outputs.gate == 'false'))) }}
     runs-on: ubuntu-latest
     # Read only: this job runs the caller's build commands and npm packages. pages-upload does not
     # need the OIDC token or Pages write (upload-pages-artifact is a tar plus
@@ -110,12 +381,14 @@ jobs:
     permissions:
       contents: read
     steps:
-      # A release run skips `check`'s guard through `gate`, so refuse a wrong ref here too, before
-      # any checkout, install or build command.
+      # Defence in depth: refuse a wrong ref here too, before any checkout, install or build
+      # command.
       - name: Refuse any ref but main
         env:
           REF: ${{ github.ref }}
+          DEPLOY: ${{ inputs.deploy }}
         run: |
+          [ "${DEPLOY}" = "false" ] && exit 0
           if [ "${REF}" != "refs/heads/main" ]; then
             echo "::error::pages-site: deploys main only; this run is on ${REF}."
             exit 1
@@ -131,14 +404,15 @@ jobs:
             exit 1
           fi
           echo "sha=${WORKFLOW_SHA}" >> "${GITHUB_OUTPUT}"
-      # The caller's tree. No persisted credential, since the caller's build commands run in
-      # this job.
-      # actions/checkout v4.2.2
+      # The caller's tree at the commit `source` picked. No persisted credential, since the
+      # caller's build commands run in this job.
+      # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
+          ref: ${{ needs.source.outputs.sha }}
           persist-credentials: false
       - name: Checkout hashira library at its own commit
-        # actions/checkout v4.2.2
+        # actions/checkout v7.0.1
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: skathio/hashira
@@ -156,15 +430,40 @@ jobs:
             echo "::error::pages-site: .hashira is at ${actual}, expected ${EXPECTED_SHA}."
             exit 1
           fi
-      # actions/setup-node v4.1.0
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+      # The npm cache is keyed on docs-build's own lockfile, so the VitePress install docs-build
+      # runs is a cache hit after the first run. Only with the docs: without them nothing is sure
+      # to fill the npm cache folder, and setup-node's post step would fail on a missing folder
+      # or save a near-empty cache under the key the docs builds of the repo share.
+      - if: ${{ inputs.docs }}
+        # actions/setup-node v7.1.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: ${{ inputs.node_version }}
+          cache: npm
+          cache-dependency-path: .hashira/.github/actions/docs-build/vitepress/package-lock.json
+      - if: ${{ !inputs.docs }}
+        # actions/setup-node v7.1.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: ${{ inputs.node_version }}
       - if: ${{ inputs.dotnet_version != '' }}
-        # actions/setup-dotnet v4.1.0
+        # actions/setup-dotnet v6.1.0
         uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73
         with:
           dotnet-version: ${{ inputs.dotnet_version }}
+      - name: Install
+        if: ${{ inputs.install_command != '' }}
+        env:
+          # Raw-shell sink, trusted input (see the header).
+          INSTALL_COMMAND: ${{ inputs.install_command }}
+        run: |
+          set +e
+          bash -eo pipefail -c "${INSTALL_COMMAND}"
+          rc=$?
+          if [ "${rc}" -ne 0 ]; then
+            echo "::error::pages-site: install_command exited with code ${rc}."
+            exit 1
+          fi
       - name: Build or copy the site
         id: site
         env:
@@ -172,6 +471,8 @@ jobs:
           SITE_OUTPUT: ${{ inputs.site_output }}
           # Raw-shell sink, trusted input (see the header).
           SITE_BUILD_COMMAND: ${{ inputs.site_build_command }}
+          # The opt-in build secret, in this step's env only.
+          BUILD_TOKEN: ${{ secrets.build_token }}
         run: |
           # No -e: each failure below is caught and named.
           set +e -uo pipefail
@@ -210,6 +511,27 @@ jobs:
             fi
           done
           echo "output=${out}" >> "${GITHUB_OUTPUT}"
+      - name: Test
+        if: ${{ inputs.test_command != '' }}
+        env:
+          # Raw-shell sink, trusted input (see the header).
+          TEST_COMMAND: ${{ inputs.test_command }}
+        run: |
+          set +e
+          bash -eo pipefail -c "${TEST_COMMAND}"
+          rc=$?
+          if [ "${rc}" -ne 0 ]; then
+            echo "::error::pages-site: test_command exited with code ${rc}."
+            exit 1
+          fi
+      # The per-file table goes to this job's summary. No pull request comment: this job holds
+      # contents: read only.
+      - name: Report coverage
+        if: ${{ inputs.coverage_path != '' }}
+        uses: ./.hashira/.github/actions/coverage-report
+        with:
+          coverage_path: ${{ inputs.coverage_path }}
+          comment: 'false'
       - name: Add the site kit
         uses: ./.hashira/.github/actions/site-kit
         with:
@@ -220,21 +542,28 @@ jobs:
         with:
           pre_build_command: ${{ inputs.docs_pre_build_command }}
           output_dir: ${{ steps.site.outputs.output }}/docs
+      # A page that names a kit file site-kit does not ship would deploy with no header or theme.
+      - name: Check the site's kit references
+        env:
+          SITE: ${{ steps.site.outputs.output }}
+        run: node .hashira/.github/pages-site/lib/kit-refs.cjs "${SITE}"
       - name: Upload the Pages artifact
         uses: ./.hashira/.github/actions/pages-upload
         with:
           path: ${{ steps.site.outputs.output }}
+          artifact_name: ${{ inputs.artifact_name }}
 
   deploy:
-    needs: build
+    needs: [check, source, scan, gate, build]
     # One Pages deploy at a time. On this job only, so a run waiting at `gate` never holds the
     # queue for the others.
     concurrency:
       group: pages
       cancel-in-progress: false
     # `!cancelled()` because a skipped `gate` upstream would otherwise skip this job too; unlike
-    # `always()` it still stops on a cancelled run.
-    if: ${{ !cancelled() && needs.build.result == 'success' }}
+    # `always()` it still stops on a cancelled run. `build` is skipped only in prebuilt mode, so
+    # the approval is checked here as `build` checks it.
+    if: ${{ !cancelled() && inputs.deploy != false && needs.check.result == 'success' && needs.source.result == 'success' && needs.scan.result == 'success' && (needs.gate.result == 'success' || (needs.gate.result == 'skipped' && (inputs.released || needs.check.outputs.gate == 'false'))) && (needs.build.result == 'success' || (inputs.prebuilt && needs.build.result == 'skipped')) }}
     runs-on: ubuntu-latest
     environment:
       name: github-pages
@@ -251,7 +580,7 @@ jobs:
       - name: Refuse unless this commit holds the latest release
         if: ${{ inputs.released }}
         env:
-          SHA: ${{ github.sha }}
+          SHA: ${{ needs.source.outputs.sha }}
           REMOTE: ${{ github.server_url }}/${{ github.repository }}.git
         run: |
           set -euo pipefail
@@ -279,3 +608,5 @@ jobs:
       # wrapper over actions/deploy-pages, pinned to the v3.0.0 release commit as site.yml does.
       - id: deploy
         uses: skathio/hashira/.github/actions/pages-deploy@2c8d52526cbce593a445f7572b599813503160f5 # v3.0.0
+        with:
+          artifact_name: ${{ inputs.artifact_name }}

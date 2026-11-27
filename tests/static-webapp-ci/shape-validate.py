@@ -15,8 +15,9 @@ Acceptance checks per phase 4.2:
       rejects undocumented inputs.
   (c) Every input has a non-empty `description:` (D10 contract surface).
   (d) Workflow-level `permissions:` is `{}` (NF6 deny-all baseline).
-  (e) Per-job permissions match the design (build-and-upload has
-      id-token:write + pages:write; scan-suite has security-events:write
+  (e) Per-job permissions match the design (build-and-upload holds
+      contents:read and no id-token or pages, since it runs the caller's
+      build_command and upload-pages-artifact needs neither; scan-suite has security-events:write
       + pull-requests:read; passed has pull-requests:write for the one CI
       summary comment, and no other job does).
   (f) The aggregate `passed` job, checked by tests/shape-lints/passed_job.py:
@@ -60,12 +61,13 @@ DOCUMENTED_INPUTS = [
     "summary_comment",
     "quality_gate",
     "quality_level",
+    "site_kit",
 ]
 
 # Per-job permission requirements (subset checks — the job MAY have
 # additional contents:read etc.; we assert the load-bearing scopes).
 REQUIRED_PERMISSIONS = {
-    "build-and-upload": {"id-token": "write", "pages": "write"},
+    "build-and-upload": {"contents": "read"},
     "scan-suite": {"security-events": "write", "pull-requests": "read"},
     # The one CI summary comment on the pull request; passed_job.check also
     # holds every other job to no pull-requests:write.
@@ -74,8 +76,23 @@ REQUIRED_PERMISSIONS = {
     "quality-gate": {"contents": "read"},
 }
 
+# Jobs that run the caller's commands and so must never hold these scopes:
+# a leaked build_command would otherwise reach the OIDC token or Pages.
+FORBIDDEN_PERMISSIONS = {
+    "build-and-upload": ("id-token", "pages"),
+    "test": ("id-token", "pages"),
+}
+
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 HASHIRA_PREFIX = "./.hashira/.github/actions/"
+
+
+def check_forbidden_permissions(jobs):
+    for job_name, scopes in FORBIDDEN_PERMISSIONS.items():
+        job_perms = (jobs.get(job_name) or {}).get("permissions") or {}
+        held = [s for s in scopes if job_perms.get(s) not in (None, "none")]
+        if held:
+            fail(f"job '{job_name}' runs the caller's commands and must not hold {held}")
 
 
 def fail(msg):
@@ -196,6 +213,8 @@ def main():
                     f"job '{job_name}' permissions missing/wrong for {scope}: "
                     f"expected '{level}', got {actual!r}"
                 )
+
+    check_forbidden_permissions(jobs)
 
     # Check (f): the aggregate `passed` job.
     if not passed_job.report_check(doc, sys.stderr):

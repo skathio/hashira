@@ -45,6 +45,11 @@ function checkArray(field, value, max) {
   if (value.length > max) fail(`${field} must have at most ${max} entries, got ${value.length}`);
 }
 
+function checkAccent(field, value) {
+  expectType(field, value, 'string');
+  if (!ACCENT_RE.test(value)) fail(`${field} must be #rgb or #rrggbb, got ${JSON.stringify(value)}`);
+}
+
 function checkKeys(field, obj, allowed) {
   for (const key of Object.keys(obj)) {
     if (!allowed.includes(key)) fail(`unknown field ${field ? `${field}.` : ''}${key} (allowed: ${allowed.join(', ')})`);
@@ -135,16 +140,20 @@ function readPages(root) {
     throw new Error(`docs-build: ${PAGES} not found in ${root}`);
   }
   if (!stat.isFile()) fail('is not a file');
-  checkSize(fail, stat);
-  const text = fs.readFileSync(file, 'utf8');
-  let data;
-  try {
-    data = JSON.parse(text);
-  } catch (err) {
-    fail(`invalid JSON at ${parseError(text, err)}`);
-  }
+  const data = readJson(file, stat);
   if (typeOf(data) !== 'object') fail(`must hold a JSON object, got ${typeOf(data)}`);
   return data;
+}
+
+// A JSON file of at most 64 KB, parsed; a failure names the line and column.
+function readJson(file, stat) {
+  checkSize(fail, stat);
+  const text = fs.readFileSync(file, 'utf8');
+  try {
+    return JSON.parse(text);
+  } catch (err) {
+    return fail(`invalid JSON at ${parseError(text, err)}`);
+  }
 }
 
 function checkSize(failWith, stat) {
@@ -181,6 +190,9 @@ function repoName(root) {
 // ---------- the fields ----------
 
 const FIELDS = {
+  // The JSON Schema an editor checks the file against (pages.schema.json, next to action.yml).
+  // It is read by editors only; the build ignores it.
+  $schema: (ctx, v) => checkString('$schema', v, { min: 1, max: 2048 }),
   name: (ctx, v) => checkString('name', v, { min: 1, max: 40 }),
   description: (ctx, v) => checkString('description', v, { max: 200 }),
   base: (ctx, v) => {
@@ -194,9 +206,8 @@ const FIELDS = {
     checkExtension('home_page', v, ['.md']);
   },
   sidebar: (ctx, v) => {
-    checkArray('sidebar', v, 100);
     // Every missing file is named at once, so one run shows the whole list to fix.
-    const missing = v.filter((entry, i) => !checkSidebarEntry(ctx, `sidebar[${i}]`, entry)).map((entry) => entry.file);
+    const missing = checkSidebarList({ ...ctx, checkFiles: true }, 'sidebar', v, 0);
     if (missing.length) fail(`sidebar: files not found in docs/: ${missing.join(', ')}`);
   },
   unpublished: (ctx, v) => {
@@ -208,10 +219,9 @@ const FIELDS = {
     v.forEach((entry, i) => checkLink(`nav[${i}]`, entry, 30));
   },
   home_link: (ctx, v) => checkLink('home_link', v, 30),
-  accent: (ctx, v) => {
-    expectType('accent', v, 'string');
-    if (!ACCENT_RE.test(v)) fail(`accent must be #rgb or #rrggbb, got ${JSON.stringify(v)}`);
-  },
+  accent: (ctx, v) => checkAccent('accent', v),
+  // The dark-mode accent; left out, the docs keep using `accent` in both modes.
+  accent_dark: (ctx, v) => checkAccent('accent_dark', v),
   logo: (ctx, v) => {
     checkRelative('logo', v);
     checkExtension('logo', v, ['.svg', '.png']);
@@ -224,24 +234,89 @@ const FIELDS = {
   },
 };
 
-function checkSidebarEntry(ctx, field, entry) {
+// ---------- the sidebar ----------
+
+// A sidebar entry is one of three shapes: a page {file, label}, a group {label, items,
+// collapsed?} of entries, or a folder section {label, dir, collapsed?} that lists the pages
+// under a docs/ folder. Each list holds at most 100 entries and groups nest 3 levels deep, so
+// with the 64 KB file limit the work per entry stays bounded.
+const SIDEBAR_MAX = 100;
+const SIDEBAR_DEPTH = 3;
+const SHAPES = ['file', 'items', 'dir'];
+
+// Checks a list of entries at a nesting depth and returns the page files it names that are
+// not in docs/ (checkFiles), or none when the files are checked later against the stage.
+function checkSidebarList(ctx, field, list, depth) {
+  checkArray(field, list, SIDEBAR_MAX);
+  return list.flatMap((entry, i) => checkSidebarEntry(ctx, `${field}[${i}]`, entry, depth));
+}
+
+function checkSidebarEntry(ctx, field, entry, depth) {
   expectType(field, entry, 'object');
+  const shapes = SHAPES.filter((key) => Object.hasOwn(entry, key));
+  if (shapes.length !== 1) {
+    fail(`${field} must have exactly one of file (a page), items (a group) or dir (a folder section), got ${shapes.length ? shapes.join(' and ') : 'none'}`);
+  }
+  if (shapes[0] === 'file') return checkSidebarPage(ctx, field, entry);
+  checkKeys(field, entry, ['label', shapes[0], 'collapsed']);
+  checkString(`${field}.label`, entry.label, { min: 1, max: 60 });
+  if (Object.hasOwn(entry, 'collapsed')) expectType(`${field}.collapsed`, entry.collapsed, 'boolean');
+  if (shapes[0] === 'dir') {
+    checkRelative(`${field}.dir`, entry.dir);
+    return [];
+  }
+  if (depth >= SIDEBAR_DEPTH) fail(`${field}: sidebar groups nest at most ${SIDEBAR_DEPTH} levels deep`);
+  expectType(`${field}.items`, entry.items, 'array');
+  if (entry.items.length === 0) fail(`${field}.items must not be empty`);
+  return checkSidebarList(ctx, `${field}.items`, entry.items, depth + 1);
+}
+
+function checkSidebarPage(ctx, field, entry) {
   checkKeys(field, entry, ['file', 'label']);
   checkString(`${field}.file`, entry.file, { min: 1, max: 500 });
   checkString(`${field}.label`, entry.label, { min: 1, max: 60 });
   // Only Markdown becomes a page; any other file would be reported missing after the build.
   checkRelative(`${field}.file`, entry.file);
   checkExtension(`${field}.file`, entry.file, ['.md']);
+  if (!ctx.checkFiles) return [];
   const found = checkFile(ctx, `${field}.file`, entry.file, { base: 'docs', allowMissing: true });
   if (found && !fs.statSync(path.join(ctx.root, 'docs', entry.file)).isFile()) fail(`${field}.file: docs/${entry.file} is not a file`);
-  return found;
+  return found ? [] : [entry.file];
 }
+
+// The page files a sidebar names, groups included, in order.
+const sidebarFiles = (list) => list.flatMap((entry) => (entry.file ? [entry.file] : sidebarFiles(entry.items ?? [])));
 
 // A page listed in the sidebar and kept off the site would leave an entry pointing at no page.
 function checkSidebarPublished(config) {
   const hidden = new Set(config.unpublished);
-  const both = config.sidebar.map((entry) => entry.file).filter((file) => hidden.has(file));
+  const both = sidebarFiles(config.sidebar).filter((file) => hidden.has(file));
   if (both.length) fail(`sidebar files are also in unpublished: ${both.join(', ')}`);
+}
+
+// The sidebar a pre_build_command may write, as a JSON array in the shape of pages.json's
+// `sidebar`, to this file in the stage; when it is there it replaces pages.json's. It is data:
+// it is checked with the same rules and limits, and its page files are checked against the
+// stage once VitePress reads it. A repo's own docs/.sidebar.json is never staged (prepare.js
+// skips dot entries), so only the trusted pre_build_command can write one.
+const GENERATED_SIDEBAR = '.sidebar.json';
+
+function loadGeneratedSidebar(stage) {
+  const file = path.join(stage, GENERATED_SIDEBAR);
+  let stat;
+  try {
+    stat = fs.lstatSync(file);
+  } catch {
+    return null;
+  }
+  try {
+    if (!stat.isFile()) fail('is not a regular file');
+    const data = readJson(file, stat);
+    checkSidebarList({ checkFiles: false }, 'sidebar', data, 0);
+    return data;
+  } catch (err) {
+    throw new Error(err.message.replace(`docs-build: ${PAGES}: `, `docs-build: DOCS_STAGE/${GENERATED_SIDEBAR}: `));
+  }
 }
 
 function withDefaults(pages, homepage, repo) {
@@ -259,6 +334,7 @@ function withDefaults(pages, homepage, repo) {
     nav: [],
     home_link: null,
     accent: DEFAULT_ACCENT,
+    accent_dark: null,
     logo: null,
     theme_css: null,
     ...tile,
@@ -275,10 +351,11 @@ function loadPagesConfig(repoRoot) {
   const config = withDefaults(pages, readHomepage(root), repoName(root));
   const ctx = { root, realRoot: fs.realpathSync(root) };
   for (const [field, check] of Object.entries(FIELDS)) {
-    if (config[field] !== null || field in pages) check(ctx, config[field]);
+    if (config[field] != null || field in pages) check(ctx, config[field]);
   }
   checkSidebarPublished(config);
+  delete config.$schema;
   return config;
 }
 
-module.exports = { loadPagesConfig, parseError, repoName, PAGES, MAX_BYTES, DEFAULT_ACCENT, DEFAULT_HOME_PAGE, HREF_PREFIXES };
+module.exports = { loadPagesConfig, loadGeneratedSidebar, sidebarFiles, GENERATED_SIDEBAR, parseError, repoName, PAGES, MAX_BYTES, DEFAULT_ACCENT, DEFAULT_HOME_PAGE, HREF_PREFIXES };

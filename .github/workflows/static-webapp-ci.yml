@@ -12,9 +12,11 @@
 # Workflow-level `permissions: {}` (deny-all). Each job grants the minimum
 # it needs:
 #   - setup           : contents:read
-#   - build-and-upload: contents:read, id-token:write, pages:write
-#                       (id-token + pages required by upload-pages-artifact;
-#                       see `.github/actions/pages-upload/action.yml` header)
+#   - build-and-upload: contents:read only. upload-pages-artifact is a tar
+#                       plus actions/upload-artifact, which authenticates
+#                       with the runner's own token, so it needs no OIDC
+#                       token and no Pages grant. Only the caller's
+#                       `deploy` job (pages-deploy) holds those.
 #   - test            : contents:read (coverage-report runs as the last
 #                       step of this job — see "Coverage report handoff")
 #   - scan-suite      : contents:read, security-events:write (CodeQL),
@@ -94,14 +96,13 @@
 #   - coverage_path
 #   - scan_disable
 #
-# iter-4.2 security review m4: because `build_command` runs in the same
-# job that holds `id-token: write`, a consumer who violates this trust
-# contract can have their GitHub OIDC token exfiltrated by attacker-
-# controlled code; any cloud federation configured against this repo's
-# OIDC subject is in the blast radius. See `## Build artifact handoff`
-# for why the architectural split into a separate non-`id-token` build
-# job is not feasible without a new cross-job artifact handoff (forced
-# by `upload-pages-artifact`'s same-runner locality requirement).
+# iter-4.2 security review m4 (resolved): `build_command` used to run in a
+# job that also held the OIDC token grant, so a consumer who broke this
+# trust contract could have that token exfiltrated. Since v3.4.0 no job of
+# this workflow holds `id-token` or `pages` (upload-pages-artifact needs
+# neither), so the blast radius of a leaked `build_command` is the
+# read-only `contents` token of that job. The trust contract above still
+# holds: the commands run as shell.
 #
 # ## `pull_request_target` is forbidden (B8, iter 3.3)
 #
@@ -113,10 +114,9 @@
 # fork-originated PR, so a fork PR author's `build_command`/
 # `test_command` (both raw-shell sinks per D10d above) would execute
 # with that elevated context instead of the fork's own restricted
-# token. This workflow's `build-and-upload` job already holds
-# `id-token: write` (see the permissions baseline above); combining that
-# grant with `pull_request_target`'s base-repo context on every fork PR
-# is exactly the escalation B8 exists to prevent. Use `pull_request`
+# token. The base repo's secrets and write-scoped token in a job that
+# runs fork-controlled shell is exactly the escalation B8 exists to
+# prevent, whatever grants this workflow's jobs declare. Use `pull_request`
 # (read-only fork token, no secrets) for PR-triggered CI; never switch
 # to `pull_request_target` to work around the read-only token's
 # limitations — that "fix" is the footgun, not a solution.
@@ -187,10 +187,10 @@ on:
         type: string
         default: ""
       scan_disable:
-        description: "Comma-separated list of scans to skip (D10c). Default 'codeql,actionlint' — pass '' to enable all. Values: codeql,osv,gitleaks,dependency-review,actionlint."
+        description: "Comma-separated list of scans to skip (D10c). Default 'codeql' (actionlint runs by default since v3.4.0) — pass '' to enable all. Values: codeql,osv,gitleaks,dependency-review,actionlint."
         required: false
         type: string
-        default: "codeql,actionlint"
+        default: "codeql"
       scan_fail_on_findings:
         description: "Fail the scan-suite job, and so the ci / passed check, when a scanner reports findings or an error. Default true. false keeps every enabled scanner running and reported as fail in the job summary and the CI summary comment, without failing the job. A scanner turned off with scan_disable does not run at all."
         required: false
@@ -211,6 +211,11 @@ on:
         required: false
         type: string
         default: "strict"
+      site_kit:
+        description: "Copy hashira's site kit (tokens.css, theme.js and <site-nav>) into <output_dir>/_kit/ after build_command, before the upload, as pages-site.yml does, so the pull request's artifact matches the deployed site. Default false; the build fails if the site already holds a _kit folder."
+        required: false
+        type: boolean
+        default: false
     outputs:
       library_sha:
         description: "The skathio/hashira commit this run checked its composite actions out at: the commit this workflow file was called at."
@@ -229,14 +234,14 @@ jobs:
       # The hashira commit every job checks out into .hashira/.
       library_sha: ${{ steps.library.outputs.sha }}
     steps:
-      # actions/checkout v4.2.2 — consumer's tree.
+      # actions/checkout v7.0.1 — consumer's tree.
       # persist-credentials:false per iter-4.2 review Minor #2 (defense-in-depth:
       # build_command / test_command run in these jobs and the default git
       # credential could be exfiltrated if the trust contract is violated).
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      # actions/setup-node v4.1.0
+      # actions/setup-node v7.1.0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: ${{ inputs.node_version }}
@@ -284,7 +289,7 @@ jobs:
           fi
           echo "sha=${WORKFLOW_SHA}" >> "${GITHUB_OUTPUT}"
       - name: Checkout hashira library at its own commit
-        # actions/checkout v4.2.2
+        # actions/checkout v7.0.1
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: skathio/hashira
@@ -317,28 +322,25 @@ jobs:
     # build_command runs in the consumer's tree, then pages-upload packages
     # the result. Both steps must execute on the same runner (see "Build
     # artifact handoff" in the workflow header for the rationale).
+    # No id-token or pages: this job runs the caller's build_command, and
+    # upload-pages-artifact needs neither grant (see the pages-upload header).
     permissions:
-      contents: read
-      # id-token + pages required by upload-pages-artifact (see
-      # `.github/actions/pages-upload/action.yml` header `## Required
-      # caller permissions` block).
-      id-token: write
-      pages: write
+      contents: read # checkout of the caller's tree
     steps:
-      # actions/checkout v4.2.2 — consumer's tree.
+      # actions/checkout v7.0.1 — consumer's tree.
       # persist-credentials:false per iter-4.2 review Minor #2 (defense-in-depth:
       # build_command / test_command run in these jobs and the default git
       # credential could be exfiltrated if the trust contract is violated).
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      # actions/setup-node v4.1.0
+      # actions/setup-node v7.1.0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: ${{ inputs.node_version }}
       # Library self-checkout at this workflow's own commit (see header).
       - name: Checkout hashira library at its own commit
-        # actions/checkout v4.2.2
+        # actions/checkout v7.0.1
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: skathio/hashira
@@ -382,6 +384,33 @@ jobs:
           # pattern established in iter 1.2.
           echo "static-webapp-ci/build-and-upload: running build_command"
           eval "${BUILD_COMMAND}"
+      # site-kit needs the folder pages-upload will package. With output_dir
+      # empty, pick it in pages-upload's own autodetect order, so the kit lands
+      # in the folder that is uploaded.
+      - name: Resolve the site folder for site-kit
+        id: kit_dest
+        if: ${{ inputs.site_kit }}
+        shell: bash
+        env:
+          OUTPUT_DIR: ${{ inputs.output_dir }}
+        run: |
+          set -euo pipefail
+          dest="${OUTPUT_DIR}"
+          if [ -z "${dest}" ]; then
+            for candidate in dist build out public; do
+              if [ -d "${candidate}" ]; then dest="${candidate}"; break; fi
+            done
+          fi
+          if [ -z "${dest}" ]; then
+            echo "::error::static-webapp-ci: site_kit found no site folder after build_command (searched dist, build, out, public). Set output_dir." >&2
+            exit 1
+          fi
+          echo "dest=${dest}" >> "${GITHUB_OUTPUT}"
+      - name: Add the site kit
+        if: ${{ inputs.site_kit }}
+        uses: ./.hashira/.github/actions/site-kit
+        with:
+          dest: ${{ steps.kit_dest.outputs.dest }}
       - name: Upload Pages artifact
         uses: ./.hashira/.github/actions/pages-upload
         with:
@@ -401,20 +430,20 @@ jobs:
       # instead of showing 0.0% as if it were a measurement.
       coverage_files: ${{ steps.coverage.outputs.files }}
     steps:
-      # actions/checkout v4.2.2 — consumer's tree.
+      # actions/checkout v7.0.1 — consumer's tree.
       # persist-credentials:false per iter-4.2 review Minor #2 (defense-in-depth:
       # build_command / test_command run in these jobs and the default git
       # credential could be exfiltrated if the trust contract is violated).
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      # actions/setup-node v4.1.0
+      # actions/setup-node v7.1.0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: ${{ inputs.node_version }}
       # Library self-checkout at this workflow's own commit (see header).
       - name: Checkout hashira library at its own commit
-        # actions/checkout v4.2.2
+        # actions/checkout v7.0.1
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: skathio/hashira
@@ -469,20 +498,20 @@ jobs:
       # scanner was skipped or failed.
       scan_summary: ${{ steps.scan.outputs.summary }}
     steps:
-      # actions/checkout v4.2.2 — consumer's tree.
+      # actions/checkout v7.0.1 — consumer's tree.
       # persist-credentials:false per iter-4.2 review Minor #2 (defense-in-depth:
       # build_command / test_command run in these jobs and the default git
       # credential could be exfiltrated if the trust contract is violated).
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      # actions/setup-node v4.1.0 — visibility-detect shim runs via `node`.
+      # actions/setup-node v7.1.0 — visibility-detect shim runs via `node`.
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: ${{ inputs.node_version }}
       # Library self-checkout at this workflow's own commit (see header).
       - name: Checkout hashira library at its own commit
-        # actions/checkout v4.2.2
+        # actions/checkout v7.0.1
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: skathio/hashira
@@ -519,19 +548,19 @@ jobs:
       result: ${{ steps.gate.outputs.result }}
       violations: ${{ steps.gate.outputs.violations }}
     steps:
-      # actions/checkout v4.2.2 — consumer's tree. Full history so the pull
+      # actions/checkout v7.0.1 — consumer's tree. Full history so the pull
       # request's base commit is present without a credentialed fetch.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
           persist-credentials: false
-      # actions/setup-node v4.1.0 — the gate installs and runs SoMi with npm/node.
+      # actions/setup-node v7.1.0 — the gate installs and runs SoMi with npm/node.
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: ${{ inputs.node_version }}
       # Library self-checkout at this workflow's own commit (see header).
       - name: Checkout hashira library at its own commit
-        # actions/checkout v4.2.2
+        # actions/checkout v7.0.1
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: skathio/hashira
@@ -588,7 +617,7 @@ jobs:
           fi
           echo "sha=${WORKFLOW_SHA}" >> "${GITHUB_OUTPUT}"
       - name: Checkout hashira library at its own commit
-        # actions/checkout v4.2.2
+        # actions/checkout v7.0.1
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: skathio/hashira

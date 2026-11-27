@@ -371,13 +371,25 @@ const pick = (entry) => (entry ? { label: entry.label, href: entry.href } : null
 
 // ==================================================================== requirement 22
 
+// The one setting change v3 allows, by the maintainer's v3.4.0 decision: actionlint runs by
+// default in the three CI workflows. Each entry names the exact old and new value, so any
+// other change to these inputs still fails.
+const DECIDED_CHANGES = Object.fromEntries(
+  ['npm-package-ci.yml', 'nuget-package-ci.yml', 'static-webapp-ci.yml'].map((w) => [
+    `.github/workflows/${w} workflow_call.inputs scan_disable default`,
+    { from: 'codeql,actionlint', to: 'codeql' },
+  ]),
+);
+
 // Each input and secret `where` held at the baseline is still there, with the same settings.
 function assertKept(rel, where, before, after) {
   for (const [name, old] of Object.entries(before ?? {})) {
     const cur = after?.[name];
     assert.ok(cur, `${rel}: ${where} '${name}' was removed`);
     for (const key of ['type', 'default', 'required']) {
-      assert.equal(norm(cur[key]), norm(old?.[key]), `${rel}: ${where} '${name}' changed its ${key}`);
+      const decided = DECIDED_CHANGES[`${rel} ${where} ${name} ${key}`];
+      const expected = decided && norm(old?.[key]) === norm(decided.from) ? decided.to : old?.[key];
+      assert.equal(norm(cur[key]), norm(expected), `${rel}: ${where} '${name}' changed its ${key}`);
     }
   }
 }

@@ -7,7 +7,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { escapeBraces, escapeHtml } = require('./links');
+const { escapeBraces, escapeHtml, missingAnchors } = require('./links');
 const { checkRenderedHtml } = require('./html-safety');
 
 // VitePress compiles each page as a Vue template: see escapeBraces.
@@ -68,6 +68,26 @@ function pageAsText(md, srcDir) {
     if (problems.length > 0) {
       const page = env.path ? path.relative(srcDir, env.realPath ?? env.path).split('\\').join('/') : 'a page';
       fail(`docs-build: ${page}: ${problems.slice(0, 3).join('; ')}`);
+    }
+    return html;
+  };
+}
+
+// An in-page #anchor that matches no heading id on its page is most often a heading renamed,
+// or an id from another renderer's slug rule: it warns, naming the page and the anchor, and
+// the build goes on. VitePress renders a page more than once (the page, its search entry), so
+// each warning is written once.
+function anchorWarnings(md, srcDir) {
+  const render = md.render.bind(md);
+  const warned = new Set();
+  md.render = (src, env = {}) => {
+    const html = render(src, env);
+    if (!env.path) return html;
+    const page = path.relative(srcDir, env.realPath ?? env.path).split('\\').join('/');
+    for (const anchor of missingAnchors(html)) {
+      const line = `::warning::docs-build: ${page}: the link #${anchor} matches no heading id on the page (ids follow GitHub's slug rule)`.replace(/\r?\n/g, ' ');
+      if (!warned.has(line)) console.warn(line);
+      warned.add(line);
     }
     return html;
   };
@@ -164,6 +184,7 @@ function configureMarkdown(md, { srcDir, rewrite }) {
   noSnippets(md);
   fenceInfoAsText(md);
   pageAsText(md, srcDir);
+  anchorWarnings(md, srcDir);
   alertTitleAsText(md);
   imagesInDocs(md, srcDir);
   textAsText(md);

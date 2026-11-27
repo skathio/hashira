@@ -28,7 +28,7 @@ CI for an npm package: commitlint, tests with coverage, the scan suite, SoMi's q
 | `node_version` | no | `20` |
 | `test_command` | no | `npm test` |
 | `coverage_path` | no | `''` |
-| `scan_disable` | no | `codeql,actionlint` |
+| `scan_disable` | no | `codeql` |
 | `scan_fail_on_findings` | no | `true` |
 | `summary_comment` | no | `true` |
 | `bump` | no | `''` |
@@ -59,7 +59,7 @@ CI for a NuGet package: restore and build, tests with coverage, the scan suite, 
 | `project_path` | no | `''` |
 | `test_filter` | no | `''` |
 | `coverage_path` | no | `''` |
-| `scan_disable` | no | `codeql,actionlint` |
+| `scan_disable` | no | `codeql` |
 | `scan_fail_on_findings` | no | `true` |
 | `summary_comment` | no | `true` |
 | `bump` | no | `''` |
@@ -82,7 +82,7 @@ jobs:
 
 CI for a static site on GitHub Pages: build, tests with coverage, the scan suite, SoMi's quality gate on pull requests, and the `github-pages` artifact `pages-deploy` deploys.
 
-**Use it directly**: As the `ci` job of a static site repo's caller, `templates/static-webapp/ci.yml`. Walk-through: [`flows/static-webapp.md`](flows/static-webapp.md).
+**Use it directly**: As the `ci` job of a static site repo's caller, `templates/static-webapp/ci.yml`. The `ci` job grants `contents: read`, `pull-requests: write` and `security-events: write`, and no `id-token` or `pages`: only the `deploy` job holds those. Walk-through: [`flows/static-webapp.md`](flows/static-webapp.md).
 
 | Input | Required | Default |
 |-------|----------|---------|
@@ -91,11 +91,12 @@ CI for a static site on GitHub Pages: build, tests with coverage, the scan suite
 | `output_dir` | no | `''` |
 | `test_command` | no | `npm test` |
 | `coverage_path` | no | `''` |
-| `scan_disable` | no | `codeql,actionlint` |
+| `scan_disable` | no | `codeql` |
 | `scan_fail_on_findings` | no | `true` |
 | `summary_comment` | no | `true` |
 | `quality_gate` | no | `true` |
 | `quality_level` | no | `strict` |
+| `site_kit` | no | `false` |
 
 | Output | Meaning |
 |--------|---------|
@@ -109,9 +110,9 @@ jobs:
 
 ### pages-site.yml
 
-Builds and deploys a project's GitHub Pages site: the static site (`site_dir` copied as-is, or built by `site_build_command` into `site_output`), the shared site kit in `_kit/` (`site-kit`) and, unless `docs` is false, the docs from `docs/` and `.github/pages.json` in `docs/` (`docs-build`), uploaded with `pages-upload` and deployed with `pages-deploy`. Jobs `check` -> `gate` -> `build` -> `deploy`: `check` refuses any ref but `main` before the approval, `gate` waits for the `production` environment's approval (skipped when `released` is true), `build` refuses any ref but `main` again and holds only `contents: read`, and `deploy` holds only `pages: write` and `id-token: write` in `github-pages`, one deploy at a time. A released run deploys only while its commit holds the highest `vX.Y.Z` tag. `build` fails when `<site_output>/docs` or `<site_output>/_kit` already exists after the site build.
+Builds and deploys a project's GitHub Pages site: the static site (`site_dir` copied as-is, or built by `site_build_command` into `site_output`, after `install_command` and before `test_command`), the shared site kit in `_kit/` (`site-kit`) and, unless `docs` is false, the docs from `docs/` and `.github/pages.json` in `docs/` (`docs-build`), uploaded with `pages-upload` and deployed with `pages-deploy`. Jobs `check` -> `source` -> `scan` -> `gate` -> `build` -> `deploy`: `check` checks the inputs and refuses any ref but `main` before the approval (unless `deploy` is false), `source` picks the commit (`source: main` or `latest-release`) and writes `deploying <ref>@<sha>, N commits after <tag>` to the summary, `scan` runs scan-suite's OSV and gitleaks on that commit with read grants only and fails closed by default, `gate` waits for the `production` environment's approval (skipped when `released` is true, which `check` accepts only when this run already holds an approved `production` review, for `deploy: false`, and for `approval: merge` on a push, schedule or repository_dispatch run of `main`), `build` refuses any ref but `main` again, holds only `contents: read` and checks that the site's `_kit/` references name kit files, and `deploy` holds only `pages: write` and `id-token: write` in `github-pages`, one deploy at a time. With `prebuilt`, `build` is skipped and `deploy` deploys the `artifact_name` artifact an earlier job of the run uploaded. A released run deploys only while its commit holds the highest `vX.Y.Z` tag. `build` fails when `<site_output>/docs` or `<site_output>/_kit` already exists after the site build.
 
-**Use it directly**: As the job that publishes a project page, called by hand (`workflow_dispatch`) or from a release workflow after its tags with `released: true`. The caller grants `contents: read`, `pages: write` and `id-token: write`. `site_build_command` and `docs_pre_build_command` are trusted input: they run as shell, so never pass them values from PR titles, issue bodies, branch names or other outside context.
+**Use it directly**: As the job that publishes a project page, called by hand (`workflow_dispatch`), on merge (`approval: merge`) or from a release workflow after its tags with `released: true`, and with `deploy: false` in pull request CI. The caller grants `contents: read`, `pages: write` and `id-token: write` (with `deploy: false` too: GitHub checks the grants of every job of a called workflow before the run starts, and `build` still holds `contents: read` only). `install_command`, `site_build_command`, `test_command` and `docs_pre_build_command` are trusted input: they run as shell, so never pass them values from PR titles, issue bodies, branch names or other outside context. The optional secret `build_token` reaches the `site_build_command` step only, as `BUILD_TOKEN`.
 
 | Input | Required | Default |
 |-------|----------|---------|
@@ -123,6 +124,20 @@ Builds and deploys a project's GitHub Pages site: the static site (`site_dir` co
 | `docs_pre_build_command` | no | `''` |
 | `node_version` | no | `24` |
 | `dotnet_version` | no | `''` |
+| `install_command` | no | `''` |
+| `test_command` | no | `''` |
+| `coverage_path` | no | `''` |
+| `deploy` | no | `true` |
+| `prebuilt` | no | `false` |
+| `artifact_name` | no | `github-pages` |
+| `approval` | no | `environment` |
+| `source` | no | `main` |
+| `scan_disable` | no | `codeql,dependency-review,actionlint` |
+| `scan_fail_on_findings` | no | `true` |
+
+| Secret | Required | Meaning |
+|--------|----------|---------|
+| `build_token` | no | Exposed as `BUILD_TOKEN` to the `site_build_command` step only. |
 
 An empty `site_output` means `site_dir`.
 
@@ -217,7 +232,7 @@ Deploys the same run's `github-pages` artifact to GitHub Pages and writes the pa
 
 Packages a static site directory as the `github-pages` artifact, autodetecting `dist/`, `build/`, `out/` or `public/` when no path is given.
 
-**Use it directly**: When you build the site in your own job instead of `static-webapp-ci.yml`, then deploy it with `pages-deploy`.
+**Use it directly**: When you build the site in your own job instead of `static-webapp-ci.yml`, then deploy it with `pages-deploy`. That job needs only `contents: read`: the upload uses the runner's own token, so keep `id-token` and `pages` on the deploy job.
 
 | Input | Required | Default |
 |-------|----------|---------|
@@ -236,7 +251,7 @@ Packages a static site directory as the `github-pages` artifact, autodetecting `
 
 ### site-kit
 
-Copies the shared site kit into `<dest>/_kit/`: `tokens.css` (the landing pages' colour, type and spacing variables in light and dark, with `--accent` and `--accent-soft` taken from `--site-accent`), `theme.js` (the `theme` localStorage key: `light`, `dark` or `auto`, anything else is `auto`) and `site-nav.js` (the `<site-nav>` custom element: brand, `nav` links, Docs, an extras slot, `home_link`, theme toggle). The kit comes from the action's own folder, so it is the kit at the commit your `uses:` ref resolved to. `dest` must be an existing workspace-relative directory without `..` and without a `_kit` in it.
+Copies the shared site kit into `<dest>/_kit/`: `tokens.css` (the landing pages' colour, type and spacing variables in light and dark, with `--accent` and `--accent-soft` taken from `--site-accent`, and from `--site-accent-dark` in dark mode when set), `theme.js` (the `theme` localStorage key: `light`, `dark` or `auto`, anything else is `auto`; each press goes auto, the opposite of the system theme, the system theme, auto; `data-theme-resolved` on `<html>` names the theme shown) and `site-nav.js` (the `<site-nav>` custom element: brand, `nav` links, Docs, an extras slot, `home_link`, theme toggle). The kit comes from the action's own folder, so it is the kit at the commit your `uses:` ref resolved to. `dest` must be an existing workspace-relative directory without `..` and without a `_kit` in it.
 
 **Use it directly**: After your own site build, before `pages-upload`, so the page can load `_kit/tokens.css`, `_kit/theme.js` (in `<head>`) and `_kit/site-nav.js`.
 
@@ -256,7 +271,7 @@ Copies the shared site kit into `<dest>/_kit/`: `tokens.css` (the landing pages'
 
 ### docs-build
 
-Builds a VitePress docs site from the repo's `docs/**/*.md`, described by `.github/pages.json` (name, base, home page, sidebar, unpublished pages, header links, accent, logo, `theme_css`). VitePress 1.6.4 and its lockfile live in the action and are installed with `npm ci --ignore-scripts` into `RUNNER_TEMP`, so the repo keeps no docs packages, and the build reads a staged copy of `docs/`, never `docs/` itself. Heading ids follow GitHub's slug rule, a `.md` link opens the published page, a link to an unpublished page or to a folder with no index opens it on GitHub, raw HTML and `${{ }}` render as text, and local search is on. The sidebar lists `sidebar` in order, then every other page by path under its first H1. A missing or unpublished `sidebar` file, a `docs/index.md` beside the home page, or an `output_dir` that already exists fails the build. Needs Node 20 or later.
+Builds a VitePress docs site from the repo's `docs/**/*.md`, described by `.github/pages.json` (name, base, home page, sidebar, unpublished pages, header links, `accent` and `accent_dark`, logo, `theme_css`). VitePress 1.6.4 and its lockfile live in the action and are installed with `npm ci --ignore-scripts` into `RUNNER_TEMP`, so the repo keeps no docs packages, and the build reads a staged copy of `docs/`, never `docs/` itself. Heading ids follow GitHub's slug rule, a `.md` link opens the published page, a link to an unpublished page or to a folder with no index opens it on GitHub, raw HTML and `${{ }}` render as text, and local search is on. The header's theme control has the same three states as the landing's, on the same `theme` key, and an accent below 4.5:1 against its mode's canvas prints a `::warning`. The sidebar lists `sidebar` in order (pages, groups nested up to 3 deep, and folder sections that list a folder's pages by H1, or a sidebar `pre_build_command` writes to `$DOCS_STAGE/.sidebar.json`), then every other page by path under its first H1. With more than 2 `nav` entries the header puts them in one dropdown labelled with `name`, before Docs and `home_link`, and Docs is marked active on every docs page. A link to a repo folder outside `docs/` opens it as `tree/HEAD`. A missing or unpublished `sidebar` file, a `docs/index.md` beside the home page, or an `output_dir` that already exists fails the build. Needs Node 20 or later.
 
 **Use it directly**: When your site is built in your own job: run it after the site build and before `pages-upload`, with `output_dir` set to the `docs/` folder of the site you upload. `pre_build_command` is trusted input: it runs as shell, so never pass it values from PR titles, issue bodies, branch names or other outside context.
 

@@ -30,7 +30,24 @@
   --gutter: 40px;
   --nav-gap: 28px;
   --nav-pad: 12px 18px;
+  --nav-h: 3.7rem;
   color-scheme: light;
+}
+
+/* <site-nav> before site-nav.js defines it: the same box as the defined bar (height, padding,
+   bottom line and sticky position), so the page does not jump when the header renders. Only
+   its slot="fallback" children are meant to show here; once defined they are never slotted. */
+site-nav:not(:defined) {
+  display: block;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  box-sizing: border-box;
+  min-height: var(--nav-h);
+  padding: var(--nav-pad);
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--canvas) 85%, transparent);
+  font: .93rem/1.6 var(--sans);
 }
 
 @media (max-width: 760px) {

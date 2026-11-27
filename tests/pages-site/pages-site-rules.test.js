@@ -6,7 +6,9 @@
 // recorded, and hashira's own actions stand in as follows: site-kit runs its real action.yml
 // step, docs-build creates its output_dir and refuses one that exists (requirement 12),
 // pages-upload and pages-deploy only record what they were given. The latest-release check
-// reads tags from a local git repo standing in for github.com.
+// reads tags from a local git repo standing in for github.com. check's released-approval step
+// fetches hashira from a local bare repo standing in for github.com/skathio/hashira, and its
+// node helper reads this run's approvals through a fetch stub preloaded with NODE_OPTIONS.
 //
 // Run with:
 //   node --test tests/pages-site/pages-site-rules.test.js
@@ -200,6 +202,27 @@ function remoteRepo(base, tags) {
   return { head, other };
 }
 
+// The approvals a run's released check reads: one approved `production` review by default.
+const APPROVED = [{ state: 'approved', environments: [{ name: 'production' }], user: { login: 'owner' } }];
+
+// Preloaded into each node step, so the approval helper's GET of the run's approvals answers
+// with the world's approvals instead of reaching api.github.com.
+let fetchStub;
+function approvalsStub() {
+  if (!fetchStub) {
+    fetchStub = path.join(tempDir('pages-site-fetch-'), 'fetch-stub.cjs');
+    fs.writeFileSync(fetchStub, [
+      "'use strict';",
+      'globalThis.fetch = async (url) => {',
+      '  const ok = /\\/repos\\/octo\\/site\\/actions\\/runs\\/4242\\/approvals$/.test(String(url));',
+      '  return { ok, status: ok ? 200 : 404, json: async () => JSON.parse(process.env.TEST_APPROVALS) };',
+      '};',
+      '',
+    ].join('\n'));
+  }
+  return fetchStub;
+}
+
 // ---------- running a job's steps ----------
 
 const LOCAL_ACTION = /\.github\/actions\/(site-kit|docs-build|pages-upload|pages-deploy)(?:@|$)/;
@@ -308,7 +331,7 @@ function newRun(name, world, results) {
     ctx: { data, status: { success: true, failure: false } },
   };
   const env = Object.entries({ ...(spec().env ?? {}), ...(j.env ?? {}) });
-  run.env = Object.fromEntries(env.map(([k, v]) => [k, interpolate(v, run.ctx)]));
+  run.env = { ...world.env, ...Object.fromEntries(env.map(([k, v]) => [k, interpolate(v, run.ctx)])) };
   return run;
 }
 
@@ -337,7 +360,7 @@ function writeFiles(root, files) {
 
 const DEFAULT_FILES = { 'site/index.html': '<h1>site</h1>', 'site/css/site.css': 'body{}' };
 
-function makeWorld({ ref, files, tags }) {
+function makeWorld({ ref, files, tags, approvals }) {
   const base = tempDir('pages-site-run-');
   const ws = path.join(base, 'ws');
   const temp = path.join(base, 'tmp');
@@ -345,16 +368,19 @@ function makeWorld({ ref, files, tags }) {
   writeFiles(ws, files);
   fs.cpSync(library().dir, path.join(ws, '.hashira'), { recursive: true });
   const remote = remoteRepo(path.join(base, 'remote'), tags);
+  git(base, 'clone', '-q', '--bare', library().dir, path.join(base, 'remote', 'skathio', 'hashira.git'));
+  const env = { NODE_OPTIONS: `--require ${approvalsStub()}`, TEST_APPROVALS: JSON.stringify(approvals) };
   const github = {
+    run_id: '4242', token: 'job-token',
     ref, sha: remote.head, workspace: ws, repository: 'octo/site', repository_owner: 'octo',
     server_url: path.join(base, 'remote'), event_name: 'workflow_dispatch', workflow_sha: remote.head, ref_name: ref.replace(/^refs\/heads\//, ''),
   };
-  return { ws, temp, remote, librarySha: library().sha, data: { github } };
+  return { ws, temp, remote, env, librarySha: library().sha, data: { github } };
 }
 
 // Runs the whole workflow, every job as if approved, in the needs order.
-function runWorkflow({ inputs = {}, ref = MAIN, files = DEFAULT_FILES, tags = [] } = {}) {
-  const world = makeWorld({ ref, files, tags });
+function runWorkflow({ inputs = {}, ref = MAIN, files = DEFAULT_FILES, tags = [], approvals = APPROVED } = {}) {
+  const world = makeWorld({ ref, files, tags, approvals });
   world.data.inputs = inputsWithDefaults(inputs);
   const results = {};
   for (const name of jobOrder()) {
@@ -606,7 +632,9 @@ test('on main, the gate path passes', () => {
 for (const released of [false, true]) {
   test(`build refuses a ref other than main before the site build (released: ${released})`, () => {
     const { results, world } = runWorkflow({ ref: OTHER_REF, inputs: { released, site_build_command: 'touch built-marker && mkdir -p site' } });
-    const build = released ? results.build : runJob('build', world, results);
+    // check refuses first, so build is skipped; run it anyway to see its own ref check refuse.
+    assert.notEqual(results.build.result, 'success');
+    const build = runJob('build', world, results);
     assert.equal(build.result, 'failure');
     assert.ok(!fs.existsSync(path.join(world.ws, 'built-marker')), 'site_build_command ran on a non-main ref');
     for (const action of ['site-kit', 'docs-build', 'pages-upload']) assert.deepEqual(usesOf(build, action), []);
@@ -761,6 +789,40 @@ test('a run that is not released deploys without the release check', () => {
   const { results } = runWorkflow({ inputs: { released: false }, tags: [['v9.9.9', 'other', true]] });
   assert.equal(results.deploy.result, 'success', results.deploy.log);
   assert.equal(usesOf(results.deploy, 'pages-deploy').length, 1);
+});
+
+// ==================== check's released approval ====================
+
+const HEAD_TAG = [['v1.0.0', 'head', true]];
+const approvalStep = (run) => run.steps.find((s) => s.kind === 'run' && /released-approval/.test(s.script));
+
+for (const [label, approvals] of [
+  ['no approval at all', []],
+  ['only a rejected production review', [{ state: 'rejected', environments: [{ name: 'production' }] }]],
+  ['an approval for another environment', [{ state: 'approved', environments: [{ name: 'staging' }] }]],
+  ['an answer that is not a list', { message: 'Not Found' }],
+]) {
+  test(`released: true with ${label} fails at check, and nothing builds or deploys`, () => {
+    const { results } = runWorkflow({ inputs: { released: true }, tags: HEAD_TAG, approvals });
+    assert.equal(results.check.result, 'failure');
+    assert.match(results.check.log, /::error::pages-site: released refused/);
+    assert.equal(results.build.result, 'skipped');
+    assert.equal(results.deploy.result, 'skipped');
+  });
+}
+
+test('released: true with this run\'s production approval passes check and deploys', () => {
+  const { results } = runWorkflow({ inputs: { released: true }, tags: HEAD_TAG });
+  assert.equal(results.check.result, 'success', results.check.log);
+  assert.ok(approvalStep(results.check), 'check did not run the approval helper');
+  assert.equal(results.deploy.result, 'success', results.deploy.log);
+});
+
+test('released: false never reads the approvals, and waits at gate instead', () => {
+  const { results } = runWorkflow({ inputs: { released: false }, approvals: [] });
+  assert.equal(results.check.result, 'success', results.check.log);
+  assert.equal(approvalStep(results.check), undefined);
+  assert.equal(results.gate.result, 'success');
 });
 
 // ==================== review finding: a link into an unpublished folder ====================

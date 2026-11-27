@@ -2,7 +2,6 @@
 <link rel="icon" href="mark.svg" type="image/svg+xml">
 <link rel="stylesheet" href="_kit/tokens.css"><script src="_kit/theme.js"></script><script src="_kit/site-nav.js" defer></script><style>
 /* Colours, type and spacing come from _kit/tokens.css (site-kit), in light and dark. */
-site-nav:not(:defined){display:block;min-height:50px}
 *{box-sizing:border-box}body{margin:0;background:var(--canvas);color:var(--ink);font:16px/1.6 var(--sans)}a{color:inherit;text-decoration:none}
 .wrap{max-width:var(--wrap);margin:0 auto;padding:0 var(--gutter)}
 .hero{display:grid;grid-template-columns:1fr 250px;gap:40px;align-items:center;padding:88px 0 60px}
@@ -25,7 +24,7 @@ footer{border-top:1px solid var(--line);padding:32px 0 48px;color:var(--muted);f
 .flow{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:20px;display:flex;flex-direction:column;gap:8px}
 .flow h3{margin:0;font-size:1.15rem}.flow p{margin:0;color:var(--muted);font-size:.93rem;flex:1}.flow code{font:600 .8rem var(--mono);color:var(--accent)}
 .users{display:flex;flex-wrap:wrap;gap:12px}.users a{display:flex;gap:10px;align-items:center;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:10px 14px;font-weight:600}.users img{width:28px;height:28px;border-radius:7px}</style></head><body>
-<site-nav name="hashira" logo="mark.svg" root="./" docs="docs/"><script type="application/json">{"nav":[{"label":"Flows","href":"#flows"},{"label":"Use it","href":"#use"},{"label":"Security","href":"#security"}],"home_link":{"label":"← skathio","href":"https://skathio.github.io/"}}</script></site-nav>
+<site-nav role="navigation" aria-label="Site" name="hashira" logo="mark.svg" root="./" docs="docs/"><script type="application/json">{"nav":[{"label":"Flows","href":"#flows"},{"label":"Use it","href":"#use"},{"label":"Security","href":"#security"}],"home_link":{"label":"← skathio","href":"https://skathio.github.io/"}}</script></site-nav>
 <div class=wrap>
 <header class=hero><div>
 <div class=eyebrow>CI/CD library · MIT</div>

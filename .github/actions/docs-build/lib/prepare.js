@@ -12,8 +12,9 @@ const os = require('node:os');
 const path = require('node:path');
 
 const { loadPagesConfig } = require('./pages-config');
-const { accentCss } = require('./accent');
-const { checkStagedFiles, isUnpublished, refuseFrontMatterCode } = require('./site-config');
+const { accentCss, contrastWarnings } = require('./accent');
+const { checkStagedFiles, isUnpublished, refuseFrontMatterCode, refuseUnsafeSvgs } = require('./site-config');
+const { siteOrigin } = require('./page-meta');
 
 const ACTION_DIR = path.resolve(__dirname, '..');
 const INDEX = 'index.md';
@@ -25,9 +26,12 @@ const fail = (msg) => {
 const inside = (real, realRoot) => real === realRoot || real.startsWith(realRoot + path.sep);
 
 // output_dir must be a new folder inside the repo: relative, no '..', not there yet, and with
-// no symlinked parent that would carry the write outside the repo.
+// no symlinked parent that would carry the write outside the repo. It is written to
+// GITHUB_OUTPUT and the step summary as one line, so a control character (a newline above all)
+// would add lines of its own there.
 function checkOutputDir(root, out) {
   if (!out) fail('output_dir is required.');
+  if (/[\x00-\x1f\x7f]/.test(out)) fail(`output_dir must not hold a control character (got: ${JSON.stringify(out)}).`);
   if (path.isAbsolute(out) || out.startsWith('/')) fail(`output_dir must be repo-relative, without a leading '/' (got: '${out}').`);
   if (out.split(/[\\/]/).includes('..')) fail(`output_dir must not contain '..' segments (got: '${out}').`);
   const full = path.join(root, out);
@@ -120,12 +124,13 @@ const THEME_CSS = 'site-theme.css';
 
 // The shared theme imports accent.css, so the site's accent comes after the shared colours.
 function writeTheme(root, config, vitepress, stage) {
-  fs.writeFileSync(path.join(vitepress, '.vitepress', 'theme', 'accent.css'), accentCss(config.accent));
+  fs.writeFileSync(path.join(vitepress, '.vitepress', 'theme', 'accent.css'), accentCss(config.accent, config.accent_dark));
   return config.theme_css ? publish(root, stage, { from: config.theme_css, name: THEME_CSS, what: 'theme_css' }) : null;
 }
 
-function prepare(root, out) {
-  checkOutputDir(root, out);
+// Every check that needs only the repo, with nothing written: pages.json, and the files under
+// docs/ that would be published. `cli.js --check` runs this alone.
+function inspect(root) {
   const config = loadPagesConfig(root);
   const docs = path.join(root, 'docs');
   if (!fs.existsSync(docs) || !fs.statSync(docs).isDirectory()) fail(`docs/ not found in ${root}.`);
@@ -133,20 +138,28 @@ function prepare(root, out) {
   checkIndex(config, published);
   checkStagedFiles(published, 'docs/');
   refuseFrontMatterCode(docs, published.filter((rel) => rel.endsWith('.md')), 'docs/');
+  refuseUnsafeSvgs(docs, published, 'docs/');
+  return { config, docs, published };
+}
+
+function prepare(root, out) {
+  checkOutputDir(root, out);
+  const { config, docs, published } = inspect(root);
   const work = fs.mkdtempSync(path.join(process.env.RUNNER_TEMP || os.tmpdir(), 'docs-build-'));
   copyToolchain(work);
   const vitepress = path.join(work, 'vitepress');
   const stage = path.join(vitepress, 'src');
   const logo = stageDocs(root, config, published, stage);
   const themeCss = writeTheme(root, config, vitepress, stage);
-  const build = { config, logo, themeCss, repo: repoUrl(), docs, stage, dist: path.join(work, 'dist'), cache: path.join(work, 'cache') };
+  const build = { config, logo, themeCss, repo: repoUrl(), origin: siteOrigin(process.env.GITHUB_REPOSITORY), docs, stage, dist: path.join(work, 'dist'), cache: path.join(work, 'cache') };
   fs.writeFileSync(path.join(vitepress, '.vitepress', 'build.json'), `${JSON.stringify(build, null, 2)}\n`);
-  return { work, stage };
+  return { work, stage, warnings: contrastWarnings(config.accent, config.accent_dark) };
 }
 
 function main() {
   try {
-    const { work, stage } = prepare(process.cwd(), process.env.DB_OUTPUT_DIR || '');
+    const { work, stage, warnings } = prepare(process.cwd(), process.env.DB_OUTPUT_DIR || '');
+    for (const w of warnings) process.stdout.write(`::warning::${w}\n`);
     if (process.env.GITHUB_OUTPUT) fs.appendFileSync(process.env.GITHUB_OUTPUT, `work=${work}\nstage=${stage}\n`);
     process.stdout.write(`docs-build: staged the docs in ${stage}\n`);
   } catch (err) {
@@ -158,4 +171,4 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { prepare, checkOutputDir, docsFiles, isUnpublished };
+module.exports = { prepare, inspect, checkOutputDir, docsFiles, isUnpublished };

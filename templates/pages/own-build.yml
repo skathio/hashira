@@ -1,0 +1,52 @@
+# .github/workflows/pages.yml: your own site build with hashira's site kit and a gated Pages
+# deploy, for a site that pages-site.yml does not fit (another build tool, a matrix, steps of
+# your own). docs/flows/pages.md section 2 explains when to use it.
+# Pushes to main deploy after the github-pages environment's approval; manual runs too.
+name: pages
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read # check out the repository; the build runs npm packages, so nothing else
+    steps:
+      # actions/checkout v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      # actions/setup-node v7.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: '24'
+      # Your build, writing the site to dist/. Keep it in a repo script.
+      - run: npm ci && npm run build
+      # The shared tokens.css, theme.js and <site-nav> in dist/_kit/.
+      - uses: skathio/hashira/.github/actions/site-kit@v3
+        with:
+          dest: dist
+      # Optional: the docs from docs/ and .github/pages.json in dist/docs/.
+      - uses: skathio/hashira/.github/actions/docs-build@v3
+        with:
+          output_dir: dist/docs
+      - uses: skathio/hashira/.github/actions/pages-upload@v3
+        with:
+          path: dist
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    # Give github-pages a required reviewer and a main-only branch policy: this is the gate.
+    environment: github-pages
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    permissions:
+      id-token: write # deploy-pages authenticates to Pages with OIDC
+      pages: write # deploy-pages publishes the site
+    steps:
+      - uses: skathio/hashira/.github/actions/pages-deploy@v3

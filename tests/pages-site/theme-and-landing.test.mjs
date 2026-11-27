@@ -1,8 +1,8 @@
 // Rules for the theme the docs share with the landing page, and for the landing page's links into
 // the docs:
 // - one theme choice under the `theme` localStorage key: a stored light or dark opens the other
-//   side in that theme before first paint, anything else means auto, and a choice changed in the
-//   docs is stored under `theme` for the landing page;
+//   side in that theme before first paint, anything else means auto, and a class change in the
+//   docs (a system theme change in auto) is never stored as a choice;
 // - the landing page's Docs links open built docs pages, Releases and Code still go to GitHub, and
 //   the <site-nav> header shows a Docs link at every width, 390px included.
 //
@@ -123,7 +123,7 @@ function loadDocs(rel, storage, prefersDark) {
   for (const s of scripts) { vm.runInContext(s, sandbox); }
   const darkAtFirstPaint = docEl.classes.has('dark');
   for (const fn of listeners) { fn(); }
-  // What VitePress's appearance toggle does on a click: store its own key and flip the class.
+  // What VitePress does when its own key changes: store it and flip the class.
   const toggle = (dark) => {
     localStorage.setItem(VP_KEY, dark ? 'dark' : 'light');
     docEl.classList.toggle('dark', dark);
@@ -184,26 +184,16 @@ describe('a theme stored by the landing page opens the docs in that theme', () =
 
 // ---------------------------------------------------------------- shared theme: docs to landing
 
-describe('a theme chosen in the docs is stored for the landing page', () => {
-  test('toggling the docs to light or dark stores it under the theme key', () => {
-    const page = loadDocs('docs/index.html', { [KEY]: 'dark' }, true);
-    page.toggle(false);
-    assert.equal(page.storage.getItem(KEY), 'light');
-    page.toggle(true);
-    assert.equal(page.storage.getItem(KEY), 'dark');
-  });
-
-  test('a docs choice made from auto is stored too', () => {
-    const page = loadDocs('docs/flows/nuget.html', {}, false);
-    page.toggle(true);
-    assert.equal(page.storage.getItem(KEY), 'dark');
-  });
-
-  test('the landing page opens in the theme chosen in the docs, before first paint', () => {
-    for (const [dark, expected] of [[true, 'dark'], [false, 'light']]) {
-      const page = loadDocs('docs/catalog.html', {}, !dark);
-      page.toggle(dark);
-      assert.equal(loadLanding(page.storage), expected, `after choosing ${expected} in the docs`);
+describe('the docs and the landing page share one stored choice', () => {
+  // The docs' theme control (ThemeSwitch.vue) stores the choice under `theme` itself;
+  // theme-and-accent.test.js presses it in Chrome and opens the landing page after it.
+  test('a class change in the docs, such as a system theme change in auto, stores no choice', () => {
+    for (const rel of ['docs/index.html', 'docs/flows/nuget.html']) {
+      const page = loadDocs(rel, {}, false);
+      page.toggle(true);
+      page.toggle(false);
+      assert.equal(page.storage.getItem(KEY), null, rel);
+      assert.equal(loadLanding(page.storage), null, `${rel}: the landing page left auto`);
     }
   });
 
