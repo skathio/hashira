@@ -174,17 +174,20 @@ function checkRenderedHtml(html) {
 // scripts with the docs' origin. So an SVG may hold no <script> element (any namespace prefix,
 // a comment or CDATA included: the check reads the raw text and fails closed), no on* handler,
 // and no attribute value that names a javascript: URL once entities and whitespace are gone.
-// A DOCTYPE or ENTITY declaration could spell any of that through an entity the check never
-// expands, and <foreignObject>, <iframe>, <embed>, <object> or a srcdoc attribute carry a
+// An ENTITY declaration (or a DOCTYPE with an internal subset) could spell any of that through an entity the check never
+// expands, and <iframe>, <embed>, <object> or a srcdoc attribute carry a
 // document of their own, so those are refused too. A NUL byte means the file is not UTF-8 text
 // the check can read, so it fails too.
 const SVG_SCRIPT = /<\s*(?:[\w.-]+:)?script\b/i;
-const SVG_DECLARATION = /<!\s*(doctype|entity)\b/i;
+// A DOCTYPE with an internal subset ([...]) can declare entities; a plain one, as Illustrator and
+// draw.io write, cannot, and stays allowed.
+const SVG_DECLARATION = /<!\s*(doctype)\b[^>[]*\[|<!\s*(entity)\b/i;
 // An xml-stylesheet processing instruction can point the browser at an XSLT stylesheet (in the
 // file or beside it) that writes any element, a <script> included, so neither is allowed.
 const SVG_STYLESHEET = /<\?\s*xml-stylesheet\b/i;
 const SVG_XSLT = /http:\/\/www\.w3\.org\/1999\/XSL\/Transform/i;
-const SVG_EMBEDS = new Set(['foreignobject', 'iframe', 'embed', 'object']);
+// <foreignObject> stays allowed: what it holds is scanned like the rest (script, handlers, URLs).
+const SVG_EMBEDS = new Set(['iframe', 'embed', 'object']);
 // The tag scan reads the text in the order an XML parser does: a comment, a CDATA section or a
 // processing instruction is one token, so a quote inside one can never open an attribute value
 // that swallows the real tag after it. One left open is not a token, so the scan reads into it.
@@ -195,7 +198,7 @@ function svgTextProblems(text) {
   const problems = [];
   if (SVG_SCRIPT.test(text)) problems.push('it holds a <script> element');
   const declaration = text.match(SVG_DECLARATION);
-  if (declaration) problems.push(`it holds a <!${declaration[1].toUpperCase()}> declaration`);
+  if (declaration) problems.push(`it holds a <!${(declaration[1] || declaration[2]).toUpperCase()}> declaration with entities`);
   if (SVG_STYLESHEET.test(text)) problems.push('it holds an <?xml-stylesheet?> instruction');
   if (SVG_XSLT.test(text)) problems.push('it holds XSLT');
   return problems;

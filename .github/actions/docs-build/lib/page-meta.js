@@ -10,11 +10,12 @@ const { descriptionTag } = require('./html-safety');
 // A GitHub owner name: letters, digits and single hyphens, at most 39 characters.
 const OWNER = /^[A-Za-z\d](?:[A-Za-z\d]|-(?=[A-Za-z\d])){0,38}$/;
 
-// The Pages origin of the repo `owner/name`. Pages serves the owner's site in lower case.
+// The Pages origin of the repo `owner/name`. Pages serves the owner's site in lower case. null
+// when the owner can't be read (a local build outside GitHub, a fork on another host): the
+// pages then get no og:url or canonical link rather than a wrong one, and the build goes on.
 function siteOrigin(repository) {
   const owner = String(repository ?? '').split('/')[0];
-  if (!OWNER.test(owner)) throw new Error(`docs-build: cannot tell the GitHub owner from ${JSON.stringify(String(repository ?? ''))}, so the page URLs cannot be built.`);
-  return `https://${owner.toLowerCase()}.github.io`;
+  return OWNER.test(owner) ? `https://${owner.toLowerCase()}.github.io` : null;
 }
 
 // pages.json's description, or `Guides for <name>` when it is left out or empty.
@@ -30,14 +31,14 @@ function pagePath(base, relativePath) {
 // The head tags for one page. VitePress escapes the attributes of head tags, so the title and
 // description reach the HTML as text.
 function pageHead({ origin, base, relativePath, title, description }) {
-  const url = `${origin}${pagePath(base, relativePath)}`;
-  return [
+  const head = [
     descriptionTag(description),
     ['meta', { property: 'og:title', content: String(title ?? '') }],
     ['meta', { property: 'og:description', content: String(description ?? '') }],
-    ['meta', { property: 'og:url', content: url }],
-    ['link', { rel: 'canonical', href: url }],
   ];
+  if (!origin) return head;
+  const url = `${origin}${pagePath(base, relativePath)}`;
+  return [...head, ['meta', { property: 'og:url', content: url }], ['link', { rel: 'canonical', href: url }]];
 }
 
 module.exports = { siteOrigin, siteDescription, pagePath, pageHead };

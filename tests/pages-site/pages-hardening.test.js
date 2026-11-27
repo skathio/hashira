@@ -144,15 +144,21 @@ test('svgProblems refuses an entity that spells a script, and an embedded docume
   assert.ok(svgProblems(entity).some((p) => /DOCTYPE/.test(p)), JSON.stringify(svgProblems(entity)));
   assert.ok(svgProblems('<svg><!ENTITY y "z"></svg>').some((p) => /ENTITY/.test(p)));
   const problems = svgProblems(embedded);
-  assert.ok(problems.some((p) => /foreignObject/.test(p)), JSON.stringify(problems));
   assert.ok(problems.some((p) => /iframe/.test(p)), JSON.stringify(problems));
   assert.ok(problems.some((p) => /srcdoc/.test(p)), JSON.stringify(problems));
 });
 
 test('svgProblems refuses <embed>, <object> and a srcdoc attribute under any namespace prefix', () => {
-  for (const text of ['<svg><embed src="x.svg"/></svg>', '<svg><OBJECT data="x"></OBJECT></svg>', '<svg><h:iframe src="x"/></svg>', '<svg><x:foreignobject/></svg>', '<svg><g x:srcdoc="a"/></svg>']) {
+  for (const text of ['<svg><embed src="x.svg"/></svg>', '<svg><OBJECT data="x"></OBJECT></svg>', '<svg><h:iframe src="x"/></svg>', '<svg><g x:srcdoc="a"/></svg>']) {
     assert.ok(svgProblems(text).length > 0, text);
   }
+});
+
+test('svgProblems passes a plain DOCTYPE and a foreignObject with no script, as editors export them', () => {
+  const exported = '<?xml version="1.0"?><!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd"><svg xmlns="http://www.w3.org/2000/svg"><foreignObject width="80" height="20"><div xmlns="http://www.w3.org/1999/xhtml">label</div></foreignObject></svg>';
+  assert.deepEqual(svgProblems(exported), []);
+  const hidden = '<svg xmlns="http://www.w3.org/2000/svg"><foreignObject><img xmlns="http://www.w3.org/1999/xhtml" src="x" onerror="alert(1)"/></foreignObject></svg>';
+  assert.ok(svgProblems(hidden).some((p) => /handler onerror/.test(p)), JSON.stringify(svgProblems(hidden)));
 });
 
 test('svgProblems still passes a plain SVG with paths and a <title>', () => {

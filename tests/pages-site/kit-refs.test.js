@@ -76,3 +76,10 @@ test('main exits 0 for a good site, 1 for a broken one or a missing folder', () 
     process.stdout.write = out;
   }
 });
+
+// 40,000 unclosed openers: the old pattern rescanned to the end from each one (seconds of work);
+// a bare `<` now ends each attempt. The assertion is that a real tag after them is still read.
+test('kitReferences reads past many unclosed tag openers and still finds a later reference', () => {
+  const html = `${'<a '.repeat(40000)}<script src="_kit/theme.js"></script>`;
+  assert.deepEqual(kitReferences(html), ['_kit/theme.js']);
+});

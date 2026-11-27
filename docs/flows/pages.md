@@ -352,7 +352,9 @@ level and inside a `sidebar` entry (a group's or a folder section's too), a
   also gets `og:title` (its first heading and `name`), `og:url` and a
   canonical link, both the page's GitHub Pages address,
   `https://<owner>.github.io<base><page>`. With a custom domain, GitHub
-  Pages redirects that address to it.
+  Pages redirects that address to it. A build that cannot tell the owner
+  (a local build with no `GITHUB_REPOSITORY` and no github.com `origin`)
+  leaves out `og:url` and the canonical link.
 - **`base`** is where the docs are served. The landing is the folder above
   it: `/<repo>/` for the default `/<repo>/docs/`.
 - **`home_page`** opens at the docs base. It is published as the docs'
@@ -530,10 +532,13 @@ build, before it starts and again after `pre_build_command`. `docs/public/`
 is for files served as they are, so a `.md` there fails too.
 An SVG under `docs/`, `docs/public/` included, or written there by
 `pre_build_command` fails the build, naming the file, when it holds a
-`<script>` element, an `on*` event handler, a `javascript:` URL, a
-`<!DOCTYPE>` or `<!ENTITY>` declaration, a `<foreignObject>`, `<iframe>`,
-`<embed>` or `<object>` element, or a `srcdoc` attribute: a browser that
-opens the file on its own would run it with the docs' origin. Images
+`<script>` element, an `on*` event handler, a `javascript:` URL, an
+`<!ENTITY>` declaration (or a `<!DOCTYPE>` with an internal subset), an
+`<?xml-stylesheet?>` instruction or XSLT, an `<iframe>`, `<embed>` or
+`<object>` element, or a `srcdoc` attribute: a browser that opens the
+file on its own would run it with the docs' origin. A plain `<!DOCTYPE>`
+and a `<foreignObject>`, as editors export them, are allowed, and what a
+`<foreignObject>` holds is checked like the rest of the file. Images
 may be PNG, JPEG, GIF, WebP, AVIF, SVG, ICO or BMP, inlined or as files.
 Local search is on, and VitePress's dead-link check fails the build on a
 link to a page that does not exist. The docs and the landing share one

@@ -27,10 +27,13 @@ their [GitHub Releases](https://github.com/skathio/hashira/releases).
   calls `pages-site.yml` with `released: true` must pass the `production`
   approval earlier in the same run, as hashira's own release workflow does.
 - `docs-build`: an SVG under `docs/`, `docs/public/` included, that holds a
-  `<script>`, an `on*` handler, a `javascript:` URL, a `<!DOCTYPE>` or
-  `<!ENTITY>` declaration, a `<foreignObject>`, `<iframe>`, `<embed>` or
+  `<script>`, an `on*` handler, a `javascript:` URL, an `<!ENTITY>`
+  declaration (or a `<!DOCTYPE>` with an internal subset), an
+  `<?xml-stylesheet?>` instruction or XSLT, an `<iframe>`, `<embed>` or
   `<object>` element, or a `srcdoc` attribute fails the build: a browser
-  that opens the file on its own would run it with the docs' origin.
+  that opens the file on its own would run it with the docs' origin. A
+  plain `<!DOCTYPE>` and a `<foreignObject>`, as editors export them, stay
+  allowed; what a `<foreignObject>` holds is checked like the rest.
 - `docs-build`: an `output_dir` that holds a control character is refused,
   so it cannot add lines to the step's outputs or summary.
 

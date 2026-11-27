@@ -14,7 +14,8 @@ const path = require('node:path');
 
 // A tag and its attribute text, quoted values respected (the way docs-build's html-safety.js
 // reads SVG tags), so escaped text such as `&lt;script src="_kit/x.js"&gt;` is never read.
-const TAG = /<([a-zA-Z][\w:.-]*)((?:[^>"']|"[^"]*"|'[^']*')*)>/g;
+// A bare `<` ends the attempt, so a run of unclosed `<x ` openers costs linear time, not quadratic.
+const TAG = /<([a-zA-Z][\w:.-]*)((?:[^<>"']|"[^"]*"|'[^']*')*)>/g;
 // One attribute of a tag's text, name and optional quoted or bare value, read in order so a
 // value that holds ` src=` is never taken for an attribute.
 const ATTRIBUTE = /([^\s"'>/=]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+)))?/g;

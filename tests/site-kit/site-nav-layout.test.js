@@ -142,7 +142,15 @@ class Browser {
     return page;
   }
 
-  close() { this.proc.kill('SIGKILL'); }
+  // Resolves once Chrome has exited, so nothing still writes into its profile folder when the
+  // folder is removed (a removal racing Chrome's last writes fails with ENOTEMPTY).
+  close() {
+    if (this.proc.exitCode !== null || this.proc.signalCode !== null) return Promise.resolve();
+    return new Promise((resolve) => {
+      this.proc.once('exit', resolve);
+      this.proc.kill('SIGKILL');
+    });
+  }
 }
 
 class Page {
@@ -334,10 +342,11 @@ test.before(async () => {
   await state.browser.send('Browser.getVersion');
 });
 
-test.after(() => {
-  if (state.browser) state.browser.close();
+test.after(async () => {
+  if (state.browser) await state.browser.close();
   if (site.server) site.server.close();
-  temps.forEach((dir) => fs.rmSync(dir, { recursive: true, force: true }));
+  // Chrome's child processes can outlive it for a moment: retry the removal briefly.
+  temps.forEach((dir) => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
 });
 
 function needBrowser() {

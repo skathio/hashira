@@ -28,11 +28,16 @@ test('siteOrigin is the owner Pages origin, in lower case', () => {
   assert.equal(siteOrigin('a/b'), 'https://a.github.io');
 });
 
-test('siteOrigin refuses an owner GitHub would not allow', () => {
+test('siteOrigin is null for an owner GitHub would not allow, so no wrong URL is published', () => {
   for (const repo of [undefined, '', '/site', '-octo/site', 'octo-/site', 'oc--to/site', 'oc.to/site', 'evil.example#/x', `${'a'.repeat(40)}/x`]) {
-    assert.throws(() => siteOrigin(repo), /cannot tell the GitHub owner/, String(repo));
+    assert.equal(siteOrigin(repo), null, String(repo));
   }
-  assert.doesNotThrow(() => siteOrigin(`${'a'.repeat(39)}/x`));
+  assert.equal(siteOrigin(`${'a'.repeat(39)}/x`), `https://${'a'.repeat(39)}.github.io`);
+});
+
+test('pageHead leaves out og:url and canonical when the origin is unknown', () => {
+  const head = pageHead({ origin: null, base: '/site/docs/', relativePath: 'guide.md', title: 'T', description: 'D' });
+  assert.deepEqual(head.map((t) => t[1].property ?? t[1].rel ?? t[1].name), ['description', 'og:title', 'og:description']);
 });
 
 test('siteDescription defaults a left-out or empty description to "Guides for <name>"', () => {
