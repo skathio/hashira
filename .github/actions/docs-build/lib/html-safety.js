@@ -178,7 +178,10 @@ function checkRenderedHtml(html) {
 // expands, and <iframe>, <embed>, <object> or a srcdoc attribute carry a
 // document of their own, so those are refused too. A NUL byte means the file is not UTF-8 text
 // the check can read, so it fails too.
-const SVG_SCRIPT = /<\s*(?:[\w.-]+:)?script\b/i;
+// An XML name may start with '_' or any letter, ASCII or not, so a namespace prefix is matched as
+// any run of characters that are not whitespace or markup.
+const NAME_PREFIX = String.raw`(?:[^\s<>/:="'!?]+:)?`;
+const SVG_SCRIPT = new RegExp(String.raw`<\s*${NAME_PREFIX}script(?![^\s/>])`, 'iu');
 // A DOCTYPE with an internal subset ([...]) can declare entities; a plain one, as Illustrator and
 // draw.io write, cannot, and stays allowed.
 const SVG_DECLARATION = /<!\s*(doctype)\b[^>[]*\[|<!\s*(entity)\b/i;
@@ -193,7 +196,7 @@ const SVG_EMBEDS = new Set(['iframe', 'embed', 'object']);
 // that swallows the real tag after it. One left open is not a token, so the scan reads into it.
 // A bare `<` ends a tag attempt (it is not well-formed XML there, and the scan picks the tag up
 // from that `<`), so a run of unclosed `<x ` openers costs linear time, not quadratic.
-const SVG_TOKEN = /<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>|<\?[\s\S]*?\?>|<([a-zA-Z][\w:.-]*)((?:[^<>"']|"[^"]*"|'[^']*')*)>/g;
+const SVG_TOKEN = /<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>|<\?[\s\S]*?\?>|<([^\s<>/!?"'=][^\s<>/"'=]*)((?:[^<>"']|"[^"]*"|'[^']*')*)>/gu;
 
 // The problems a whole-text pattern finds: a script element, a declaration, a stylesheet or XSLT.
 function svgTextProblems(text) {
@@ -209,10 +212,10 @@ function svgTextProblems(text) {
 // The problems of one tag: an embedded document, a handler, srcdoc or a javascript: URL.
 function svgTagProblems(tag, attrs) {
   const problems = [];
-  if (SVG_EMBEDS.has(tag.toLowerCase().replace(/^[\w.-]+:/, ''))) problems.push(`it holds a <${tag}> element`);
+  if (SVG_EMBEDS.has(tag.toLowerCase().replace(/^[^:]+:/, ''))) problems.push(`it holds a <${tag}> element`);
   for (const [name, value] of attributes(attrs)) {
-    if (/^(?:[\w.-]+:)?on/.test(name)) problems.push(`<${tag}> has the handler ${name}`);
-    else if (/^(?:[\w.-]+:)?srcdoc$/.test(name)) problems.push(`<${tag}> has a srcdoc attribute`);
+    if (/^(?:[^:]+:)?on/.test(name)) problems.push(`<${tag}> has the handler ${name}`);
+    else if (/^(?:[^:]+:)?srcdoc$/.test(name)) problems.push(`<${tag}> has a srcdoc attribute`);
     else if (schemeOf(value).includes('javascript:')) problems.push(`<${tag}> ${name} names a javascript: URL`);
   }
   return problems;

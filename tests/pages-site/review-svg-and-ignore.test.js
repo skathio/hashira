@@ -77,3 +77,15 @@ test('svgProblems reads past many unclosed tag openers and still finds a later h
   const text = `<svg ${NS}>${'<a '.repeat(40000)}<g onload="x"/></svg>`;
   assert.ok(svgProblems(text).some((p) => /handler onload/.test(p)), JSON.stringify(svgProblems(text)));
 });
+
+test('svgProblems reads a namespace prefix that starts with _ or a non-ASCII letter', () => {
+  for (const text of [
+    '<é:svg xmlns:é="http://www.w3.org/2000/svg"><é:script>alert(1)</é:script></é:svg>',
+    '<é:svg xmlns:é="http://www.w3.org/2000/svg" onload="alert(1)"/>',
+    '<_:svg xmlns:_="http://www.w3.org/2000/svg" onload="alert(1)"/>',
+    '<_:svg xmlns:_="http://www.w3.org/2000/svg"><_:a href="javascript:alert(1)">x</_:a></_:svg>',
+  ]) {
+    assert.ok(svgProblems(text).length > 0, text);
+  }
+  assert.deepEqual(svgProblems('<é:svg xmlns:é="http://www.w3.org/2000/svg"><é:path d="M0 0h1"/></é:svg>'), []);
+});
