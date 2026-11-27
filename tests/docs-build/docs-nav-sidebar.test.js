@@ -420,7 +420,8 @@ class Browser {
   constructor(bin) {
     const args = ['--headless=new', '--remote-debugging-pipe', '--no-sandbox', '--disable-gpu', '--no-first-run',
       '--hide-scrollbars', `--user-data-dir=${tempDir('docs-nav-chrome-')}`];
-    this.proc = spawn(bin, args, { stdio: ['ignore', 'ignore', 'ignore', 'pipe', 'pipe'] });
+    // Its own process group, so close() can stop Chrome's helper processes along with it.
+    this.proc = spawn(bin, args, { stdio: ['ignore', 'ignore', 'ignore', 'pipe', 'pipe'], detached: true });
     Object.assign(this, { nextId: 1, pending: new Map(), buffer: '' });
     this.proc.stdio[4].on('data', (chunk) => this.receive(chunk));
     this.proc.on('exit', () => this.pending.forEach(({ reject }) => reject(new Error('Chrome exited'))));
@@ -445,7 +446,22 @@ class Browser {
     });
   }
 
-  close() { this.proc.kill('SIGKILL'); }
+  // Asks Chrome to shut down (which ends its helpers and flushes the profile), and kills the
+  // whole process group if it has not exited a few seconds later.
+  close() {
+    if (this.proc.exitCode !== null || this.proc.signalCode !== null) return Promise.resolve();
+    return new Promise((resolve) => {
+      const kill = setTimeout(() => {
+        try { process.kill(-this.proc.pid, 'SIGKILL'); } catch { this.proc.kill('SIGKILL'); }
+      }, 5000);
+      this.proc.once('exit', () => {
+        clearTimeout(kill);
+        try { process.kill(-this.proc.pid, 'SIGKILL'); } catch { /* the group is gone already */ }
+        resolve();
+      });
+      this.send('Browser.close').catch(() => {});
+    });
+  }
 }
 
 async function openPage(url, width) {
@@ -514,10 +530,17 @@ test.before(async () => {
   await state.browser.send('Browser.getVersion');
 });
 
-test.after(() => {
-  if (state.browser) state.browser.close();
+test.after(async () => {
+  if (state.browser) await state.browser.close();
   if (site.server) site.server.close();
-  temps.forEach((dir) => fs.rmSync(dir, { recursive: true, force: true }));
+  // A temp folder left behind is not a test failure: report it and go on.
+  for (const dir of temps) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    } catch (err) {
+      console.warn(`could not remove ${dir}: ${err.message}`);
+    }
+  }
 });
 
 test('with 8 nav entries and home_link the built docs fit at 768, 1024 and 1280', async () => {
