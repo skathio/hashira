@@ -48,6 +48,30 @@ const RETRY_DELAYS_MS = [2000, 5000];
 const transient = (status) => status === 429 || status >= 500;
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+// One read with one set of headers, retried while the failure may pass. Returns { body } on
+// success, else { failures } with one line per try.
+async function readWith({ fetch, url, headers, sleep }) {
+  const failures = [];
+  for (let tryNo = 0; tryNo <= RETRY_DELAYS_MS.length; tryNo += 1) {
+    if (tryNo > 0) await sleep(RETRY_DELAYS_MS[tryNo - 1]);
+    const answer = await fetchOnce(fetch, url, headers);
+    if ('body' in answer) return answer;
+    failures.push(answer.failure);
+    if (!answer.again) break;
+  }
+  return { failures };
+}
+
+async function fetchOnce(fetch, url, headers) {
+  try {
+    const res = await fetch(url, { headers });
+    if (res.ok) return { body: await res.json() };
+    return { failure: `HTTP ${res.status}${headers.Authorization ? ' with the job token' : ' unauthenticated'}`, again: transient(res.status) };
+  } catch (err) {
+    return { failure: err && err.message ? err.message : String(err), again: true };
+  }
+}
+
 /**
  * Reads the run's approvals: with the job's token first, then unauthenticated (released already
  * needs a public repo for deploy's tag check, and `check` holds no grant, so the token may be
@@ -55,24 +79,13 @@ const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
  */
 async function readApprovals({ fetch, apiUrl, repository, runId, token, sleep = pause }) {
   const url = approvalsUrl({ apiUrl, repository, runId });
-  const headers = { Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' };
-  const attempts = token ? [{ ...headers, Authorization: `Bearer ${token}` }, headers] : [headers];
+  const base = { Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' };
+  const headerSets = token ? [{ ...base, Authorization: `Bearer ${token}` }, base] : [base];
   const failures = [];
-  for (const h of attempts) {
-    for (let tryNo = 0; tryNo <= RETRY_DELAYS_MS.length; tryNo += 1) {
-      if (tryNo > 0) await sleep(RETRY_DELAYS_MS[tryNo - 1]);
-      let again = false;
-      try {
-        const res = await fetch(url, { headers: h });
-        if (res.ok) return await res.json();
-        failures.push(`HTTP ${res.status}${h.Authorization ? ' with the job token' : ' unauthenticated'}`);
-        again = transient(res.status);
-      } catch (err) {
-        failures.push(err && err.message ? err.message : String(err));
-        again = true;
-      }
-      if (!again) break;
-    }
+  for (const headers of headerSets) {
+    const answer = await readWith({ fetch, url, headers, sleep });
+    if ('body' in answer) return answer.body;
+    failures.push(...answer.failures);
   }
   return refuse(`could not read ${url} (${failures.join('; ')}). released: true needs a public `
     + 'repo whose run approvals the API can read; run with released: false to use the gate.');
