@@ -21,26 +21,20 @@
 #
 # ## Required caller permissions
 #
-# This action does NOT (and cannot) grant `id-token: write` or
-# `pages: write`. Those scopes MUST be granted by the calling workflow on
-# the JOB that invokes this action. The upstream upload-pages-artifact
-# action uses the OIDC token (`id-token: write`) to authenticate the
-# artifact upload against the Pages backend; the caller's workflow-level
-# `permissions: {}` deny-all (per NF6) must be narrowed at the job level:
+# None beyond reading the files it packages. upload-pages-artifact tars the
+# folder and hands it to actions/upload-artifact, which authenticates with
+# the runner's own token, so the job that runs this action needs no
+# `id-token` and no `pages` grant. Keep them off it: that job usually runs
+# the caller's build commands, and only the deploy job (pages-deploy, in
+# the `github-pages` Environment) needs them:
 #
 #     jobs:
 #       ci:
 #         permissions:
-#           contents: read
-#           id-token: write   # required by upload-pages-artifact
-#           pages: write      # required by upload-pages-artifact
+#           contents: read    # checkout of the tree that is packaged
 #         steps:
 #           - uses: actions/checkout@<SHA>
 #           - uses: ./.github/actions/pages-upload
-#
-# Without these grants, the upload step will fail with a permission error.
-# This is intentional — the action does not silently grant elevated scopes
-# for the consumer.
 #
 # ## Trust boundary
 #

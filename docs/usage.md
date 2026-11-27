@@ -457,7 +457,7 @@ composite cannot hold its own `permissions:` block).
 | `npm-release` (consumer's own `publish` job) | CD composite action | `contents: write`, `pull-requests: read`, `id-token: write` (for `auth: oidc`/`auto`) |
 | `nuget-package-ci.yml` | CI reusable workflow | `contents: read`, `pull-requests: write`, `security-events: write` |
 | `nuget-push` (consumer's own `publish` job) | CD composite action | `contents: write`, `pull-requests: read`, `id-token: write` (for `auth: oidc`/`auto`) |
-| `static-webapp-ci.yml` | CI reusable workflow | `contents: read`, `id-token: write`, `pages: write`, `pull-requests: write`, `security-events: write` |
+| `static-webapp-ci.yml` | CI reusable workflow | `contents: read`, `pull-requests: write`, `security-events: write` |
 | `pages-deploy` (consumer's own `deploy` job) | CD composite action | `pages: write`, `id-token: write` (no `contents: write` — `deploy-pages` reads the artifact, not the repo) |
 
 **`pull-requests: write` on a CI caller job** is for the one CI summary
@@ -478,22 +478,18 @@ over-granted `pull-requests: write` here; v2's composites correct this to
 directly) — `gh` itself checks `GH_TOKEN` then `GITHUB_TOKEN`; the
 composites use the latter name, consistently across both flows.
 
-**Static-webapp CI `id-token: write` note**: `static-webapp-ci.yml` is the
-only CI-half workflow that requires `id-token: write` at the caller job. npm
-and NuGet CI halves do NOT require `id-token: write` — that scope belongs
-only on their Publish-half jobs. The asymmetry exists because
-`actions/upload-pages-artifact` authenticates the artifact upload via OIDC
-and the upload must happen in the same job as the build command
-(cross-job artifact handoff would require `actions/upload-artifact` +
-`actions/download-artifact` instead — see
-[`flows/static-webapp.md`](./flows/static-webapp.md) §1 for the trade-off).
-Practical consequence: the static-webapp consumer's CI caller job holds
-`id-token: write` on every PR run, not only on deploy runs — including PRs
-from forks. This is documented, accepted residual exposure (B8), mitigated
-by `pages-upload`/`pages-deploy` only ever running on `pull_request` (never
-`pull_request_target`) and `pages-deploy` itself refusing to run on a
-`pull_request` event regardless of caller wiring (a runtime guard folded in
-during Phase 3, not merely a documentation prohibition).
+**No CI half holds an OIDC token or a Pages grant**: none of the CI
+reusable workflows needs `id-token` or `pages`, and no job that runs the
+caller's code (a checkout of its tree, or a `*_command` input) holds them.
+`static-webapp-ci.yml` asked for `id-token: write` and `pages: write` until
+v3.4.0, on every PR run, for `actions/upload-pages-artifact`; that action
+needs neither (it hands a tar to `actions/upload-artifact`, which uses the
+runner's own token), so its `build-and-upload` job now holds only
+`contents: read`. Those scopes belong only on the job that deploys or
+publishes: `pages-deploy`, which refuses to run on a `pull_request` event,
+and the npm and NuGet publish jobs. A caller that still grants them on its
+`ci` job keeps working, since a reusable workflow narrows the caller's
+grants, but should drop them.
 
 Detailed per-job grant breakdowns live in each flow's `docs/flows/<name>.md`
 permissions table. The workflow-level `permissions: {}` deny-all default is

@@ -82,7 +82,7 @@ jobs:
 
 CI for a static site on GitHub Pages: build, tests with coverage, the scan suite, SoMi's quality gate on pull requests, and the `github-pages` artifact `pages-deploy` deploys.
 
-**Use it directly**: As the `ci` job of a static site repo's caller, `templates/static-webapp/ci.yml`. Walk-through: [`flows/static-webapp.md`](flows/static-webapp.md).
+**Use it directly**: As the `ci` job of a static site repo's caller, `templates/static-webapp/ci.yml`. The `ci` job grants `contents: read`, `pull-requests: write` and `security-events: write`, and no `id-token` or `pages`: only the `deploy` job holds those. Walk-through: [`flows/static-webapp.md`](flows/static-webapp.md).
 
 | Input | Required | Default |
 |-------|----------|---------|
@@ -109,7 +109,7 @@ jobs:
 
 ### pages-site.yml
 
-Builds and deploys a project's GitHub Pages site: the static site (`site_dir` copied as-is, or built by `site_build_command` into `site_output`), the shared site kit in `_kit/` (`site-kit`) and, unless `docs` is false, the docs from `docs/` and `.github/pages.json` in `docs/` (`docs-build`), uploaded with `pages-upload` and deployed with `pages-deploy`. Jobs `check` -> `gate` -> `build` -> `deploy`: `check` refuses any ref but `main` before the approval, `gate` waits for the `production` environment's approval (skipped when `released` is true), `build` refuses any ref but `main` again and holds only `contents: read`, and `deploy` holds only `pages: write` and `id-token: write` in `github-pages`, one deploy at a time. A released run deploys only while its commit holds the highest `vX.Y.Z` tag. `build` fails when `<site_output>/docs` or `<site_output>/_kit` already exists after the site build.
+Builds and deploys a project's GitHub Pages site: the static site (`site_dir` copied as-is, or built by `site_build_command` into `site_output`), the shared site kit in `_kit/` (`site-kit`) and, unless `docs` is false, the docs from `docs/` and `.github/pages.json` in `docs/` (`docs-build`), uploaded with `pages-upload` and deployed with `pages-deploy`. Jobs `check` -> `gate` -> `build` -> `deploy`: `check` refuses any ref but `main` before the approval, `gate` waits for the `production` environment's approval (skipped when `released` is true, which `check` accepts only when this run already holds an approved `production` review), `build` refuses any ref but `main` again and holds only `contents: read`, and `deploy` holds only `pages: write` and `id-token: write` in `github-pages`, one deploy at a time. A released run deploys only while its commit holds the highest `vX.Y.Z` tag. `build` fails when `<site_output>/docs` or `<site_output>/_kit` already exists after the site build.
 
 **Use it directly**: As the job that publishes a project page, called by hand (`workflow_dispatch`) or from a release workflow after its tags with `released: true`. The caller grants `contents: read`, `pages: write` and `id-token: write`. `site_build_command` and `docs_pre_build_command` are trusted input: they run as shell, so never pass them values from PR titles, issue bodies, branch names or other outside context.
 
@@ -217,7 +217,7 @@ Deploys the same run's `github-pages` artifact to GitHub Pages and writes the pa
 
 Packages a static site directory as the `github-pages` artifact, autodetecting `dist/`, `build/`, `out/` or `public/` when no path is given.
 
-**Use it directly**: When you build the site in your own job instead of `static-webapp-ci.yml`, then deploy it with `pages-deploy`.
+**Use it directly**: When you build the site in your own job instead of `static-webapp-ci.yml`, then deploy it with `pages-deploy`. That job needs only `contents: read`: the upload uses the runner's own token, so keep `id-token` and `pages` on the deploy job.
 
 | Input | Required | Default |
 |-------|----------|---------|

@@ -71,10 +71,21 @@ From a release workflow, call it after the release's tags are pushed with
 `released: true`. The release job's own approval then stands for this one:
 `gate` is skipped, and `deploy` deploys only while the commit holds the
 highest `vX.Y.Z` tag, so re-running an old release never puts an older site
-over a newer one. Pass `released: true` only from a job that already passed
-the `production` approval. `deploy` reads the tags with an unauthenticated
+over a newer one. `deploy` reads the tags with an unauthenticated
 `git ls-remote` and holds no `contents` grant, so `released: true` works for a
 public repo only: in a private repo, `deploy` fails rather than deploy.
+
+`pages-site.yml` enforces the approval itself: its `check` job, which holds
+no grant, reads this run's approvals
+(`GET /repos/{owner}/{repo}/actions/runs/{run_id}/approvals`; a called
+workflow runs in its caller's run) and refuses `released: true` unless one
+of them approved the `production` environment. It fails closed: no such
+approval, or approvals the API will not give, stop the run before anything
+is built or deployed. So callers no longer need their own guard, such as a
+`github.workflow_ref` check, against a dispatcher who sets `released`: a
+`workflow_dispatch` input forwarded as `released` cannot skip the approval.
+The release job that passes `production` must run in the same workflow run,
+before the call.
 
 ```yaml
   site:
@@ -87,6 +98,45 @@ public repo only: in a private repo, `deploy` fails rather than deploy.
     with:
       released: true
 ```
+
+One `site.yml` that serves both: run by hand it waits at `gate`, and called
+from the release workflow after its approved `publish` job it deploys with
+no second approval. It forwards `released` as it is, with no guard of its
+own: a hand run that sets `released` has no `production` approval in its
+run, so `check` refuses it.
+
+```yaml
+name: site
+
+on:
+  workflow_dispatch:
+    inputs:
+      released:
+        description: "Leave unchecked; a hand run waits for the production approval."
+        type: boolean
+        default: false
+  workflow_call:
+    inputs:
+      released:
+        type: boolean
+        default: false
+
+permissions: {}
+
+jobs:
+  site:
+    permissions:
+      contents: read   # build: checkout
+      pages: write     # deploy: deploy-pages
+      id-token: write  # deploy: deploy-pages authenticates via OIDC
+    uses: skathio/hashira/.github/workflows/pages-site.yml@v3
+    with:
+      released: ${{ inputs.released }}
+```
+
+The release workflow calls it with `uses: ./.github/workflows/site.yml`,
+`needs:` its `publish` job (in the `production` environment) and
+`released: true`.
 
 Pin `@v3` for the rolling major or a full 40-character commit SHA for a
 reproducible build. The kit and docs-build come from the same commit as the
@@ -344,5 +394,8 @@ and stops the build before anything is deployed.
 | `'<site_output>/docs' already exists after the site build` | The site holds its own `docs` or `_kit` folder. |
 | `site-kit: '<dest>/_kit' already exists` | The kit would replace the site's own `_kit`. |
 | `pages-site: deploys main only; this run is on <ref>.` | A run on another branch, refused before the approval. |
+| `pages-site: released refused: this run has no approved review for the 'production' environment. ...` | `released: true` in a run with no approved `production` review: a hand or dispatched run that set it, or a release job outside the `production` environment or before its approval. Run with `released: false` to wait at `gate`. |
+| `pages-site: released refused: could not read <url> (...)` | `released: true`, and the run's approvals could not be read, with the job's token or without one: a private repo, or GitHub unreachable. Nothing is deployed. |
+| `pages-site: could not fetch skathio/hashira at <sha>, so released: true cannot be checked.` | `released: true`, and hashira's approval check could not be fetched. |
 | `the latest release <tag> is on <sha>, not <sha>; this run is stale.` | A released run of an older release. |
 | `pages-site: could not read this repo's tags; released: true needs a public repo.` | `released: true` in a private repo, or GitHub unreachable. |

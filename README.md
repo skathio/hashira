@@ -177,8 +177,6 @@ jobs:
     uses: skathio/hashira/.github/workflows/static-webapp-ci.yml@v3
     permissions:
       contents: read # check out the repository
-      id-token: write # upload-pages-artifact authenticates to Pages
-      pages: write # upload-pages-artifact stores the site for deploy
       pull-requests: write # CI summary comment on the pull request
       security-events: write # upload CodeQL results when CodeQL is enabled
   deploy:

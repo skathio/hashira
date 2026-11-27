@@ -12,9 +12,11 @@
 # Workflow-level `permissions: {}` (deny-all). Each job grants the minimum
 # it needs:
 #   - setup           : contents:read
-#   - build-and-upload: contents:read, id-token:write, pages:write
-#                       (id-token + pages required by upload-pages-artifact;
-#                       see `.github/actions/pages-upload/action.yml` header)
+#   - build-and-upload: contents:read only. upload-pages-artifact is a tar
+#                       plus actions/upload-artifact, which authenticates
+#                       with the runner's own token, so it needs no OIDC
+#                       token and no Pages grant. Only the caller's
+#                       `deploy` job (pages-deploy) holds those.
 #   - test            : contents:read (coverage-report runs as the last
 #                       step of this job — see "Coverage report handoff")
 #   - scan-suite      : contents:read, security-events:write (CodeQL),
@@ -94,14 +96,13 @@
 #   - coverage_path
 #   - scan_disable
 #
-# iter-4.2 security review m4: because `build_command` runs in the same
-# job that holds `id-token: write`, a consumer who violates this trust
-# contract can have their GitHub OIDC token exfiltrated by attacker-
-# controlled code; any cloud federation configured against this repo's
-# OIDC subject is in the blast radius. See `## Build artifact handoff`
-# for why the architectural split into a separate non-`id-token` build
-# job is not feasible without a new cross-job artifact handoff (forced
-# by `upload-pages-artifact`'s same-runner locality requirement).
+# iter-4.2 security review m4 (resolved): `build_command` used to run in a
+# job that also held the OIDC token grant, so a consumer who broke this
+# trust contract could have that token exfiltrated. Since v3.4.0 no job of
+# this workflow holds `id-token` or `pages` (upload-pages-artifact needs
+# neither), so the blast radius of a leaked `build_command` is the
+# read-only `contents` token of that job. The trust contract above still
+# holds: the commands run as shell.
 #
 # ## `pull_request_target` is forbidden (B8, iter 3.3)
 #
@@ -113,10 +114,9 @@
 # fork-originated PR, so a fork PR author's `build_command`/
 # `test_command` (both raw-shell sinks per D10d above) would execute
 # with that elevated context instead of the fork's own restricted
-# token. This workflow's `build-and-upload` job already holds
-# `id-token: write` (see the permissions baseline above); combining that
-# grant with `pull_request_target`'s base-repo context on every fork PR
-# is exactly the escalation B8 exists to prevent. Use `pull_request`
+# token. The base repo's secrets and write-scoped token in a job that
+# runs fork-controlled shell is exactly the escalation B8 exists to
+# prevent, whatever grants this workflow's jobs declare. Use `pull_request`
 # (read-only fork token, no secrets) for PR-triggered CI; never switch
 # to `pull_request_target` to work around the read-only token's
 # limitations — that "fix" is the footgun, not a solution.
@@ -317,13 +317,10 @@ jobs:
     # build_command runs in the consumer's tree, then pages-upload packages
     # the result. Both steps must execute on the same runner (see "Build
     # artifact handoff" in the workflow header for the rationale).
+    # No id-token or pages: this job runs the caller's build_command, and
+    # upload-pages-artifact needs neither grant (see the pages-upload header).
     permissions:
-      contents: read
-      # id-token + pages required by upload-pages-artifact (see
-      # `.github/actions/pages-upload/action.yml` header `## Required
-      # caller permissions` block).
-      id-token: write
-      pages: write
+      contents: read # checkout of the caller's tree
     steps:
       # actions/checkout v4.2.2 — consumer's tree.
       # persist-credentials:false per iter-4.2 review Minor #2 (defense-in-depth:

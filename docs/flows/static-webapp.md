@@ -43,9 +43,9 @@ Two security mechanisms also changed shape in this conversion:
   against it — see "Fork-PR guard" in §5.
 - **`pull_request_target` is now an explicitly documented prohibition on
   the CI half** (`static-webapp-ci.yml`'s `build-and-upload` job) — see §8's
-  failure-mode entry. This was always true in spirit (the job holds
-  `id-token: write` + `pages: write`), but v2 states it explicitly rather
-  than leaving it implicit.
+  failure-mode entry. This was always true in spirit (the job runs the
+  caller's `build_command` and `test_command` as shell), but v2 states it
+  explicitly rather than leaving it implicit.
 
 ## 1. Main caller workflow template
 
@@ -75,8 +75,6 @@ jobs:
     uses: skathio/hashira/.github/workflows/static-webapp-ci.yml@v3
     permissions:
       contents: read # check out the repository
-      id-token: write # upload-pages-artifact authenticates to Pages
-      pages: write # upload-pages-artifact stores the site for deploy
       pull-requests: write # CI summary comment on the pull request
       security-events: write # upload CodeQL results when CodeQL is enabled
   deploy:
@@ -98,9 +96,12 @@ jobs:
   runs `npm run build` and the output directory is autodetected. Add a
   `with:` block to the `ci` job only for what you change, for example
   `output_dir`.
-- **Permissions.** The `ci` job grants `id-token: write` and `pages: write`
-  because its `build-and-upload` job runs `upload-pages-artifact`; a
-  reusable workflow can only narrow the caller's grants, never widen them.
+- **Permissions.** The `ci` job grants no `id-token` and no `pages`: since
+  v3.4.0 its `build-and-upload` job, which runs your `build_command`, holds
+  only `contents: read`, because `upload-pages-artifact` needs neither
+  grant. Only the `deploy` job holds them. A caller that still grants them
+  on `ci` keeps working (a reusable workflow narrows the caller's grants),
+  but drop them: nothing in CI uses them.
 - **Required check.** The CI workflow's last job, `passed`, reports as
   `ci / passed`: it fails when any other CI job failed, was cancelled or
   was skipped without a documented reason (`quality-gate` turned off). Require that one check in a
@@ -116,13 +117,9 @@ checks its own composite actions out at the commit that ref resolved to (see
 [`../usage.md`](../usage.md#the-library-self-checkout)), so the ref decides
 all the library code the run executes. If an attacker compromises the
 `skathio/hashira` library repo and you follow a moving ref, their code runs
-inside the `build-and-upload` job, which holds `id-token: write` and
-`pages: write`. With those scopes the attacker can:
-
-- exfiltrate the GitHub OIDC token from `${ACTIONS_ID_TOKEN_REQUEST_TOKEN}`
-  / `${ACTIONS_ID_TOKEN_REQUEST_URL}` (which any cloud federation you
-  have configured against your repo's OIDC subject will accept), and
-- publish arbitrary content to your Pages site.
+inside the `build-and-upload` job. That job holds only `contents: read`,
+but the attacker's code chooses what goes into the `github-pages` artifact,
+and the `deploy` job publishes that artifact to your Pages site.
 
 The template follows `@v3`, which moves with each v3 release. For the
 strongest guarantee, **pin the `ci` job's `uses:` ref to a 40-character
@@ -151,7 +148,7 @@ on.
 | Input | Type | Default | Meaning |
 |-------|------|---------|---------|
 | `node_version` | string | `'20'` | Node major to install via `actions/setup-node`. Trusted input. |
-| `build_command` | string | `'npm run build'` | Shell command that builds the static site. Runs (via `eval`) in the same job that holds `id-token: write` + `pages: write` (D10d raw-shell sink). **MUST be a literal string set in your caller workflow — do NOT derive from PR titles, issue bodies, branch names, commit messages, fork-author-controlled tag names, or any other externally controlled context.** A consumer who violates this trust contract can have their GitHub OIDC token exfiltrated by attacker-controlled code; any cloud federation configured against this repo's OIDC subject is in the blast radius. |
+| `build_command` | string | `'npm run build'` | Shell command that builds the static site. Runs (via `eval`) in the `build-and-upload` job, which holds only `contents: read` (D10d raw-shell sink). **MUST be a literal string set in your caller workflow — do NOT derive from PR titles, issue bodies, branch names, commit messages, fork-author-controlled tag names, or any other externally controlled context.** A consumer who violates this trust contract lets attacker-controlled code choose what the `deploy` job publishes to Pages. |
 | `output_dir` | string | `''` | Directory containing the built site (passed through to `pages-upload`'s `path` input). Empty (default) triggers autodetect among `dist/`, `build/`, `out/`, `public/` (first found wins). **MUST be a workspace-relative directory without `..` segments or a leading `/`.** |
 | `test_command` | string | `'npm test'` | Shell command that runs the consumer's tests. **Trusted input**: it runs as raw shell, so do NOT pass values derived from PR titles, issue bodies, branch names, or other externally controlled context. |
 | `coverage_path` | string | `''` | Path to the coverage file the tests write. Empty uses the flow's standard path: `coverage/lcov.info` for npm and static-webapp, `coverage/cobertura.xml` for NuGet. Consumed by `coverage-report`, which runs inside the `test` job. Trusted input. |
@@ -216,7 +213,7 @@ Per-job grants the consumer's caller workflow must set:
 
 | Caller job calls | `contents` | `id-token` | `pages` | `pull-requests` | `security-events` |
 |------------------|------------|------------|---------|-----------------|-------------------|
-| `static-webapp-ci.yml` (the `ci` job) | `read` | `write` | `write` | `write` | `write` |
+| `static-webapp-ci.yml` (the `ci` job) | `read` | — | — | `write` | `write` |
 | `pages-deploy` (the `deploy` job) | — | `write` | `write` | — | — |
 
 Why each is needed (and what breaks without it):
@@ -226,13 +223,10 @@ Why each is needed (and what breaks without it):
   the checkout step fails. **Not required on the `deploy` job** —
   `pages-deploy` reads the artifact, not the repo, and performs no
   checkout of its own.
-- **`id-token: write` on `ci`** — required by
-  `actions/upload-pages-artifact` to authenticate the artifact upload
-  against the Pages backend via OIDC. This is **Pages-specific** and
-  does NOT appear on the npm/NuGet CI workflows. Without it, the upload
-  step fails with a permission error.
-- **`pages: write` on `ci`** — also required by
-  `actions/upload-pages-artifact`. Without it, the upload step fails.
+- **No `id-token` or `pages` on `ci`** — `actions/upload-pages-artifact`
+  tars the site and hands it to `actions/upload-artifact`, which uses the
+  runner's own token. Neither grant is needed, and the job that runs your
+  `build_command` should not hold them.
 - **`pull-requests: write` on `ci`** — for the one CI summary comment on
   the pull request, written by the `passed` job (the only job holding
   it). Required: a called job cannot hold more than the caller grants,
@@ -251,21 +245,15 @@ Why each is needed (and what breaks without it):
   `contents: write` for `gh release create` — the static-webapp flow has
   no analogous tag/Release step).
 
-**Static-webapp CI `id-token: write` note**: `static-webapp-ci.yml` is the
-only CI-half workflow in the library that requires `id-token: write` at the
-caller job. npm and NuGet CI halves do NOT require it — that scope belongs
-only on their Publish-half jobs. The asymmetry exists because
-`actions/upload-pages-artifact` authenticates via OIDC and the upload must
-happen in the same job as the build command (a cross-job handoff would
-require `actions/upload-artifact` + `actions/download-artifact` instead —
-see "Build artifact handoff" in `static-webapp-ci.yml`'s own header for the
-trade-off). Practical consequence: the static-webapp consumer's CI caller
-job holds `id-token: write` on every PR run, not only on deploy runs —
-including PRs from forks. This is documented, accepted residual exposure,
-mitigated by `pages-upload`/`pages-deploy` only ever running on
-`pull_request` (never `pull_request_target`) and `pages-deploy` itself
-refusing to run on a `pull_request` event regardless of caller wiring (§5's
-runtime guard, not merely a documentation prohibition).
+**No OIDC token in CI**: like the npm and NuGet CI halves,
+`static-webapp-ci.yml` needs no `id-token` grant (until v3.4.0 it asked the
+caller's `ci` job for `id-token: write` and `pages: write`, on every PR
+run). The build and the upload still share one job, because
+`upload-pages-artifact` packages a folder on its own runner (see "Build
+artifact handoff" in `static-webapp-ci.yml`'s header), but that job holds
+only `contents: read`. The OIDC token and the Pages grant live only in the
+`deploy` job, which `pages-deploy` refuses to run on a `pull_request` event
+(§5).
 
 ## 7. `github-pages` Environment setup checklist
 
@@ -348,7 +336,7 @@ workaround; it's obsolete now that the flow installs dependencies itself, and do
 would just install twice).
 
 **Lifecycle-hook hardening tradeoff**: this automatic `npm ci` does not pass `--ignore-scripts`,
-so transitive-dependency postinstall hooks run inside the `id-token: write` job (the same
+so transitive-dependency postinstall hooks run inside the build job, which decides what gets deployed (the same
 defense-in-depth the npm flow's publish path, the `npm-release` action, recommends guarding
 against). There is currently no consumer-facing input to opt into `--ignore-scripts` here — if
 this matters for your threat model, treat it as a known gap and flag it rather than trying to
@@ -363,10 +351,11 @@ route around it via `build_command` (the automatic install runs regardless, befo
   the artifact hasn't been uploaded at all). **Fix**: ensure the
   `deploy:` job declares `needs: ci` per §1.
 
-- **`pages: write` or `id-token: write` denied on the `ci` job.** Your
-  caller's `ci:` job is missing one of those grants in its
-  `permissions:` block. **Fix**: add the missing scope per §6. Reusable
-  workflows can only narrow caller grants; they cannot broaden them.
+- **A permission denied on the `ci` job.** Your caller's `ci:` job is
+  missing a grant from §6 (`contents: read`, `pull-requests: write` or
+  `security-events: write`). **Fix**: add the missing scope per §6.
+  Reusable workflows can only narrow caller grants; they cannot broaden
+  them. The `ci` job needs no `id-token` or `pages`.
 
 - **`pages: write` or `id-token: write` denied on the `deploy` job.**
   Same root cause on the deploy side — caller's `deploy:` job missing
@@ -423,10 +412,9 @@ route around it via `build_command` (the automatic install runs regardless, befo
   repo's secrets and a token scoped to the base repo — even for a
   fork-originated PR, so a fork PR author's `build_command`/`test_command`
   (both raw-shell sinks) would execute with that elevated context instead
-  of the fork's own restricted token. The job already holds
-  `id-token: write`; combining that with `pull_request_target`'s base-repo
-  context on every fork PR is exactly the escalation this prohibition
-  exists to prevent. This is currently a **documentation prohibition**, not
+  of the fork's own restricted token. The base repo's secrets and
+  write-scoped token in a job that runs fork-controlled shell is exactly
+  the escalation this prohibition exists to prevent. This is currently a **documentation prohibition**, not
   a runtime guard — unlike `pages-deploy`'s `pull_request` check (§5),
   `static-webapp-ci.yml`'s CI half has no equivalent self-enforced check
   yet. Use `pull_request` (read-only fork token, no secrets) for
