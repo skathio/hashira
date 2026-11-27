@@ -50,9 +50,9 @@ on:
   workflow_dispatch:
     inputs:
       bump:
-        description: "Cut a release: patch, minor or major. Empty runs CI only."
+        description: "Cut a release: patch, minor or major. none runs CI only."
         type: choice
-        options: ['', patch, minor, major]
+        options: [none, patch, minor, major]
       seed_version:
         description: "Baseline for the first release when no stable tag exists, e.g. 0.0.0."
         type: string
@@ -106,9 +106,9 @@ on:
   workflow_dispatch:
     inputs:
       bump:
-        description: "Cut a release: patch, minor or major. Empty runs CI only."
+        description: "Cut a release: patch, minor or major. none runs CI only."
         type: choice
-        options: ['', patch, minor, major]
+        options: [none, patch, minor, major]
       seed_version:
         description: "Baseline for the first release when no stable tag exists, e.g. 0.0.0."
         type: string

@@ -130,6 +130,13 @@ their [GitHub Releases](https://github.com/skathio/hashira/releases).
   `scan_fail_on_findings` is `true`. Fix the findings, or pass
   `scan_disable: 'codeql,actionlint'` to keep the old behaviour meanwhile.
   The `scan-suite` action's own default is unchanged.
+- The npm and NuGet caller templates offer `bump` as
+  `[none, patch, minor, major]` instead of `['', patch, minor, major]`:
+  actionlint refuses an empty choice option ("string should not be empty").
+  `npm-package-ci.yml`, `nuget-package-ci.yml` and `ci-summary` treat
+  `none` as no release, the same as an empty bump. A caller copied from an
+  older template keeps the empty option, which actionlint now reports:
+  change that line to the new one.
 
 - `theme.js` and the docs' theme control cycle auto, then the theme the
   system does not show, then the system's own, then auto, so the first press

@@ -190,7 +190,7 @@ on:
         type: boolean
         default: true
       bump:
-        description: "One of 'patch', 'minor' or 'major'. Empty (default) falls back to the caller's workflow_dispatch input 'bump'; a value passed here wins. When neither is set, as on routine pull_request and push runs, no release is cut. When set, the version job resolves the next version, shows it in the run summary and stamps it into the packed release artifact, never into the checked-out tree."
+        description: "One of 'patch', 'minor' or 'major'; 'none' means no release, as empty does. Empty (default) falls back to the caller's workflow_dispatch input 'bump'; a value passed here wins. When neither is set, as on routine pull_request and push runs, no release is cut. When set, the version job resolves the next version, shows it in the run summary and stamps it into the packed release artifact, never into the checked-out tree."
         required: false
         type: string
         default: ""
@@ -367,7 +367,9 @@ jobs:
     name: version
     needs: setup
     # A `with: bump` wins; otherwise the caller's workflow_dispatch input.
-    if: ${{ (inputs.bump || github.event.inputs.bump) != '' }}
+    # 'none' is the templates' "no release" choice (a choice input may not hold an empty
+    # option, which actionlint refuses), so it gates like an empty bump.
+    if: ${{ (inputs.bump || github.event.inputs.bump) != '' && (inputs.bump || github.event.inputs.bump) != 'none' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read

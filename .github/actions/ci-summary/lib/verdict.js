@@ -10,11 +10,17 @@
 // a broken change merge, so a skip passes only when an input explains it.
 // Each rule mirrors the `if:` that skips its job in the three CI workflows.
 const DOCUMENTED_SKIPS = {
-  // `if: (inputs.bump || github.event.inputs.bump) != ''`. A null event is
-  // one nobody could read: the bump is unknown, so the skip is unexplained.
+  // `if: (inputs.bump || github.event.inputs.bump) != '' && ... != 'none'`:
+  // the input wins when set, as `||` does there, and 'none' (the templates'
+  // "no release" choice) counts as no bump. A null event is one nobody could
+  // read: the bump is unknown, so the skip is unexplained.
   version: {
-    applies: ({ inputs, event }) => event !== null && !isSet(inputs.bump) && !isSet(event.inputs?.bump),
-    reason: 'no bump set (inputs.bump and github.event.inputs.bump are empty)',
+    applies: ({ inputs, event }) => {
+      if (event === null) return false;
+      const bump = isSet(inputs.bump) ? inputs.bump : event.inputs?.bump;
+      return !isSet(bump) || bump === 'none';
+    },
+    reason: "no bump set (inputs.bump and github.event.inputs.bump are empty or 'none')",
   },
   // `if: inputs.quality_gate`. Only an explicit false counts: a missing value
   // means the input's default (true), so that skip is unexplained and fails.
