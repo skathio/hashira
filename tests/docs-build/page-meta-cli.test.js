@@ -171,3 +171,7 @@ test('toolchainSummary says unknown for a lockfile with no VitePress, and fails 
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('missingAnchors keeps an out-of-range numeric entity as written instead of throwing', () => {
+  assert.deepEqual(missingAnchors('<a href="#&#99999999;">x</a>'), ['&#99999999;']);
+});

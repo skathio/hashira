@@ -42,23 +42,36 @@ function approvalsUrl({ apiUrl, repository, runId }) {
   return `${base}/repos/${repository}/actions/runs/${runId}/approvals`;
 }
 
+// A rate limit, a server error or a network error may pass: each read is tried up to three
+// times, a few seconds apart. Any other answer (401, 403, 404) is final for that read.
+const RETRY_DELAYS_MS = [2000, 5000];
+const transient = (status) => status === 429 || status >= 500;
+const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 /**
  * Reads the run's approvals: with the job's token first, then unauthenticated (released already
  * needs a public repo for deploy's tag check, and `check` holds no grant, so the token may be
  * refused). Throws when neither read gives a JSON list.
  */
-async function readApprovals({ fetch, apiUrl, repository, runId, token }) {
+async function readApprovals({ fetch, apiUrl, repository, runId, token, sleep = pause }) {
   const url = approvalsUrl({ apiUrl, repository, runId });
   const headers = { Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' };
   const attempts = token ? [{ ...headers, Authorization: `Bearer ${token}` }, headers] : [headers];
   const failures = [];
   for (const h of attempts) {
-    try {
-      const res = await fetch(url, { headers: h });
-      if (res.ok) return await res.json();
-      failures.push(`HTTP ${res.status}${h.Authorization ? ' with the job token' : ' unauthenticated'}`);
-    } catch (err) {
-      failures.push(err && err.message ? err.message : String(err));
+    for (let tryNo = 0; tryNo <= RETRY_DELAYS_MS.length; tryNo += 1) {
+      if (tryNo > 0) await sleep(RETRY_DELAYS_MS[tryNo - 1]);
+      let again = false;
+      try {
+        const res = await fetch(url, { headers: h });
+        if (res.ok) return await res.json();
+        failures.push(`HTTP ${res.status}${h.Authorization ? ' with the job token' : ' unauthenticated'}`);
+        again = transient(res.status);
+      } catch (err) {
+        failures.push(err && err.message ? err.message : String(err));
+        again = true;
+      }
+      if (!again) break;
     }
   }
   return refuse(`could not read ${url} (${failures.join('; ')}). released: true needs a public `

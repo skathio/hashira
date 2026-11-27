@@ -70,3 +70,10 @@ test('svgProblems refuses an XSLT stylesheet that could write a script element',
   assert.ok(svgProblems(`<?xml-stylesheet href="style.css"?><svg ${NS}/>`).length > 0);
   assert.deepEqual(svgProblems(`<?xml version="1.0" encoding="UTF-8"?><svg ${NS}><path d="M0 0h1"/></svg>`), []);
 });
+
+// 40,000 unclosed openers: the old token pattern rescanned to the end from each one. The
+// assertion is that a real handler after them is still found.
+test('svgProblems reads past many unclosed tag openers and still finds a later handler', () => {
+  const text = `<svg ${NS}>${'<a '.repeat(40000)}<g onload="x"/></svg>`;
+  assert.ok(svgProblems(text).some((p) => /handler onload/.test(p)), JSON.stringify(svgProblems(text)));
+});

@@ -258,6 +258,14 @@ jobs:
       artifact_name: site
 ```
 
+Put a `deploy: false` call, or your own `scan-suite` step with OSV and
+gitleaks and `fail_on_findings: 'true'`, in a job the tagging job `needs`,
+as `site-check` is above. `scan` fails closed, and a release whose only
+scan runs after its tags are pushed would be left tagged with no site
+deployed. The `released: true` call scans again; if that scan finds
+something new, fix it and run the site deploy by hand, which waits at
+`gate` as usual.
+
 ### What is built
 
 `source: main` (the default) builds the run's own commit. `source:

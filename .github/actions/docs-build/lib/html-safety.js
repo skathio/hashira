@@ -191,7 +191,9 @@ const SVG_EMBEDS = new Set(['iframe', 'embed', 'object']);
 // The tag scan reads the text in the order an XML parser does: a comment, a CDATA section or a
 // processing instruction is one token, so a quote inside one can never open an attribute value
 // that swallows the real tag after it. One left open is not a token, so the scan reads into it.
-const SVG_TOKEN = /<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>|<\?[\s\S]*?\?>|<([a-zA-Z][\w:.-]*)((?:[^>"']|"[^"]*"|'[^']*')*)>/g;
+// A bare `<` ends a tag attempt (it is not well-formed XML there, and the scan picks the tag up
+// from that `<`), so a run of unclosed `<x ` openers costs linear time, not quadratic.
+const SVG_TOKEN = /<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>|<\?[\s\S]*?\?>|<([a-zA-Z][\w:.-]*)((?:[^<>"']|"[^"]*"|'[^']*')*)>/g;
 
 // The problems a whole-text pattern finds: a script element, a declaration, a stylesheet or XSLT.
 function svgTextProblems(text) {

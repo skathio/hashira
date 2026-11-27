@@ -129,9 +129,27 @@ test('both reads failing refuses, naming each failure', async () => {
     (err) => REFUSED.test(err.message) && /HTTP 403 with the job token/.test(err.message) && /HTTP 404 unauthenticated/.test(err.message));
 });
 
-test('a network error refuses too', async () => {
-  const { fetch } = fakeFetch([new Error('getaddrinfo ENOTFOUND')]);
-  await assert.rejects(readApprovals({ fetch, ...WHERE }), /could not read .*ENOTFOUND/);
+const noWait = async () => {};
+
+test('a network error that lasts refuses too, after three tries', async () => {
+  const err = () => new Error('getaddrinfo ENOTFOUND');
+  const { fetch, calls } = fakeFetch([err(), err(), err()]);
+  await assert.rejects(readApprovals({ fetch, ...WHERE, sleep: noWait }), /could not read .*ENOTFOUND/);
+  assert.equal(calls.length, 3);
+});
+
+test('a rate limit or server error is retried, and a later answer is used', async () => {
+  const waits = [];
+  const { fetch, calls } = fakeFetch([{ status: 429 }, { status: 502 }, { status: 200, body: [] }]);
+  assert.deepEqual(await readApprovals({ fetch, ...WHERE, token: 'tok', sleep: async (ms) => waits.push(ms) }), []);
+  assert.deepEqual(calls.map((c) => c.auth), ['Bearer tok', 'Bearer tok', 'Bearer tok']);
+  assert.equal(waits.length, 2);
+});
+
+test('a 403 or 404 is not retried', async () => {
+  const { fetch, calls } = fakeFetch([{ status: 403 }, { status: 404 }]);
+  await assert.rejects(readApprovals({ fetch, ...WHERE, token: 'tok', sleep: noWait }), (err) => REFUSED.test(err.message));
+  assert.equal(calls.length, 2);
 });
 
 test('the token never appears in a refusal', async () => {
