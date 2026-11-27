@@ -404,7 +404,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          node --test tests/pages-site/pages-site-rules.test.js tests/pages-site/released-approval.test.js tests/pages-site/grants-and-approval.test.js tests/pages-site/kit-refs.test.js tests/pages-site/pages-site-features.test.js
+          node --test tests/pages-site/pages-site-rules.test.js tests/pages-site/released-approval.test.js tests/pages-site/grants-and-approval.test.js tests/pages-site/kit-refs.test.js tests/pages-site/pages-site-features.test.js \
+            tests/pages-site/pages-hardening.test.js tests/pages-site/review-svg-and-ignore.test.js
 
   release-logic-unit-tests:
     name: release-logic-unit-tests

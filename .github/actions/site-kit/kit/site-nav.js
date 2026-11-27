@@ -207,6 +207,15 @@
     return fits;
   }
 
+  // A hash that does not decode ('#100%') names no section, rather than throwing out of render.
+  function decodeHash(hash) {
+    try {
+      return decodeURIComponent(hash);
+    } catch (e) {
+      return null;
+    }
+  }
+
   // The #hash links, and of those the one whose section is in view: the last section whose
   // top has passed `below` (the bar's bottom edge).
   function sectionInView(links, below) {
@@ -214,7 +223,8 @@
     var current = null;
     for (var i = 0; i < links.length; i++) {
       var href = links[i].getAttribute('href') || '';
-      var target = /^#./.test(href) ? document.getElementById(decodeURIComponent(href.slice(1))) : null;
+      var id = /^#./.test(href) ? decodeHash(href.slice(1)) : null;
+      var target = id === null ? null : document.getElementById(id);
       if (!target) continue;
       hashLinks.push(links[i]);
       if (target.getBoundingClientRect().top <= below) current = links[i];

@@ -12,16 +12,24 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
-// src= or href= with a quoted or bare value.
-const ATTRIBUTE = /\b(?:src|href)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/gi;
+// A tag and its attribute text, quoted values respected (the way docs-build's html-safety.js
+// reads SVG tags), so escaped text such as `&lt;script src="_kit/x.js"&gt;` is never read.
+const TAG = /<([a-zA-Z][\w:.-]*)((?:[^>"']|"[^"]*"|'[^']*')*)>/g;
+// One attribute of a tag's text, name and optional quoted or bare value, read in order so a
+// value that holds ` src=` is never taken for an attribute.
+const ATTRIBUTE = /([^\s"'>/=]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+)))?/g;
+const REFERENCE = new Set(['src', 'href']);
 const NOT_RELATIVE = /^(?:[a-z][a-z0-9+.-]*:|\/|#)/i;
 
 /** The relative `_kit` references in one page's HTML, without query or fragment. */
 function kitReferences(html) {
   const found = [];
-  for (const match of html.matchAll(ATTRIBUTE)) {
-    const value = (match[1] ?? match[2] ?? match[3]).trim().split(/[?#]/)[0];
-    if (value && !NOT_RELATIVE.test(value) && value.split('/').includes('_kit')) found.push(value);
+  for (const [, , attrs] of html.matchAll(TAG)) {
+    for (const [, name, ...values] of attrs.matchAll(ATTRIBUTE)) {
+      if (!REFERENCE.has(name.toLowerCase())) continue;
+      const value = (values.find((v) => v !== undefined) ?? '').trim().split(/[?#]/)[0];
+      if (value && !NOT_RELATIVE.test(value) && value.split('/').includes('_kit')) found.push(value);
+    }
   }
   return found;
 }

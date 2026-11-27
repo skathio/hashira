@@ -174,18 +174,37 @@ function checkRenderedHtml(html) {
 // scripts with the docs' origin. So an SVG may hold no <script> element (any namespace prefix,
 // a comment or CDATA included: the check reads the raw text and fails closed), no on* handler,
 // and no attribute value that names a javascript: URL once entities and whitespace are gone.
-// A NUL byte means the file is not UTF-8 text the check can read, so it fails too.
+// A DOCTYPE or ENTITY declaration could spell any of that through an entity the check never
+// expands, and <foreignObject>, <iframe>, <embed>, <object> or a srcdoc attribute carry a
+// document of their own, so those are refused too. A NUL byte means the file is not UTF-8 text
+// the check can read, so it fails too.
 const SVG_SCRIPT = /<\s*(?:[\w.-]+:)?script\b/i;
-const SVG_TAG = /<([a-zA-Z][\w:.-]*)((?:[^>"']|"[^"]*"|'[^']*')*)>/g;
+const SVG_DECLARATION = /<!\s*(doctype|entity)\b/i;
+// An xml-stylesheet processing instruction can point the browser at an XSLT stylesheet (in the
+// file or beside it) that writes any element, a <script> included, so neither is allowed.
+const SVG_STYLESHEET = /<\?\s*xml-stylesheet\b/i;
+const SVG_XSLT = /http:\/\/www\.w3\.org\/1999\/XSL\/Transform/i;
+const SVG_EMBEDS = new Set(['foreignobject', 'iframe', 'embed', 'object']);
+// The tag scan reads the text in the order an XML parser does: a comment, a CDATA section or a
+// processing instruction is one token, so a quote inside one can never open an attribute value
+// that swallows the real tag after it. One left open is not a token, so the scan reads into it.
+const SVG_TOKEN = /<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>|<\?[\s\S]*?\?>|<([a-zA-Z][\w:.-]*)((?:[^>"']|"[^"]*"|'[^']*')*)>/g;
 
 // Returns the SVG text's problems, one line each; empty means it holds no script.
 function svgProblems(text) {
   if (text.includes('\0')) return ['it is not UTF-8 text'];
   const problems = [];
   if (SVG_SCRIPT.test(text)) problems.push('it holds a <script> element');
-  for (const [, tag, attrs] of text.matchAll(SVG_TAG)) {
+  const declaration = text.match(SVG_DECLARATION);
+  if (declaration) problems.push(`it holds a <!${declaration[1].toUpperCase()}> declaration`);
+  if (SVG_STYLESHEET.test(text)) problems.push('it holds an <?xml-stylesheet?> instruction');
+  if (SVG_XSLT.test(text)) problems.push('it holds XSLT');
+  for (const [, tag, attrs] of text.matchAll(SVG_TOKEN)) {
+    if (!tag) continue;
+    if (SVG_EMBEDS.has(tag.toLowerCase().replace(/^[\w.-]+:/, ''))) problems.push(`it holds a <${tag}> element`);
     for (const [name, value] of attributes(attrs)) {
       if (/^(?:[\w.-]+:)?on/.test(name)) problems.push(`<${tag}> has the handler ${name}`);
+      else if (/^(?:[\w.-]+:)?srcdoc$/.test(name)) problems.push(`<${tag}> has a srcdoc attribute`);
       else if (schemeOf(value).includes('javascript:')) problems.push(`<${tag}> ${name} names a javascript: URL`);
     }
   }

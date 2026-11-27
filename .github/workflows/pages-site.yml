@@ -53,8 +53,10 @@
 # raw-shell sinks (D10d): TRUSTED input from the caller's workflow file. They run only in
 # `build`, which holds `contents: read`, never in `deploy`. Every input reaches a shell through
 # `env:`, quoted. The opt-in `build_token` secret is in the env of the site_build_command step
-# only, not of the install, test or docs steps; with `deploy: false` on a pull request it reaches
-# that PR's build, so pass it only to builds you trust with it.
+# only, not of the install, test or docs steps. install_command runs earlier in the same job and
+# can change what later steps run (GITHUB_ENV, files on disk), so it and its dependencies' install
+# scripts are trusted with the token too. With `deploy: false` on a pull request it reaches that
+# PR's build, so pass it only to builds you trust with it.
 #
 # ## Library self-checkout
 #
@@ -277,6 +279,19 @@ jobs:
               [ -n "${latest}" ] || fail "source: latest-release found no vX.Y.Z tag; nothing is built or deployed."
               sha="$(git rev-parse "${latest}^{commit}")"
               ref="${latest}"
+              # A tag is a ref anyone with push access can put on any commit, so the tag's
+              # commit must be on main. The full fetch above writes origin/main; a clone with
+              # only the local branch has refs/heads/main. Neither there fails closed.
+              main_ref=""
+              for candidate in refs/remotes/origin/main refs/heads/main; do
+                if git rev-parse -q --verify "${candidate}^{commit}" > /dev/null; then
+                  main_ref="${candidate}"
+                  break
+                fi
+              done
+              [ -n "${main_ref}" ] || fail "source: latest-release cannot find main (no refs/remotes/origin/main), so it cannot check that ${latest} is on main."
+              git merge-base --is-ancestor "${sha}" "${main_ref}" \
+                || fail "source: latest-release: ${latest} (${sha}) is not on main; only a release tag on main is built."
               ;;
             *) fail "source must be 'main' or 'latest-release', not '${SOURCE}'." ;;
           esac
@@ -288,8 +303,13 @@ jobs:
           else
             since="no vX.Y.Z tag yet"
           fi
+          # The same "deploying <ref>@<sha>, N commits after <tag>" text on every run, so one
+          # search finds it; a build-only run says in front of it that nothing is deployed.
           verb=deploying
-          [ "${DEPLOY}" = "false" ] && verb="building (deploy: false)"
+          [ "${DEPLOY}" = "false" ] && verb="build only (deploy: false), not deploying"
+          # A branch name is the pusher's text: anything but letters, digits and . _ / + - becomes
+          # _, so it cannot add Markdown or links to the summary.
+          ref="${ref//[^A-Za-z0-9._\/+-]/_}"
           echo "pages-site: ${verb} ${ref}@${sha}, ${since}" | tee -a "${GITHUB_STEP_SUMMARY}"
           echo "sha=${sha}" >> "${GITHUB_OUTPUT}"
 
@@ -411,13 +431,21 @@ jobs:
             exit 1
           fi
       # The npm cache is keyed on docs-build's own lockfile, so the VitePress install docs-build
-      # runs is a cache hit after the first run.
-      # actions/setup-node v7.1.0
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+      # runs is a cache hit after the first run. Only with the docs: without them nothing is sure
+      # to fill the npm cache folder, and setup-node's post step would fail on a missing folder
+      # or save a near-empty cache under the key the docs builds of the repo share.
+      - if: ${{ inputs.docs }}
+        # actions/setup-node v7.1.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: ${{ inputs.node_version }}
           cache: npm
           cache-dependency-path: .hashira/.github/actions/docs-build/vitepress/package-lock.json
+      - if: ${{ !inputs.docs }}
+        # actions/setup-node v7.1.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: ${{ inputs.node_version }}
       - if: ${{ inputs.dotnet_version != '' }}
         # actions/setup-dotnet v6.1.0
         uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73

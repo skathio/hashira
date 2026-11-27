@@ -19,6 +19,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
+const { contrastWarnings } = require('./accent');
 const { prepare, inspect, checkOutputDir } = require('./prepare');
 
 // The toolchain is installed from the action's lockfile, never resolved anew. --ignore-scripts:
@@ -35,8 +36,15 @@ class CliError extends Error {
   }
 }
 
+// A check runs no command: --pre-build with it would be dropped without a word. Left out, the
+// command is '' (none), which is also what action.yml passes with --out when its input is empty.
+function settlePreBuild(args) {
+  if (args.check && args.preBuild !== null) throw new CliError(`--pre-build goes with --out, not --check. ${USAGE}`);
+  return { ...args, preBuild: args.preBuild ?? '' };
+}
+
 function parseArgs(argv) {
-  const args = { check: false, out: null, preBuild: '' };
+  const args = { check: false, out: null, preBuild: null };
   for (let i = 0; i < argv.length; i += 1) {
     const flag = argv[i];
     if (flag === '--check') args.check = true;
@@ -46,7 +54,7 @@ function parseArgs(argv) {
     } else throw new CliError(`unknown argument ${JSON.stringify(flag)}. ${USAGE}`);
   }
   if (args.check === (args.out !== null)) throw new CliError(`give either --check or --out. ${USAGE}`);
-  return args;
+  return settlePreBuild(args);
 }
 
 // owner/name of the checkout's origin remote on github.com, or null.
@@ -105,7 +113,8 @@ function main(argv) {
       if (repo) process.env.GITHUB_REPOSITORY = repo;
     }
     if (args.check) {
-      inspect(root);
+      const { config } = inspect(root);
+      for (const w of contrastWarnings(config.accent, config.accent_dark)) process.stdout.write(`::warning::${w}\n`);
       process.stdout.write('docs-build: .github/pages.json and docs/ pass the checks.\n');
     } else {
       build(root, args);

@@ -27,8 +27,12 @@ their [GitHub Releases](https://github.com/skathio/hashira/releases).
   calls `pages-site.yml` with `released: true` must pass the `production`
   approval earlier in the same run, as hashira's own release workflow does.
 - `docs-build`: an SVG under `docs/`, `docs/public/` included, that holds a
-  `<script>`, an `on*` handler or a `javascript:` URL fails the build: a
-  browser that opens the file on its own would run it with the docs' origin.
+  `<script>`, an `on*` handler, a `javascript:` URL, a `<!DOCTYPE>` or
+  `<!ENTITY>` declaration, a `<foreignObject>`, `<iframe>`, `<embed>` or
+  `<object>` element, or a `srcdoc` attribute fails the build: a browser
+  that opens the file on its own would run it with the docs' origin.
+- `docs-build`: an `output_dir` that holds a control character is refused,
+  so it cannot add lines to the step's outputs or summary.
 
 ### Added
 
@@ -38,9 +42,12 @@ their [GitHub Releases](https://github.com/skathio/hashira/releases).
   `scan_disable` and `scan_fail_on_findings` work as in `static-webapp-ci`.
 - `pages-site.yml`: `deploy` (default `true`); `false` builds, checks and
   uploads on any ref and event, pull requests included, with no main-only
-  check, no `gate` and no deploy. `prebuilt` (default `false`) deploys the
-  `artifact_name` artifact (default `github-pages`) that an earlier job of
-  the same run built, so a release builds once.
+  check, no `gate` and no deploy. The caller's job still names `pages: write`
+  and `id-token: write`, which GitHub checks against the skipped `deploy`
+  job before the run starts; `build` holds `contents: read` only. `prebuilt`
+  (default `false`) deploys the `artifact_name` artifact (default
+  `github-pages`) that an earlier job of the same run built, so a release
+  builds once.
 - `pages-site.yml`: `install_command`, `test_command` and `coverage_path`
   (all default `''`) around `site_build_command`, as in `static-webapp-ci`.
 - `pages-site.yml`: the opt-in `build_token` secret, exposed as
@@ -49,13 +56,19 @@ their [GitHub Releases](https://github.com/skathio/hashira/releases).
   with no gate on `push`, `schedule` and `repository_dispatch` runs only,
   never on `workflow_dispatch`.
 - `pages-site.yml`: `source` (default `main`); `latest-release` builds the
-  highest `vX.Y.Z` tag's tree. Every run writes
-  `deploying <ref>@<sha>, N commits after <tag>` to the step summary.
+  highest `vX.Y.Z` tag's tree, and fails when that tag's commit is not on
+  `main`. Every run writes
+  `deploying <ref>@<sha>, N commits after <tag>` to the step summary; a
+  `deploy: false` run puts `build only (deploy: false), not` in front of it.
 - `pages-site.yml`'s build checks that the site's pages reference only kit
-  files `site-kit` ships, and caches npm on `docs-build`'s lockfile.
+  files `site-kit` ships, and caches npm on `docs-build`'s lockfile when it
+  builds the docs (`docs: false` runs set Node up with no cache).
   `docs-build` writes the VitePress version and its lockfile's sha256 to the
   step summary, and hashira's CI and release check run OSV over that
-  lockfile and fail on findings.
+  lockfile and fail on findings. The release check also runs the site
+  deploy's own scan (OSV over the repo and gitleaks) before any tag, so a
+  finding stops the release instead of leaving it published with its site
+  not deployed.
 - `templates/pages/own-build.yml`: a site's own build job with `site-kit`,
   `docs-build`, `pages-upload` and `pages-deploy`.
 - `static-webapp-ci.yml`: `site_kit` (default `false`) runs `site-kit`
@@ -77,8 +90,8 @@ their [GitHub Releases](https://github.com/skathio/hashira/releases).
   `role="navigation"` gets no second landmark. After its first render the
   element sets `ready` and fires `site-nav:ready`.
 - `theme.js` sets `data-theme-resolved="light|dark"` on `<html>`, following
-  the system while in auto. The docs get the same three-state theme control
-  as the landing, on the shared `theme` key.
+  the system while in auto, and the docs pages set it too. The docs get the
+  same three-state theme control as the landing, on the shared `theme` key.
 - `.github/pages.json`: `accent_dark` (`#rgb`/`#rrggbb`) for dark mode;
   `<site-nav>` sets `--site-accent-dark` from it. `docs-build` prints a
   warning, and still builds, when an accent has less than 4.5:1 contrast

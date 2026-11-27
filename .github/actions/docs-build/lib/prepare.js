@@ -26,9 +26,12 @@ const fail = (msg) => {
 const inside = (real, realRoot) => real === realRoot || real.startsWith(realRoot + path.sep);
 
 // output_dir must be a new folder inside the repo: relative, no '..', not there yet, and with
-// no symlinked parent that would carry the write outside the repo.
+// no symlinked parent that would carry the write outside the repo. It is written to
+// GITHUB_OUTPUT and the step summary as one line, so a control character (a newline above all)
+// would add lines of its own there.
 function checkOutputDir(root, out) {
   if (!out) fail('output_dir is required.');
+  if (/[\x00-\x1f\x7f]/.test(out)) fail(`output_dir must not hold a control character (got: ${JSON.stringify(out)}).`);
   if (path.isAbsolute(out) || out.startsWith('/')) fail(`output_dir must be repo-relative, without a leading '/' (got: '${out}').`);
   if (out.split(/[\\/]/).includes('..')) fail(`output_dir must not contain '..' segments (got: '${out}').`);
   const full = path.join(root, out);

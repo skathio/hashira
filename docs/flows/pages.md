@@ -51,7 +51,7 @@ tests run on every pull request and that deploys on each push to `main`.
 |---|---|---|
 | What runs | `check`, `source`, `scan` (OSV and gitleaks), `gate`, `build` (`install_command`, `site_build_command`, `test_command`, then `site-kit`, `docs-build` and `pages-upload`) and `deploy` (`pages-deploy`), all in the one call | `setup`, `build-and-upload` (`npm ci`, `build_command`, `site-kit` with `site_kit: true`, `pages-upload`), `test` (`test_command`, coverage), `scan-suite` (OSV, gitleaks, actionlint, dependency-review, CodeQL when enabled), `quality-gate` and `passed`; the deploy is the caller's own `deploy` job running `pages-deploy` |
 | Events | `workflow_dispatch` (waits at `gate`), a `workflow_call` from a release with `released: true`, `push` to `main` with `approval: merge`; `pull_request` and any other ref only with `deploy: false` (build, no deploy) | `pull_request` (CI only; `pages-deploy` refuses it), `push` to `main` and `workflow_dispatch` (CI, then the caller's `deploy` job) |
-| Caller grants | `contents: read`, `pages: write`, `id-token: write`; `contents: read` alone with `deploy: false` | `ci` job: `contents: read`, `pull-requests: write`, `security-events: write`, no `id-token`; `deploy` job: `pages: write`, `id-token: write` |
+| Caller grants | `contents: read`, `pages: write`, `id-token: write`, with `deploy: false` too (GitHub checks the grants of every job of a called workflow before the run starts, the skipped `deploy` included) | `ci` job: `contents: read`, `pull-requests: write`, `security-events: write`, no `id-token`; `deploy` job: `pages: write`, `id-token: write` |
 | Where the build runs | `build`, with `contents: read` only | `build-and-upload`, with `contents: read` only |
 | Approval | the `production` environment at `gate`, or the release's own approval | the `github-pages` environment's reviewers, on the caller's `deploy` job |
 
@@ -203,10 +203,24 @@ jobs:
   site:
     permissions:
       contents: read
+      pages: write    # for the skipped deploy job
+      id-token: write # for the skipped deploy job
     uses: skathio/hashira/.github/workflows/pages-site.yml@v3
     with:
       deploy: false
 ```
+
+The caller's job still names all three grants. GitHub checks, before a run
+starts, that the calling job grants what every job of the called workflow
+asks for, the skipped `deploy` job included, and refuses the run otherwise
+("The nested job 'deploy' is requesting ..."). The grants go no further
+than that check: `build`, the one job that runs the pull request's
+commands, declares `contents: read` and gets nothing else, and no job that
+holds `pages` or `id-token` runs. A pull request from a fork or from
+Dependabot gets a read-only token whatever the caller declares, so GitHub
+may refuse to start such a run; for those, build with `site-kit`,
+`docs-build` and `pages-upload` in a job of your own
+([Your own build](#your-own-build)).
 
 A release can build once and deploy that artifact after its approval: a
 `deploy: false` call before the release job builds, checks and uploads the
@@ -221,6 +235,8 @@ jobs:
   site-check:
     permissions:
       contents: read
+      pages: write    # for the skipped deploy job
+      id-token: write # for the skipped deploy job
     uses: skathio/hashira/.github/workflows/pages-site.yml@v3
     with:
       deploy: false
@@ -248,9 +264,13 @@ jobs:
 latest-release` builds the tree of the highest `vX.Y.Z` tag (pre-releases
 and other tags never count) while the workflow runs from `main`, so a page
 fix merged to `main` waits for the next release; with no such tag, nothing
-is built or deployed. Either way `source` writes
+is built or deployed. That tag's commit must be on `main`: a tag pushed onto
+a side branch fails the run instead of being built. Either way `source` writes
 `deploying <ref>@<sha>, N commits after <tag>` to the run's summary, and
-`scan`, `build` and the released tag check all use that commit.
+`scan`, `build` and the released tag check all use that commit. A
+`deploy: false` run writes the same text after `build only (deploy: false),
+not`, and a repo with no `vX.Y.Z` tag gets `no vX.Y.Z tag yet` in place of
+the count.
 
 `install_command` runs before `site_build_command`, and `test_command` after
 it, before the kit and the docs are added; a non-zero exit of either fails
@@ -270,8 +290,11 @@ it through the opt-in `build_token` secret, which pages-site exposes as
       build_token: ${{ secrets.PACKAGES_TOKEN }}
 ```
 
-Pass it only to a build you trust with it: with `deploy: false` on a pull
-request, it reaches that pull request's build.
+Pass it only to a build you trust with it. `install_command` runs earlier in
+the same job and can change what the later steps run (through `GITHUB_ENV` or
+files on disk), so it, and the install scripts of the packages it installs,
+are trusted with the token too. With `deploy: false` on a pull request, the
+token reaches that pull request's build.
 
 ### Your own build
 
@@ -507,8 +530,10 @@ build, before it starts and again after `pre_build_command`. `docs/public/`
 is for files served as they are, so a `.md` there fails too.
 An SVG under `docs/`, `docs/public/` included, or written there by
 `pre_build_command` fails the build, naming the file, when it holds a
-`<script>` element, an `on*` event handler or a `javascript:` URL: a browser
-that opens the file on its own would run it with the docs' origin. Images
+`<script>` element, an `on*` event handler, a `javascript:` URL, a
+`<!DOCTYPE>` or `<!ENTITY>` declaration, a `<foreignObject>`, `<iframe>`,
+`<embed>` or `<object>` element, or a `srcdoc` attribute: a browser that
+opens the file on its own would run it with the docs' origin. Images
 may be PNG, JPEG, GIF, WebP, AVIF, SVG, ICO or BMP, inlined or as files.
 Local search is on, and VitePress's dead-link check fails the build on a
 link to a page that does not exist. The docs and the landing share one
@@ -541,7 +566,8 @@ from the landing page:
   in section 3. It sets `data-theme="light|dark"` on `<html>` for a choice
   (none in auto) and `data-theme-resolved="light|dark"` for the theme the
   page shows, which follows `prefers-color-scheme` while in auto. Style on
-  `data-theme-resolved` when a rule needs the shown theme. Load it in
+  `data-theme-resolved` when a rule needs the shown theme; the docs pages
+  set the same attribute, next to VitePress's `dark` class. Load it in
   `<head>` with no `defer`, `async` or `type=module`, so a stored choice
   applies before first paint.
 - **`site-nav.js`**: the `<site-nav>` header. Give it the same `name`, `nav`
@@ -851,6 +877,7 @@ and stops the build before anything is deployed.
 | `<field>.href must not contain a backslash or a control character` | A header link a browser would read as another host or split. |
 | `docs/index.md exists and would collide with docs/<home_page>` | The home page is published as the docs index. |
 | `output_dir '<dir>' already exists; docs-build never writes over it.` | The docs folder is already there. |
+| `output_dir must not hold a control character` | A newline, tab or other control character in `output_dir`, which would add lines to the step's outputs. |
 | `pre_build_command exited with code <n>.` / `site_build_command exited with code <n>.` | A build command failed. |
 | `'<site_output>/docs' already exists after the site build` | The site holds its own `docs` or `_kit` folder. |
 | `site-kit: '<dest>/_kit' already exists` | The kit would replace the site's own `_kit`. |
@@ -858,6 +885,7 @@ and stops the build before anything is deployed.
 | `pages-site: approval must be 'environment' or 'merge', not '<value>'.` / `source must be 'main' or 'latest-release', not '<value>'.` | An unknown `approval` or `source`, refused before anything is built. |
 | `pages-site: prebuilt deploys an artifact built earlier in the run; with deploy: false there is nothing to do.` | `prebuilt: true` with `deploy: false`. |
 | `pages-site: source: latest-release found no vX.Y.Z tag; nothing is built or deployed.` | No release tag to build. |
+| `pages-site: source: latest-release: <tag> (<sha>) is not on main; only a release tag on main is built.` / `source: latest-release cannot find main ...` | The highest tag sits on a commit `main` does not contain, or the clone has no `main` to check it against. |
 | `scan-suite: <scanner> reported findings or an error` (the `scan` job) | OSV or gitleaks found something; nothing is approved or deployed. Fix it, or turn the scanner off with `scan_disable`. |
 | `pages-site: install_command exited with code <n>.` / `test_command exited with code <n>.` | The install or the tests failed. |
 | `pages-site: <page>: <ref> names no kit file (site-kit copies ...)` / `resolves outside the site` | A page loads a `_kit/` file site-kit does not ship, such as a typo. |

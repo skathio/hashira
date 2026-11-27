@@ -209,6 +209,14 @@ jobs:
           scan_disable: 'codeql,gitleaks,dependency-review,actionlint'
           osv_paths: .github/actions/docs-build/vitepress
           fail_on_findings: 'true'
+      # The scan pages-site.yml's `scan` job runs when this release deploys the site (OSV over the
+      # repo and gitleaks, failing on findings), run here on the same commit before any tag: a
+      # finding stops the release, not only the site deploy that comes after the tags.
+      - name: Run the site deploy's scan before any tag
+        uses: ./.hashira/.github/actions/scan-suite
+        with:
+          scan_disable: 'codeql,dependency-review,actionlint'
+          fail_on_findings: 'true'
       # The docs-build action at the commit being released, the same build pages-site.yml runs
       # for site.yml: it checks .github/pages.json, installs VitePress from the action's lockfile
       # and builds with the dead-link check on.

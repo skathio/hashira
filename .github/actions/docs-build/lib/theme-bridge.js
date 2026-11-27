@@ -11,13 +11,18 @@
 // copies the choice to VitePress's key, which VitePress applies from then on. Every storage
 // access is guarded, so with storage blocked the docs follow the system and nothing throws. It replaces VitePress's own
 // check-dark-mode script, which reads storage unguarded (config.mts removes it).
+// It also sets data-theme-resolved="light|dark" on <html>, as the landing's theme.js does, and
+// keeps it in step with the dark class, which VitePress moves on a press of the theme control
+// and, in auto, on a system theme change.
 const themeFromLanding = [
   ';(function(){var r=document.documentElement,t=null;',
   "try{t=localStorage.getItem('theme')}catch(e){}",
   "var m=t==='light'||t==='dark'?t:'auto';",
   "try{localStorage.setItem('vitepress-theme-appearance',m)}catch(e){}",
   "var d=m==='auto'?window.matchMedia('(prefers-color-scheme: dark)').matches:m==='dark';",
-  "r.classList.toggle('dark',d)})()",
+  "r.classList.toggle('dark',d);",
+  "function s(){r.setAttribute('data-theme-resolved',r.classList.contains('dark')?'dark':'light')}",
+  "s();if(window.MutationObserver)new MutationObserver(s).observe(r,{attributes:true,attributeFilter:['class']})})()",
 ].join('');
 
 // VitePress's own appearance script, which the build drops from every page.
