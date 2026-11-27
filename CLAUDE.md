@@ -122,7 +122,7 @@ GitHub Actions.
 
 ## CI
 
-`_self-ci.yml` runs on every pull request and every push to main, 63 jobs: actionlint, the unit tests and shape
+`_self-ci.yml` runs on every pull request and every push to main, 64 jobs: actionlint, the unit tests and shape
 lints above, hashira's own site build and its tests (`hashira-site`), the release checks (`release-logic-unit-tests`,
 `release-lint`, `release-lint-self-test`), and smoke jobs that run the composite actions against fixtures
 (`tests/pages-fixture`, `tests/run-tests-dotnet`, `tests/npm-release/dry-run-fixture`). Every job must be green
