@@ -11,7 +11,9 @@ and every composite action (`.github/actions/<name>/action.yml`) must have a
       for an optional input, the YAML's default (`` `''` `` for empty, `—`
       for a required input);
   (b) an output table (`| Output | ... |`) listing exactly the YAML's
-      outputs;
+      outputs, and, for a workflow that declares `workflow_call` secrets, a
+      secret table (`| Secret | Required | ... |`) listing exactly those,
+      each with the YAML's required flag;
   (c) a `uses: skathio/hashira/.github/<workflows|actions>/<name>@<ref>`
       snippet whose ref is not `main`.
 
@@ -55,7 +57,7 @@ def workflow_call(doc):
 
 
 def entries(root):
-    """(name, kind, inputs, outputs) for every reusable workflow and action."""
+    """(name, kind, inputs, outputs, secrets) for every reusable workflow and action."""
     workflows = [(os.path.basename(path), workflow_call(load(path)))
                  for path in sorted(glob.glob(os.path.join(root, ".github", "workflows", "*.yml")))]
     actions = [(os.path.basename(os.path.dirname(path)), load(path))
@@ -63,7 +65,8 @@ def entries(root):
     found = [(name, "workflows", spec or {}) for name, spec in workflows
              if spec is not None and name not in INTERNAL_WORKFLOWS]
     found += [(name, "actions", spec) for name, spec in actions]
-    return [(name, kind, spec.get("inputs") or {}, spec.get("outputs") or {}) for name, kind, spec in found]
+    return [(name, kind, spec.get("inputs") or {}, spec.get("outputs") or {}, spec.get("secrets") or {})
+            for name, kind, spec in found]
 
 
 def section(lines, name):
@@ -161,16 +164,39 @@ def check_outputs(name, outputs, table):
             + [f"{name}: catalog output `{key}` is not an output in the YAML" for key in shown if key not in outputs])
 
 
-def check_entry(lines, name, kind, inputs, outputs):
+def secret_required_problem(label, spec, row, req):
+    """The problem with a secret row's Required cell, or None."""
+    expected = "yes" if (spec or {}).get("required") else "no"
+    shown = row[req] if len(row) > req else ""
+    return None if shown.lower() == expected else f"{label}: secret Required shows {shown!r}, the YAML says {expected}"
+
+
+def check_secrets(name, secrets, table):
+    if table is None:
+        return [] if not secrets else [f"{name}: no `| Secret | Required | ... |` table"]
+    header, rows = table
+    shown = {unquote(row[0]): row for row in rows}
+    problems = ([f"{name}: secret `{key}` is in the YAML but not in the catalog" for key in secrets if key not in shown]
+                + [f"{name}: catalog secret `{key}` is not a secret in the YAML" for key in shown if key not in secrets])
+    if "required" not in header:
+        return problems + [f"{name}: the secret table has no Required column"]
+    req = header.index("required")
+    found = (secret_required_problem(f"{name}.{key}", secrets[key], shown[key], req) for key in secrets if key in shown)
+    return problems + [p for p in found if p]
+
+
+def check_entry(lines, name, kind, inputs, outputs, secrets):
     body = section(lines, name)
     if body is None:
         return [f"{name}: no `### {name}` section in docs/catalog.md"]
     found = tables(body)
     input_table = next((t for t in found if "required" in t[0] and "default" in t[0]), None)
     output_table = next((t for t in found if t[0] and t[0][0] == "output"), None)
+    secret_table = next((t for t in found if t[0] and t[0][0] == "secret"), None)
     snippet = re.compile(rf"uses:\s*skathio/hashira/\.github/{kind}/{re.escape(name)}@(\S+)")
     refs = [m.group(1) for m in map(snippet.search, body) if m]
-    problems = check_inputs(name, inputs, input_table) + check_outputs(name, outputs, output_table)
+    problems = (check_inputs(name, inputs, input_table) + check_outputs(name, outputs, output_table)
+                + check_secrets(name, secrets, secret_table))
     if not refs:
         problems.append(f"{name}: no `uses: skathio/hashira/.github/{kind}/{name}@<ref>` snippet")
     problems += [f"{name}: snippet pins @main" for ref in refs if ref == "main"]
@@ -199,6 +225,10 @@ def self_test():
         "wrong required": (text.replace("| `version` | yes | — |", "| `version` | no | — |", 1), "version: Required shows"),
         "output removed": (text.replace("| `page_url` |", "| `page_urls` |", 1), "output `page_url` is in the YAML"),
         "section removed": (text.replace("### quality-gate\n", "### quality gate\n", 1), "no `### quality-gate` section"),
+        "secret row removed": (text.replace("| `build_token` | no |", "| `build_tokens` | no |", 1),
+                               "secret `build_token` is in the YAML"),
+        "secret required flag": (text.replace("| `build_token` | no |", "| `build_token` | yes |", 1),
+                                 "build_token: secret Required shows"),
         "snippet at main": (text.replace("actions/scan-suite@v3", "actions/scan-suite@main", 1), "snippet pins @main"),
     }
     failures = []

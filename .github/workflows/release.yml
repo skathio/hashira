@@ -7,8 +7,9 @@
 #           for main's HEAD that is not green, a frozen major, templates that pin another major,
 #           and a release tag already on another commit. The version comes from hashira's own
 #           version-resolver; the decisions live in tests/release/lib/release.js, unit-tested.
-#   docs    read only, no secrets: it runs third-party npm code. It builds the docs with the
-#           docs-build action, so a broken docs build stops the release before any tag is pushed.
+#   docs    read only, no secrets: it runs third-party npm code. It runs OSV over docs-build's
+#           VitePress lockfile and builds the docs with the docs-build action, so a known
+#           vulnerability or a broken docs build stops the release before any tag is pushed.
 #   publish the one job in `production` (owner approval). It alone mints the release App's token,
 #           scoped to skathio/hashira, and pushes with it. The `release-tags` ruleset lets only
 #           that App write v* tags.
@@ -192,6 +193,22 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: '24'
+      # OSV over docs-build's VitePress lockfile, failing on findings, before anything is
+      # published: every consumer's docs build installs exactly that tree. scan-suite's scanners
+      # are referenced from .hashira/, so hashira is checked out there at the same commit.
+      - name: Checkout hashira into .hashira for scan-suite
+        # actions/checkout v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ needs.check.outputs.sha }}
+          path: .hashira
+          persist-credentials: false
+      - name: Run OSV over the VitePress lockfile
+        uses: ./.hashira/.github/actions/scan-suite
+        with:
+          scan_disable: 'codeql,gitleaks,dependency-review,actionlint'
+          osv_paths: .github/actions/docs-build/vitepress
+          fail_on_findings: 'true'
       # The docs-build action at the commit being released, the same build pages-site.yml runs
       # for site.yml: it checks .github/pages.json, installs VitePress from the action's lockfile
       # and builds with the dead-link check on.

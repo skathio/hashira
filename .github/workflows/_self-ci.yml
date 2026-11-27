@@ -386,6 +386,9 @@ jobs:
     # site build or copy, site-kit's real copy step and deploy's latest-release
     # check against a local git repo. Plus the shape lints it must keep, the released-approval
     # helper's decisions, and the rule that no job running a caller's code holds id-token or pages.
+    # Then the features (scan before gate, deploy: false, prebuilt, approval, source, the build
+    # secret, the kit-reference check) run the same way, plus one docs-build run through cli.js,
+    # which installs VitePress from its lockfile (network once).
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -401,7 +404,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          node --test tests/pages-site/pages-site-rules.test.js tests/pages-site/released-approval.test.js tests/pages-site/grants-and-approval.test.js
+          node --test tests/pages-site/pages-site-rules.test.js tests/pages-site/released-approval.test.js tests/pages-site/grants-and-approval.test.js tests/pages-site/kit-refs.test.js tests/pages-site/pages-site-features.test.js
 
   release-logic-unit-tests:
     name: release-logic-unit-tests
@@ -608,6 +611,15 @@ jobs:
           echo "${SUMMARY}" | grep -P '^gitleaks\tran\t'
           # dependency-review will be skipped (not a PR event) on push.
           echo "${SUMMARY}" | grep -P '^dependency-review\t(ran|skipped)\t'
+      # OSV over docs-build's VitePress lockfile, failing on findings: every consumer's docs
+      # build installs exactly that tree, so a known vulnerability in it fails this repo's CI
+      # before it ships. release.yml's docs job runs the same scan before publish.
+      - name: Run OSV over the VitePress lockfile, failing on findings
+        uses: ./.hashira/.github/actions/scan-suite
+        with:
+          scan_disable: 'codeql,gitleaks,dependency-review,actionlint'
+          osv_paths: .github/actions/docs-build/vitepress
+          fail_on_findings: 'true'
 
   scan-suite-override:
     name: scan-suite-override

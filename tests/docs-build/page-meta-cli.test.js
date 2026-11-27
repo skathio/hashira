@@ -17,7 +17,7 @@ const { spawnSync } = require('node:child_process');
 
 const LIB = path.resolve(__dirname, '..', '..', '.github', 'actions', 'docs-build', 'lib');
 const { siteOrigin, siteDescription, pagePath, pageHead } = require(path.join(LIB, 'page-meta'));
-const { parseArgs, originRepo } = require(path.join(LIB, 'cli'));
+const { parseArgs, originRepo, toolchainSummary } = require(path.join(LIB, 'cli'));
 const { svgProblems, checkBuiltPage } = require(path.join(LIB, 'html-safety'));
 const { missingAnchors } = require(path.join(LIB, 'links'));
 
@@ -138,6 +138,30 @@ test('originRepo reads owner/name from a github.com origin remote, and null othe
       spawnSync('git', ['remote', 'add', 'origin', url], { cwd: dir });
       assert.equal(originRepo(dir), repo, url);
     }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ---------- cli.js: the toolchain line of the step summary ----------
+
+test('toolchainSummary names the lockfile\'s VitePress version and the lockfile\'s sha256', () => {
+  const lock = path.join(LIB, '..', 'vitepress', 'package-lock.json');
+  const bytes = fs.readFileSync(lock);
+  const line = toolchainSummary();
+  assert.ok(line.includes(`VitePress ${JSON.parse(bytes).packages['node_modules/vitepress'].version}`), line);
+  assert.ok(line.includes(require('node:crypto').createHash('sha256').update(bytes).digest('hex')), line);
+});
+
+test('toolchainSummary says unknown for a lockfile with no VitePress, and fails on one that is not JSON', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'docs-cli-lock-'));
+  try {
+    const empty = path.join(dir, 'empty.json');
+    fs.writeFileSync(empty, '{"packages":{}}');
+    assert.match(toolchainSummary(empty), /VitePress unknown, .*sha256 [0-9a-f]{64}/);
+    const broken = path.join(dir, 'broken.json');
+    fs.writeFileSync(broken, 'not json');
+    assert.throws(() => toolchainSummary(broken), SyntaxError);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

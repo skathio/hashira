@@ -14,6 +14,7 @@
 
 'use strict';
 
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
@@ -69,6 +70,15 @@ function publishSite(root, work, out) {
   fs.cpSync(path.join(work, 'dist'), full, { recursive: true });
 }
 
+// What the build installs, for the step summary: the VitePress version the action's lockfile
+// pins and the lockfile's sha256, so a run says exactly which toolchain built the docs.
+function toolchainSummary(lockfile = path.join(__dirname, '..', 'vitepress', 'package-lock.json')) {
+  const bytes = fs.readFileSync(lockfile);
+  const version = JSON.parse(bytes.toString('utf8')).packages?.['node_modules/vitepress']?.version ?? 'unknown';
+  const sha256 = crypto.createHash('sha256').update(bytes).digest('hex');
+  return `docs-build: VitePress ${version}, installed from vitepress/package-lock.json (sha256 ${sha256})\n`;
+}
+
 function build(root, { out, preBuild }) {
   const { work, stage, warnings } = prepare(root, out);
   for (const w of warnings) process.stdout.write(`::warning::${w}\n`);
@@ -76,6 +86,7 @@ function build(root, { out, preBuild }) {
   if (preBuild) run('pre_build_command', 'bash', ['-eo', 'pipefail', '-c', preBuild], { cwd: root, env: { ...process.env, DOCS_STAGE: stage } });
   const vitepress = path.join(work, 'vitepress');
   run('npm ci', 'npm', NPM_CI, { cwd: vitepress });
+  if (process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, toolchainSummary());
   run('VitePress', process.execPath, [path.join(vitepress, 'node_modules', 'vitepress', 'bin', 'vitepress.js'), 'build', vitepress], { cwd: vitepress });
   publishSite(root, work, out);
   if (process.env.GITHUB_OUTPUT) fs.appendFileSync(process.env.GITHUB_OUTPUT, `output_dir=${out}\n`);
@@ -108,4 +119,4 @@ function main(argv) {
 
 if (require.main === module) main(process.argv.slice(2));
 
-module.exports = { parseArgs, originRepo, main, NPM_CI };
+module.exports = { parseArgs, originRepo, main, toolchainSummary, NPM_CI };

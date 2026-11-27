@@ -30,11 +30,15 @@ tests on every pull request, see the [static site flow](static-webapp.md).
   on GitHub (no front matter, no link edits), described by
   `.github/pages.json`. It is served at `https://<owner>.github.io/<repo>/docs/`.
 
-The jobs run `check` -> `gate` -> `build` -> `deploy`. `check` refuses any
-ref but `main` before anyone is asked to approve, `gate` waits for the
-`production` environment's approval, `build` holds only `contents: read`
-and runs the build commands, and `deploy` alone holds `pages: write` and
-`id-token: write`, in the `github-pages` environment, one deploy at a time.
+The jobs run `check` -> `source` -> `scan` -> `gate` -> `build` -> `deploy`.
+`check` checks the inputs and refuses any ref but `main` before anyone is
+asked to approve, `source` picks the commit to build and writes
+`deploying <ref>@<sha>, N commits after <tag>` to the step summary, `scan`
+runs OSV and gitleaks on that commit (read only, failing on findings by
+default), `gate` waits for the `production` environment's approval, `build`
+holds only `contents: read` and runs the install, build and test commands,
+and `deploy` alone holds `pages: write` and `id-token: write`, in the
+`github-pages` environment, one deploy at a time.
 
 ## 2. Caller workflow
 
@@ -137,6 +141,132 @@ jobs:
 The release workflow calls it with `uses: ./.github/workflows/site.yml`,
 `needs:` its `publish` job (in the `production` environment) and
 `released: true`.
+
+### Approval on merge
+
+`approval: merge` deploys `main` with no `gate`, so a merged pull request is
+the approval: set it when every change reaches `main` through reviewed pull
+requests and you want each merge live without a second click. It skips
+`gate` only on `push`, `schedule` and `repository_dispatch` runs of
+`refs/heads/main`, events that start from what is already on `main`. A
+`workflow_dispatch` run, which anyone with write access can start on any
+commit of `main`, still waits at `gate`, as does every other event, and an
+unknown `approval` value is refused. The trade-off: with `merge`, whoever
+can merge to `main` (or push to it, if branch protection allows) can
+deploy, and the `production` reviewers no longer see each deploy. The
+`scan` job and the `github-pages` environment's branch policy still apply.
+
+```yaml
+on:
+  push:
+    branches: [main]
+
+jobs:
+  site:
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    uses: skathio/hashira/.github/workflows/pages-site.yml@v3
+    with:
+      approval: merge
+```
+
+### Build only, in pull requests and release pre-checks
+
+`deploy: false` runs `check`, `source`, `scan` and `build` on any ref and
+event, pull requests included: there is no main-only check, no `gate` and
+no deploy. The build adds the kit and the docs, checks the kit references
+and uploads the artifact, so a pull request sees the same build, scan and
+checks the deploy will run:
+
+```yaml
+on:
+  pull_request:
+
+jobs:
+  site:
+    permissions:
+      contents: read
+    uses: skathio/hashira/.github/workflows/pages-site.yml@v3
+    with:
+      deploy: false
+```
+
+A release can build once and deploy that artifact after its approval: a
+`deploy: false` call before the release job builds, checks and uploads the
+site, and a second call with `prebuilt: true` after it deploys the
+artifact named `artifact_name` from the same run, without building again
+(`site-kit`, `docs-build` and `pages-upload` do not run). Give the two
+calls the same `artifact_name`, and make the second call wait for the first
+through `needs:`:
+
+```yaml
+jobs:
+  site-check:
+    permissions:
+      contents: read
+    uses: skathio/hashira/.github/workflows/pages-site.yml@v3
+    with:
+      deploy: false
+      artifact_name: site
+  publish:
+    needs: site-check
+    environment: production
+    # ... tags and the release
+  site:
+    needs: publish
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    uses: skathio/hashira/.github/workflows/pages-site.yml@v3
+    with:
+      released: true
+      prebuilt: true
+      artifact_name: site
+```
+
+### What is built
+
+`source: main` (the default) builds the run's own commit. `source:
+latest-release` builds the tree of the highest `vX.Y.Z` tag (pre-releases
+and other tags never count) while the workflow runs from `main`, so a page
+fix merged to `main` waits for the next release; with no such tag, nothing
+is built or deployed. Either way `source` writes
+`deploying <ref>@<sha>, N commits after <tag>` to the run's summary, and
+`scan`, `build` and the released tag check all use that commit.
+
+`install_command` runs before `site_build_command`, and `test_command` after
+it, before the kit and the docs are added; a non-zero exit of either fails
+the build. `coverage_path` names the coverage file `test_command` writes,
+which coverage-report adds to the build's summary.
+
+A build that needs a token, such as one that reads a private package, gets
+it through the opt-in `build_token` secret, which pages-site exposes as
+`BUILD_TOKEN` to the `site_build_command` step only, not to
+`install_command`, `test_command` or the docs build:
+
+```yaml
+    uses: skathio/hashira/.github/workflows/pages-site.yml@v3
+    with:
+      site_build_command: npm run build
+    secrets:
+      build_token: ${{ secrets.PACKAGES_TOKEN }}
+```
+
+Pass it only to a build you trust with it: with `deploy: false` on a pull
+request, it reaches that pull request's build.
+
+### Your own build
+
+When `pages-site.yml` does not fit your build, keep your own job and add
+hashira's pieces to it: [`templates/pages/own-build.yml`](../../templates/pages/own-build.yml)
+builds the site, adds the kit with `site-kit` (and the docs with
+`docs-build`), uploads with `pages-upload` and deploys with `pages-deploy`
+in the `github-pages` environment. You then own what `pages-site.yml` does
+for you: the main-only check, the approval, the scan and the kit-reference
+check.
 
 Pin `@v3` for the rolling major or a full 40-character commit SHA for a
 reproducible build. The kit and docs-build come from the same commit as the
@@ -443,8 +573,19 @@ fails rather than write over either.
 | `docs_pre_build_command` | string | `''` | Shell command run before VitePress, with `DOCS_STAGE` set to the staged docs folder. Trusted input. |
 | `node_version` | string | `24` | Node version for `setup-node`. |
 | `dotnet_version` | string | `''` | .NET SDK version, for a build that needs it. Empty installs none. |
+| `install_command` | string | `''` | Shell command run from the repo root before `site_build_command`, such as `npm ci`. Trusted input. |
+| `test_command` | string | `''` | Shell command run after `site_build_command`, before the kit and the docs are added. A non-zero exit fails the build. Trusted input. |
+| `coverage_path` | string | `''` | Coverage file `test_command` writes, added to the build's summary by coverage-report. Empty reports none. |
+| `deploy` | boolean | `true` | `false` builds, checks and uploads on any ref and event, pull requests included, with no main-only check, no `gate` and no deploy. |
+| `prebuilt` | boolean | `false` | Deploy the `artifact_name` artifact an earlier job of the run uploaded, without building. Needs `deploy: true`. |
+| `artifact_name` | string | `github-pages` | Name of the Pages artifact the build uploads and the deploy deploys. |
+| `approval` | string | `environment` | `environment` waits for `production` at `gate`; `merge` deploys `main` with no `gate` on push, schedule and repository_dispatch runs only. |
+| `source` | string | `main` | `main` builds the run's commit; `latest-release` builds the highest `vX.Y.Z` tag's tree. |
+| `scan_disable` | string | `codeql,dependency-review,actionlint` | Comma-separated scan-suite scans the `scan` job skips. CodeQL never runs there: it needs `security-events: write`. |
+| `scan_fail_on_findings` | boolean | `true` | Fail `scan`, before `gate`, on findings or a scanner error. `false` reports them and goes on. |
 
-`pages-site.yml` has no outputs and takes no secrets.
+`pages-site.yml` has no outputs. It takes one optional secret, `build_token`,
+exposed as `BUILD_TOKEN` to the `site_build_command` step only.
 
 ### `docs-build` inputs and outputs
 
@@ -470,7 +611,8 @@ fails rather than write over either.
 ### On their own
 
 Build the site in a job of your own, then add the kit and the docs before
-the upload:
+the upload (the whole workflow is
+[`templates/pages/own-build.yml`](../../templates/pages/own-build.yml)):
 
 ```yaml
       - uses: skathio/hashira/.github/actions/site-kit@v3
@@ -490,7 +632,9 @@ the upload:
 
 | Job | Grants | Why |
 |-----|--------|-----|
-| `check`, `gate` | none | They only read `github.ref` and wait for the approval. |
+| `check`, `gate` | none | They only read the inputs and `github.ref`, and wait for the approval. |
+| `source` | `contents: read` | A full-history checkout, for the tags and the commits since the latest one. |
+| `scan` | `contents: read` | Checkout of the commit being deployed, which OSV and gitleaks read. |
 | `build` | `contents: read` | Checkout. It runs the build commands and npm packages, so it holds nothing else. |
 | `deploy` | `pages: write`, `id-token: write` | `actions/deploy-pages` and its OIDC token. |
 
@@ -498,11 +642,13 @@ The caller's job grants all three; a called workflow's jobs get no more.
 
 ## 7. Trusted input
 
-`site_build_command`, `docs_pre_build_command` and `docs-build`'s
-`pre_build_command` run as shell. They are **trusted input**: write them
-in your workflow file, and never pass them values from PR titles, issue
-bodies, branch names or other context someone outside the repo controls.
-They run only in `build`, which holds `contents: read` and no secrets.
+`install_command`, `site_build_command`, `test_command`,
+`docs_pre_build_command` and `docs-build`'s `pre_build_command` run as
+shell. They are **trusted input**: write them in your workflow file, and
+never pass them values from PR titles, issue bodies, branch names or other
+context someone outside the repo controls. They run only in `build`, which
+holds `contents: read`, and only `site_build_command`'s step sees the
+`build_token` secret.
 
 `.github/pages.json` is the opposite: a pull request can change it, so it
 never reaches a shell, every path in it must stay inside the repo, and an
@@ -553,7 +699,13 @@ and stops the build before anything is deployed.
 | `pre_build_command exited with code <n>.` / `site_build_command exited with code <n>.` | A build command failed. |
 | `'<site_output>/docs' already exists after the site build` | The site holds its own `docs` or `_kit` folder. |
 | `site-kit: '<dest>/_kit' already exists` | The kit would replace the site's own `_kit`. |
-| `pages-site: deploys main only; this run is on <ref>.` | A run on another branch, refused before the approval. |
+| `pages-site: deploys main only; this run is on <ref>.` | A run on another branch, refused before the approval. Use `deploy: false` to build without deploying. |
+| `pages-site: approval must be 'environment' or 'merge', not '<value>'.` / `source must be 'main' or 'latest-release', not '<value>'.` | An unknown `approval` or `source`, refused before anything is built. |
+| `pages-site: prebuilt deploys an artifact built earlier in the run; with deploy: false there is nothing to do.` | `prebuilt: true` with `deploy: false`. |
+| `pages-site: source: latest-release found no vX.Y.Z tag; nothing is built or deployed.` | No release tag to build. |
+| `scan-suite: <scanner> reported findings or an error` (the `scan` job) | OSV or gitleaks found something; nothing is approved or deployed. Fix it, or turn the scanner off with `scan_disable`. |
+| `pages-site: install_command exited with code <n>.` / `test_command exited with code <n>.` | The install or the tests failed. |
+| `pages-site: <page>: <ref> names no kit file (site-kit copies ...)` / `resolves outside the site` | A page loads a `_kit/` file site-kit does not ship, such as a typo. |
 | `pages-site: released refused: this run has no approved review for the 'production' environment. ...` | `released: true` in a run with no approved `production` review: a hand or dispatched run that set it, or a release job outside the `production` environment or before its approval. Run with `released: false` to wait at `gate`. |
 | `pages-site: released refused: could not read <url> (...)` | `released: true`, and the run's approvals could not be read, with the job's token or without one: a private repo, or GitHub unreachable. Nothing is deployed. |
 | `pages-site: could not fetch skathio/hashira at <sha>, so released: true cannot be checked.` | `released: true`, and hashira's approval check could not be fetched. |

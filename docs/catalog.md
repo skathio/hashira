@@ -109,9 +109,9 @@ jobs:
 
 ### pages-site.yml
 
-Builds and deploys a project's GitHub Pages site: the static site (`site_dir` copied as-is, or built by `site_build_command` into `site_output`), the shared site kit in `_kit/` (`site-kit`) and, unless `docs` is false, the docs from `docs/` and `.github/pages.json` in `docs/` (`docs-build`), uploaded with `pages-upload` and deployed with `pages-deploy`. Jobs `check` -> `gate` -> `build` -> `deploy`: `check` refuses any ref but `main` before the approval, `gate` waits for the `production` environment's approval (skipped when `released` is true, which `check` accepts only when this run already holds an approved `production` review), `build` refuses any ref but `main` again and holds only `contents: read`, and `deploy` holds only `pages: write` and `id-token: write` in `github-pages`, one deploy at a time. A released run deploys only while its commit holds the highest `vX.Y.Z` tag. `build` fails when `<site_output>/docs` or `<site_output>/_kit` already exists after the site build.
+Builds and deploys a project's GitHub Pages site: the static site (`site_dir` copied as-is, or built by `site_build_command` into `site_output`, after `install_command` and before `test_command`), the shared site kit in `_kit/` (`site-kit`) and, unless `docs` is false, the docs from `docs/` and `.github/pages.json` in `docs/` (`docs-build`), uploaded with `pages-upload` and deployed with `pages-deploy`. Jobs `check` -> `source` -> `scan` -> `gate` -> `build` -> `deploy`: `check` checks the inputs and refuses any ref but `main` before the approval (unless `deploy` is false), `source` picks the commit (`source: main` or `latest-release`) and writes `deploying <ref>@<sha>, N commits after <tag>` to the summary, `scan` runs scan-suite's OSV and gitleaks on that commit with read grants only and fails closed by default, `gate` waits for the `production` environment's approval (skipped when `released` is true, which `check` accepts only when this run already holds an approved `production` review, for `deploy: false`, and for `approval: merge` on a push, schedule or repository_dispatch run of `main`), `build` refuses any ref but `main` again, holds only `contents: read` and checks that the site's `_kit/` references name kit files, and `deploy` holds only `pages: write` and `id-token: write` in `github-pages`, one deploy at a time. With `prebuilt`, `build` is skipped and `deploy` deploys the `artifact_name` artifact an earlier job of the run uploaded. A released run deploys only while its commit holds the highest `vX.Y.Z` tag. `build` fails when `<site_output>/docs` or `<site_output>/_kit` already exists after the site build.
 
-**Use it directly**: As the job that publishes a project page, called by hand (`workflow_dispatch`) or from a release workflow after its tags with `released: true`. The caller grants `contents: read`, `pages: write` and `id-token: write`. `site_build_command` and `docs_pre_build_command` are trusted input: they run as shell, so never pass them values from PR titles, issue bodies, branch names or other outside context.
+**Use it directly**: As the job that publishes a project page, called by hand (`workflow_dispatch`), on merge (`approval: merge`) or from a release workflow after its tags with `released: true`, and with `deploy: false` in pull request CI. The caller grants `contents: read`, `pages: write` and `id-token: write` (`contents: read` alone for `deploy: false`). `install_command`, `site_build_command`, `test_command` and `docs_pre_build_command` are trusted input: they run as shell, so never pass them values from PR titles, issue bodies, branch names or other outside context. The optional secret `build_token` reaches the `site_build_command` step only, as `BUILD_TOKEN`.
 
 | Input | Required | Default |
 |-------|----------|---------|
@@ -123,6 +123,20 @@ Builds and deploys a project's GitHub Pages site: the static site (`site_dir` co
 | `docs_pre_build_command` | no | `''` |
 | `node_version` | no | `24` |
 | `dotnet_version` | no | `''` |
+| `install_command` | no | `''` |
+| `test_command` | no | `''` |
+| `coverage_path` | no | `''` |
+| `deploy` | no | `true` |
+| `prebuilt` | no | `false` |
+| `artifact_name` | no | `github-pages` |
+| `approval` | no | `environment` |
+| `source` | no | `main` |
+| `scan_disable` | no | `codeql,dependency-review,actionlint` |
+| `scan_fail_on_findings` | no | `true` |
+
+| Secret | Required | Meaning |
+|--------|----------|---------|
+| `build_token` | no | Exposed as `BUILD_TOKEN` to the `site_build_command` step only. |
 
 An empty `site_output` means `site_dir`.
 
