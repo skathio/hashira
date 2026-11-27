@@ -264,13 +264,28 @@ from the landing page:
   `<head>` with no `defer`, `async` or `type=module`, so a stored choice
   applies before first paint.
 - **`site-nav.js`**: the `<site-nav>` header. Give it the same `name`, `nav`
-  and `home_link` as `pages.json`, and `docs="docs/"` for the Docs link:
+  and `home_link` as `pages.json`, and `docs="docs/"` for the Docs link. The
+  recommended markup makes the element itself the navigation landmark, so it
+  renders no second one inside:
 
 ```html
-<site-nav name="hashira" logo="mark.svg" docs="docs/">
+<site-nav role="navigation" aria-label="Site" name="hashira" logo="mark.svg" docs="docs/">
   <script type="application/json">{"nav":[{"label":"Flows","href":"#flows"}],"home_link":{"label":"← skathio","href":"https://skathio.github.io/"}}</script>
 </site-nav>
 ```
+
+The brand stays on the left, and Docs, the extras, `home_link` and the theme
+toggle stay on the right at every width. When the `nav` links do not fit the
+element's own width, and always when the element is narrower than 640px, they
+fold behind a menu button (`aria-expanded`; Escape closes it). The page's own
+children of `<site-nav>` are extras, shown at every width, except two named
+slots: a `slot="brand"` child replaces the logo and name inside the brand
+link, and a `slot="fallback"` child shows only until `site-nav.js` defines the
+element (`tokens.css` reserves the bar's height until then). A nav or Docs
+link to the current page gets `aria-current="page"`; add the `scrollspy`
+attribute to mark the `#section` link in view with `aria-current="location"`.
+After its first render the element sets a `ready` attribute and fires
+`site-nav:ready`, which screenshot tools can wait on.
 
 The site must not hold a `_kit` or a `docs` folder of its own: the build
 fails rather than write over either.

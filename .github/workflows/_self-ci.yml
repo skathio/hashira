@@ -342,7 +342,9 @@ jobs:
     name: site-kit-unit-tests
     # Runs the site-kit action's copy step with bash (reading action.yml with
     # PyYAML, preinstalled on the runner) and loads kit/theme.js and
-    # kit/site-nav.js into a small fake browser.
+    # kit/site-nav.js into a small fake browser. site-nav-layout.test.js lays
+    # <site-nav> out in a real headless Chrome (widths, overflow, ::slotted,
+    # the accessibility tree), using the google-chrome ubuntu-latest ships.
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -359,7 +361,8 @@ jobs:
         # Files are listed by name: Node 20's `node --test` takes no globs.
         run: |
           set -euo pipefail
-          node --test tests/site-kit/site-kit-rules.test.js tests/site-kit/site-kit-action-edges.test.js
+          node --test tests/site-kit/site-kit-rules.test.js tests/site-kit/site-kit-action-edges.test.js \
+            tests/site-kit/site-nav-layout.test.js
 
   pages-site-workflow:
     name: pages-site-workflow
