@@ -61,6 +61,7 @@ DOCUMENTED_INPUTS = [
     "summary_comment",
     "quality_gate",
     "quality_level",
+    "site_kit",
 ]
 
 # Per-job permission requirements (subset checks — the job MAY have

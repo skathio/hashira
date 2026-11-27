@@ -157,6 +157,7 @@ on.
 | `summary_comment` | boolean | `true` | Keep one CI summary comment on the pull request, written by the `passed` job. `false` writes the same summary to the `passed` job's summary instead and posts no comment. The `passed` job keeps `pull-requests: write` either way, so the caller's grant does not change. |
 | `quality_gate` | boolean | `true` | Run SoMi's quality gate (the `quality-gate` job) on what a pull request changes. `false` skips the job. The gate runs only on `pull_request` events; on `push` and `workflow_dispatch` it passes and writes "skipped: quality gate runs on pull requests" to the job summary. |
 | `quality_level` | string | `'strict'` | SoMi quality level for the gate: exactly `'strict'`, `'standard'` or `'relaxed'`. Any other value, including `''`, fails the `setup` job with an error naming the three. |
+| `site_kit` | boolean | `false` | Copy hashira's shared site kit (`tokens.css`, `theme.js` and the `<site-nav>` header) into `<output_dir>/_kit/` after `build_command` and before the upload, as `pages-site.yml` does, so a pull request's artifact holds what production serves. With `output_dir` empty, the kit lands in the autodetected folder. The build fails if the site already holds a `_kit` folder. See [site-kit](pages.md#4-the-landing-page-and-the-site-kit). |
 
 This workflow takes **no secrets** (static webapps build from public
 source; Pages deploy authenticates via OIDC).
@@ -341,6 +342,18 @@ defense-in-depth the npm flow's publish path, the `npm-release` action, recommen
 against). There is currently no consumer-facing input to opt into `--ignore-scripts` here — if
 this matters for your threat model, treat it as a known gap and flag it rather than trying to
 route around it via `build_command` (the automatic install runs regardless, before your command).
+
+### The shared header and theme
+
+A site that loads the skathio project pages' shared header and theme gets
+them from [site-kit](pages.md#4-the-landing-page-and-the-site-kit), which
+copies `tokens.css`, `theme.js` and `site-nav.js` into the site's `_kit/`.
+Set `site_kit: true` so `build-and-upload` adds the kit after
+`build_command`: the artifact a pull request builds then loads the same kit
+files as the deployed site, and a page that names a missing `_kit/` file
+shows it in review. The kit comes from the hashira commit your `uses:` ref
+resolved to. A site that builds and deploys only on release, with no
+framework test job, fits [`pages-site.yml`](pages.md) better.
 
 ## 9. Common failure modes
 

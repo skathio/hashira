@@ -211,6 +211,11 @@ on:
         required: false
         type: string
         default: "strict"
+      site_kit:
+        description: "Copy hashira's site kit (tokens.css, theme.js and <site-nav>) into <output_dir>/_kit/ after build_command, before the upload, as pages-site.yml does, so the pull request's artifact matches the deployed site. Default false; the build fails if the site already holds a _kit folder."
+        required: false
+        type: boolean
+        default: false
     outputs:
       library_sha:
         description: "The skathio/hashira commit this run checked its composite actions out at: the commit this workflow file was called at."
@@ -379,6 +384,33 @@ jobs:
           # pattern established in iter 1.2.
           echo "static-webapp-ci/build-and-upload: running build_command"
           eval "${BUILD_COMMAND}"
+      # site-kit needs the folder pages-upload will package. With output_dir
+      # empty, pick it in pages-upload's own autodetect order, so the kit lands
+      # in the folder that is uploaded.
+      - name: Resolve the site folder for site-kit
+        id: kit_dest
+        if: ${{ inputs.site_kit }}
+        shell: bash
+        env:
+          OUTPUT_DIR: ${{ inputs.output_dir }}
+        run: |
+          set -euo pipefail
+          dest="${OUTPUT_DIR}"
+          if [ -z "${dest}" ]; then
+            for candidate in dist build out public; do
+              if [ -d "${candidate}" ]; then dest="${candidate}"; break; fi
+            done
+          fi
+          if [ -z "${dest}" ]; then
+            echo "::error::static-webapp-ci: site_kit found no site folder after build_command (searched dist, build, out, public). Set output_dir." >&2
+            exit 1
+          fi
+          echo "dest=${dest}" >> "${GITHUB_OUTPUT}"
+      - name: Add the site kit
+        if: ${{ inputs.site_kit }}
+        uses: ./.hashira/.github/actions/site-kit
+        with:
+          dest: ${{ steps.kit_dest.outputs.dest }}
       - name: Upload Pages artifact
         uses: ./.hashira/.github/actions/pages-upload
         with:

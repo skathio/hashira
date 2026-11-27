@@ -96,6 +96,7 @@ CI for a static site on GitHub Pages: build, tests with coverage, the scan suite
 | `summary_comment` | no | `true` |
 | `quality_gate` | no | `true` |
 | `quality_level` | no | `strict` |
+| `site_kit` | no | `false` |
 
 | Output | Meaning |
 |--------|---------|

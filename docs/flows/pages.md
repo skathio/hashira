@@ -40,6 +40,21 @@ holds only `contents: read` and runs the install, build and test commands,
 and `deploy` alone holds `pages: write` and `id-token: write`, in the
 `github-pages` environment, one deploy at a time.
 
+### `pages-site.yml` or `static-webapp-ci.yml`
+
+Both publish a static site to GitHub Pages. `pages-site.yml` suits a
+project page and its docs that deploy after an approval or a release;
+[`static-webapp-ci.yml`](static-webapp.md) suits a framework site whose
+tests run on every pull request and that deploys on each push to `main`.
+
+| | `pages-site.yml` | `static-webapp-ci.yml` |
+|---|---|---|
+| What runs | `check`, `source`, `scan` (OSV and gitleaks), `gate`, `build` (`install_command`, `site_build_command`, `test_command`, then `site-kit`, `docs-build` and `pages-upload`) and `deploy` (`pages-deploy`), all in the one call | `setup`, `build-and-upload` (`npm ci`, `build_command`, `site-kit` with `site_kit: true`, `pages-upload`), `test` (`test_command`, coverage), `scan-suite` (OSV, gitleaks, actionlint, dependency-review, CodeQL when enabled), `quality-gate` and `passed`; the deploy is the caller's own `deploy` job running `pages-deploy` |
+| Events | `workflow_dispatch` (waits at `gate`), a `workflow_call` from a release with `released: true`, `push` to `main` with `approval: merge`; `pull_request` and any other ref only with `deploy: false` (build, no deploy) | `pull_request` (CI only; `pages-deploy` refuses it), `push` to `main` and `workflow_dispatch` (CI, then the caller's `deploy` job) |
+| Caller grants | `contents: read`, `pages: write`, `id-token: write`; `contents: read` alone with `deploy: false` | `ci` job: `contents: read`, `pull-requests: write`, `security-events: write`, no `id-token`; `deploy` job: `pages: write`, `id-token: write` |
+| Where the build runs | `build`, with `contents: read` only | `build-and-upload`, with `contents: read` only |
+| Approval | the `production` environment at `gate`, or the release's own approval | the `github-pages` environment's reviewers, on the caller's `deploy` job |
+
 ## 2. Caller workflow
 
 Before the first run, create the repo's environments under **Settings ->
@@ -503,12 +518,9 @@ not show, then to the system's own theme, then back to auto. So the first
 press always changes what the page shows. In auto the page follows the
 system theme as it changes.
 
-Migrating from a VitePress config of your own: heading ids follow GitHub's
-slug rule here, not VitePress's default slugify. GitHub keeps each run of
-hyphens (`## Hello, World & Co.` is `#hello-world--co`, where VitePress made
-`#hello-world-co`) and keeps accented letters as they are, so check the `#anchors`
-your pages and other sites link to; the anchor warnings name each one on a
-page that no longer matches.
+A repo moving here from a VitePress config of its own should read
+"Migrating from your own VitePress config" (section 9) first: heading ids,
+and so `#anchors`, can change.
 
 ## 4. The landing page and the site kit
 
@@ -558,6 +570,137 @@ After its first render the element sets a `ready` attribute and fires
 
 The site must not hold a `_kit` or a `docs` folder of its own: the build
 fails rather than write over either.
+
+An org-root site, the `<owner>.github.io` repo served at `/`, must reserve
+`_kit` at its root: no page, route or folder of its own named `_kit`, and
+no project repo named `_kit` with Pages on, since GitHub serves that repo at
+`/_kit/` too. The folder name is fixed: `site-kit` has no input to change it.
+
+### The `<site-nav>` reference
+
+**Kit paths.** Each page loads the kit relative to itself. From the root
+page, `index.html`:
+
+```html
+<link rel="stylesheet" href="_kit/tokens.css">
+<script src="_kit/theme.js"></script>
+<script src="_kit/site-nav.js" defer></script>
+<site-nav role="navigation" aria-label="Site" name="hashira" logo="mark.svg" docs="docs/"></site-nav>
+```
+
+From a sub-page, such as `guides/index.html`, go one folder up for the kit,
+the logo, the brand link (`root`) and Docs:
+
+```html
+<link rel="stylesheet" href="../_kit/tokens.css">
+<script src="../_kit/theme.js"></script>
+<script src="../_kit/site-nav.js" defer></script>
+<site-nav role="navigation" aria-label="Site" name="hashira" logo="../mark.svg" root="../" docs="../docs/"></site-nav>
+```
+
+`pages-site.yml`'s build fails when a page names a `_kit/` file that
+`site-kit` does not ship.
+
+**Attributes.** Each attribute has a field of the same name in the JSON
+child and the `config` property:
+
+| Attribute | Value | Default |
+|-----------|-------|---------|
+| `name` | the brand's text | `''` |
+| `logo` | the brand's image URL, `http(s)` or relative | none |
+| `root` | the brand link's href | `./` |
+| `docs` | the Docs link's href; empty, or `true` in the JSON child or `config`, means `docs/` | no Docs link |
+| `nav` | JSON list of `{ "label", "href" }`, as in `pages.json` | `[]` |
+| `home_link` | JSON `{ "label", "href" }`, as in `pages.json` | none |
+| `accent` | `#rgb` or `#rrggbb`, the light-mode accent; sets `--site-accent` on `<html>` | `tokens.css`'s green |
+| `accent_dark` | `#rgb` or `#rrggbb`, the dark-mode accent; sets `--site-accent-dark` on `<html>` | `accent` |
+| `scrollspy` | present or absent (attribute only) | absent |
+
+The element also sets a `ready` attribute itself, after its first render.
+An `href` or `logo` with a scheme other than `http(s)` is dropped, and every
+label is set as text, never as markup.
+
+**Where the values come from.** Three sources, merged field by field:
+attributes win over the `config` property (an object, which a framework such
+as React 19 sets directly), and the property wins over an inline
+`<script type="application/json">` child holding the same field names. A
+field left out of a higher source keeps the lower one's value, so a static
+page can keep `nav` in the JSON child and set `name` as an attribute. A
+`config` set before `site-nav.js` loads is picked up when the element is
+defined.
+
+**Slots.** The element's own children are extras, shown at every width in
+the right group, after Docs. Two named slots change that: a `slot="brand"`
+child replaces the logo and name inside the brand link (the link and its
+`root` href stay the kit's), and a `slot="fallback"` child shows only until
+`site-nav.js` defines the element, and is never slotted after. Give the
+fallback a plain link to the site root, so the page has a way home if the
+script fails to load.
+
+```html
+<site-nav role="navigation" aria-label="Site" docs="docs/">
+  <span slot="brand"><img src="mark.svg" alt="" width="24" height="24"> hashira <small>v3</small></span>
+  <a slot="fallback" href="./">hashira</a>
+  <a href="https://github.com/skathio/hashira">GitHub</a>
+</site-nav>
+```
+
+**Parts.** Style the shadow DOM through these parts, from the page's own
+stylesheet: `brand` (the brand link), `menu` (the menu button), `link` (each
+`nav` link), `docs` (the Docs link), `home` (the `home_link`), `toggle` (the
+theme toggle) and `bar` (the row that holds them all).
+
+```css
+site-nav::part(docs) { border-radius: 6px; }
+site-nav::part(link):hover { text-decoration: underline; }
+```
+
+**CSS variables.** The bar reads `--nav-gap` (space between items),
+`--nav-pad` (the bar's padding) and `--nav-h` (its minimum height) from
+`tokens.css`, which also sets smaller values on phones; set them on
+`site-nav` or `:root` to change them. It reads the theme's `--canvas`,
+`--ink`, `--muted`, `--line`, `--accent` and `--accent-soft`, and from
+`accent` and `accent_dark` it sets `--site-accent` and `--site-accent-dark`
+on `<html>`, from which `tokens.css` derives `--accent` in each mode.
+
+**Accessibility.** The recommended markup,
+`<site-nav role="navigation" aria-label="Site">`, makes the element itself
+the navigation landmark, so it renders a plain bar inside. Without
+`role="navigation"` it renders its own `<nav aria-label="Site">`, so a page
+never gets two. When the links fold, the menu button (labelled "Menu") is a
+disclosure: `aria-expanded` says whether it is open, Enter and Space toggle
+it, Escape closes it and returns focus to the button, and a click outside
+the element or on a link closes it. Every item is a link or a button in
+tab order, with a visible `:focus-visible` outline. A link to the current
+page gets `aria-current="page"`, and with `scrollspy` the `#section` link
+of the section in view gets `aria-current="location"`; both are styled in
+the accent. The theme toggle's `aria-label` is `Theme: <choice>`.
+
+**The theme API.** `theme.js` sets `window.siteTheme`, which `<site-nav>`
+uses for its toggle and a page may use too: `get()` gives the choice
+(`auto`, `light` or `dark`), `set(value)` stores and applies one, `next()`
+steps the cycle, `label(value)`, `word(value)` and `icon(value)` give the
+toggle's texts and its fixed SVG, and `wire(button)` turns a button of the
+page into a toggle. After each change it fires `site-theme` on `document`,
+with the choice in `event.detail.theme`. A page without `<site-nav>` can
+use the `#theme` hook instead: theme.js wires a `<button id="theme">` up as
+a toggle when the page loads, and shows it if it was `hidden`.
+
+**Versioning.** The `<site-nav>` public API is covered by semver
+(semantic versioning): its slots (the default slot, `brand` and `fallback`), its parts,
+its attributes and the `config` property, the `ready` attribute and the
+`site-nav:ready` event, the CSS variables above, `window.siteTheme` and the
+`theme` storage key. So is the bar's box: sticky at the top, its height
+(`--nav-h`), its padding (`--nav-pad`) and its bottom line, which
+`site-nav:not(:defined)` in `tokens.css` reserves. Within v3 these change
+only by addition; a rename, a removal or another bar box waits for v4.
+Colours, spacing between items and the width at which the links fold may
+change in a minor release.
+
+`@v3` gives each v3 release's kit as soon as the `v3` tag moves. To hold the
+kit still, pin `pages-site.yml` (or `site-kit`) to a full 40-character
+commit SHA: the kit is copied from that commit byte for byte, and changes
+only when you move the pin.
 
 ## 5. Inputs and outputs
 
@@ -640,6 +783,18 @@ the upload (the whole workflow is
 
 The caller's job grants all three; a called workflow's jobs get no more.
 
+`deploy` runs `pages-deploy` from a SHA pin of its own, not from the commit
+the workflow was called at: it holds no `contents` grant, so it cannot
+check hashira out at `job.workflow_sha` as the other jobs do, and a `uses:`
+ref cannot be an expression. The pin names a hashira release commit with
+its tag as the comment (today `@2c8d5252...  # v3.0.0`), so `pages-deploy`
+stays on that release while the rest of the workflow follows your `@v3` or
+SHA. It is updated only when `pages-deploy` itself changes: a hashira pull
+request moves the SHA and its comment together to the release that holds
+the change, and `tests/shape-lints/pin-comments.py` checks that the comment
+names a tag on that SHA. You do not update it: it moves with the
+`pages-site.yml` you pin.
+
 ## 7. Trusted input
 
 `install_command`, `site_build_command`, `test_command`,
@@ -711,3 +866,49 @@ and stops the build before anything is deployed.
 | `pages-site: could not fetch skathio/hashira at <sha>, so released: true cannot be checked.` | `released: true`, and hashira's approval check could not be fetched. |
 | `the latest release <tag> is on <sha>, not <sha>; this run is stale.` | A released run of an older release. |
 | `pages-site: could not read this repo's tags; released: true needs a public repo.` | `released: true` in a private repo, or GitHub unreachable. |
+
+## 9. Migrating from your own VitePress config
+
+A repo that built its docs with a VitePress config of its own (a
+`docs-site/` or `docs/.vitepress/` folder) moves to `.github/pages.json`
+and `docs-build` like this:
+
+- **Anchors.** After the migration, heading ids follow GitHub's slug rule,
+  not VitePress's default slugify. GitHub keeps each run of hyphens (`## Hello, World & Co.`
+  is `#hello-world--co`, where VitePress made `#hello-world-co`) and keeps
+  accented letters as they are, so check the `#anchors` your pages and other
+  sites link to. The build's anchor warnings name each in-page `#anchor`
+  that no longer matches; links from other sites are yours to check.
+- **Sidebar.** Move `themeConfig.sidebar` into `pages.json`'s `sidebar`:
+  `{ text, link }` becomes `{ "label", "file" }` (a `.md` path under
+  `docs/`, not a URL), `{ text, items, collapsed }` a group, and a folder
+  you listed page by page can become a folder section (`dir`). A sidebar a
+  script generated goes to `$DOCS_STAGE/.sidebar.json` from
+  `docs_pre_build_command` (section 3). `themeConfig.nav` becomes `nav` and
+  `home_link`.
+- **Theme CSS.** A `.vitepress/theme/custom.css` becomes `theme_css`, loaded
+  after the shared theme. Its `url()` paths resolve against the published
+  docs, so move the files they name into `docs/public/`. Custom Vue
+  components, layouts and `enhanceApp` have no equivalent: pages render as
+  GitHub shows them.
+- **Pre-build.** Steps that ran before `vitepress build` (generated API
+  pages, copied files) go in `docs_pre_build_command`. Keep that command in
+  a script of the repo, such as `scripts/docs-pre-build.sh`, and pass only
+  the script's path: the workflow input stays one line, and `cli.js --out
+  ... --pre-build ./scripts/docs-pre-build.sh` runs the same steps locally.
+- **Dependabot.** Remove the `npm` entry for your docs folder from
+  `.github/dependabot.yml` along with the folder: VitePress is now pinned by
+  `docs-build`'s own lockfile, which hashira's Dependabot keeps fresh and
+  which reaches you through `@v3`. Keep the `github-actions` entry, which
+  moves a SHA pin of `pages-site.yml`.
+- **OSV.** Your own OSV scan no longer sees VitePress, since its lockfile is
+  in hashira, not in your repo. hashira's CI and its release check run OSV
+  over `.github/actions/docs-build/vitepress/package-lock.json` and fail on
+  findings, and `pages-site.yml`'s `scan` job runs OSV and gitleaks over
+  your repo's own lockfiles before the approval.
+- **Front matter and `index.md`.** Front matter adds nothing to a page, and
+  `docs/index.md` next to `home_page` fails the build: the home page is
+  published as the docs' index.
+
+Check the result with `cli.js --check` before the first run (section 3,
+"Local preview").
